@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Environment / secrets (never commit)
+.env
+.env.local
+.env*.local
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Supabase local state
+supabase/.temp/
+supabase/.branches/
+
+# OS / editor
+.DS_Store
+*.pem
+
+# Debug logs
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# TypeScript
+*.tsbuildinfo
+
+# Native build folders
+frontend/ios/
+frontend/android/

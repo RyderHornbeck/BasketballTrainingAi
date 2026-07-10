@@ -1,0 +1,19 @@
+{
+  "name": "hoopplan-supabase",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Supabase seed/import scripts for the HoopPlan app.",
+  "scripts": {
+    "seed:videos": "tsx seed/import-videos.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "dotenv": "^16.4.5",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.1",
+    "typescript": "^5.5.4",
+    "@types/node": "^20.14.11"
+  }
+}

@@ -1,0 +1,52 @@
+import { useTheme } from "@/hooks/useTheme";
+import React from "react";
+import { StyleProp, StyleSheet, View, ViewStyle } from "react-native";
+
+interface CardProps {
+  children: React.ReactNode;
+  style?: StyleProp<ViewStyle>;
+  variant?: "default" | "alt";
+  /** Set false to opt out of the drop shadow (e.g. cards nested inside another elevated surface). */
+  elevated?: boolean;
+}
+
+export function Card({ children, style, variant = "default", elevated = true }: CardProps) {
+  const { colors, scheme } = useTheme();
+
+  return (
+    <View
+      style={[
+        styles.card,
+        {
+          backgroundColor: variant === "alt" ? colors.cardAlt : colors.card,
+          borderColor: colors.border,
+          shadowColor: colors.shadow,
+        },
+        elevated && (scheme === "dark" ? styles.shadowDark : styles.shadowLight),
+        style,
+      ]}
+    >
+      {children}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  card: {
+    borderRadius: 24,
+    borderWidth: 1,
+    padding: 18,
+  },
+  shadowDark: {
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+  shadowLight: {
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.07,
+    shadowRadius: 14,
+    elevation: 3,
+  },
+});
