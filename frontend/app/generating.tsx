@@ -1,16 +1,24 @@
 import { Button } from "@/components/Button";
 import { Text } from "@/components/Text";
+import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
+import { registerForPushNotificationsAsync } from "@/lib/notifications";
 import { requestPlanGeneration } from "@/lib/plan";
 import { Redirect } from "expo-router";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 
 export default function GeneratingScreen() {
   const { colors } = useTheme();
+  const { user } = useAuth();
   const { appState, generationRequest, loading, refresh } = usePlan();
   const [retrying, setRetrying] = useState(false);
+
+  // Belt-and-suspenders: make sure we have a push token while they wait.
+  useEffect(() => {
+    if (user?.id) registerForPushNotificationsAsync(user.id);
+  }, [user?.id]);
 
   if (loading) {
     return (
@@ -48,7 +56,8 @@ export default function GeneratingScreen() {
             <Text style={[styles.title, { color: colors.text }]}>Building your basketball plan...</Text>
             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
               Our AI coach is analyzing your answers and picking drills from the exercise catalog. This
-              usually takes less than a minute.
+              usually takes less than a minute. You can leave the app — we&apos;ll notify you when your
+              plan is ready.
             </Text>
           </>
         )}

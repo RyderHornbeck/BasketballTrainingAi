@@ -10,6 +10,7 @@ import {
   WorkoutExerciseWithClip,
 } from "@/types/plan";
 import { supabase } from "./supabase";
+import { registerForPushNotificationsAsync } from "./notifications";
 
 /** Saves the onboarding answers for a (just-created) user and flips their profile flag. */
 export async function submitOnboardingAnswers(
@@ -51,6 +52,10 @@ export async function submitOnboardingAnswers(
 export async function requestPlanGeneration(): Promise<PlanGenerationRequest> {
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError || !userData.user) throw new Error("Not authenticated");
+
+  // Save a push token before generation starts so the user gets notified
+  // even if they leave the app while the plan is building.
+  await registerForPushNotificationsAsync(userData.user.id);
 
   const { data: request, error: insertError } = await supabase
     .from("plan_generation_requests")

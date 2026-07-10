@@ -1,4 +1,3 @@
-import { CoachOverlay } from "@/components/CoachOverlay";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
 import { isDayUnlocked } from "@/lib/plan";
@@ -135,14 +134,40 @@ export default function TabsLayout() {
         <Ionicons name="basketball" size={30} color="#FFFFFF" />
       </Pressable>
 
-      <CoachOverlay
-        visible={coachOpen}
-        onClose={() => setCoachOpen(false)}
-        dayId={coachDay?.id ?? null}
-        dayTitle={coachDay?.title ?? null}
-      />
+      {coachOpen ? (
+        <LazyCoachOverlay
+          onClose={() => setCoachOpen(false)}
+          dayId={coachDay?.id ?? null}
+          dayTitle={coachDay?.title ?? null}
+        />
+      ) : null}
     </>
   );
+}
+
+function LazyCoachOverlay(props: {
+  onClose: () => void;
+  dayId: string | null;
+  dayTitle: string | null;
+}) {
+  const [CoachOverlay, setCoachOverlay] = React.useState<React.ComponentType<{
+    onClose: () => void;
+    dayId: string | null;
+    dayTitle: string | null;
+  }> | null>(null);
+
+  React.useEffect(() => {
+    let mounted = true;
+    import("@/components/CoachOverlay").then((mod) => {
+      if (mounted) setCoachOverlay(() => mod.CoachOverlay);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  if (!CoachOverlay) return null;
+  return <CoachOverlay {...props} />;
 }
 
 const styles = StyleSheet.create({

@@ -1,17 +1,30 @@
 import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
+import { router } from "expo-router";
 import { Platform } from "react-native";
 import { supabase } from "./supabase";
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+let handlerConfigured = false;
+
+/** Configure foreground notification presentation. Safe to call multiple times. */
+export function configureNotificationHandler(): void {
+  if (handlerConfigured) return;
+
+  try {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+      }),
+    });
+    handlerConfigured = true;
+  } catch (err) {
+    console.error("Failed to configure notification handler:", err);
+  }
+}
 
 /**
  * Requests notification permission (if not already granted/denied), fetches
@@ -72,5 +85,21 @@ export async function registerForPushNotificationsAsync(
   } catch (err) {
     console.error("registerForPushNotificationsAsync error:", err);
     return null;
+  }
+}
+
+/** Open the workout days tab when the user taps a plan-ready notification. */
+export function setupNotificationResponseHandler(): () => void {
+  try {
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data as { plan_id?: string } | undefined;
+      if (data?.plan_id) {
+        router.push("/(tabs)/days");
+      }
+    });
+    return () => subscription.remove();
+  } catch (err) {
+    console.error("Failed to set up notification response handler:", err);
+    return () => {};
   }
 }

@@ -1,24 +1,16 @@
-// Full-screen voice coach overlay. Opened from the floating basketball
-// button next to the tab bar. One tap on the mic starts listening, a second
-// tap sends. Tapping the mic while the coach is speaking interrupts it.
+// Full-screen realtime voice coach. Audio-only — no transcript.
+// Tap the center control to mute/unmute. Coach speaks through WebRTC.
+// Only mount this component when the coach UI is open so WebRTC stays lazy.
 
 import { Text } from "@/components/Text";
 import { useCoach } from "@/hooks/useCoach";
 import { useTheme } from "@/hooks/useTheme";
 import { Ionicons } from "@expo/vector-icons";
 import React, { useEffect, useRef } from "react";
-import {
-  ActivityIndicator,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  View,
-} from "react-native";
+import { ActivityIndicator, Animated, Modal, Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 interface CoachOverlayProps {
-  visible: boolean;
   onClose: () => void;
   dayId: string | null;
   dayTitle: string | null;
@@ -30,82 +22,70 @@ function formatTimer(totalSeconds: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-export function CoachOverlay({ visible, onClose, dayId, dayTitle }: CoachOverlayProps) {
+export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const scrollRef = useRef<ScrollView>(null);
+  const pulse = useRef(new Animated.Value(1)).current;
 
-  const {
-    status,
-    messages,
-    error,
-    timerRunning,
-    elapsedSeconds,
-    startListening,
-    stopListening,
-    sendNow,
-    stopSpeaking,
-    toggleTimer,
-  } = useCoach(dayId);
+  const { status, error, timerRunning, elapsedSeconds, startSession, stopSession, toggleMute, toggleTimer } =
+    useCoach(dayId);
 
-  // Hands-free: mic opens as soon as the overlay does, closes with it.
   useEffect(() => {
-    if (visible) {
-      startListening();
-    } else {
-      stopSpeaking();
-      stopListening();
-    }
+    startSession();
+    return () => {
+      stopSession();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible]);
+  }, []);
 
+  // Gentle pulse while listening.
   useEffect(() => {
-    if (messages.length > 0) {
-      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
+    if (status === "listening") {
+      const anim = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulse, { toValue: 1.12, duration: 900, useNativeDriver: true }),
+          Animated.timing(pulse, { toValue: 1, duration: 900, useNativeDriver: true }),
+        ])
+      );
+      anim.start();
+      return () => anim.stop();
     }
-  }, [messages.length]);
-
-  const handleMicPress = () => {
-    if (status === "recording") {
-      sendNow(); // don't wait for the silence timeout
-    } else if (status === "listening") {
-      stopListening(); // mute
-    } else if (status === "thinking") {
-      // Request in flight; ignore taps until it resolves.
-    } else {
-      // idle (muted) or speaking: speaking gets interrupted inside startListening.
-      startListening();
-    }
-  };
+    pulse.setValue(1);
+  }, [status, pulse]);
 
   const handleClose = () => {
-    stopSpeaking();
-    stopListening();
+    stopSession();
     onClose();
   };
 
   const statusLabel =
-    status === "listening"
-      ? "Listening — just start talking"
-      : status === "recording"
-        ? "Hearing you… pause when you're done"
-        : status === "thinking"
-          ? "Coach is thinking…"
-          : status === "speaking"
-            ? "Coach is talking — tap the mic to jump in"
-            : "Mic is off — tap to talk";
+    status === "connecting"
+      ? "Connecting to your coach…"
+      : status === "listening"
+        ? "Listening"
+        : status === "speaking"
+          ? "Coach is talking"
+          : status === "muted"
+            ? "Mic off — tap to listen"
+            : status === "error"
+              ? "Tap to retry"
+              : "Tap to talk";
 
-  const micColor =
-    status === "recording"
-      ? colors.danger
-      : status === "speaking" || status === "idle"
-        ? colors.accentMuted
-        : colors.accent;
+  const centerColor =
+    status === "speaking"
+      ? colors.accentMuted
+      : status === "listening"
+        ? colors.accent
+        : status === "connecting"
+          ? colors.cardAlt
+          : colors.card;
+
+  const centerIcon =
+    status === "connecting" ? null : status === "speaking" ? "volume-high" : status === "muted" || status === "error" ? "mic-off" : "mic";
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={handleClose}>
+    <Modal visible animationType="slide" onRequestClose={handleClose}>
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        {/* Header */}
         <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
           <View style={styles.headerLeft}>
             <Text style={[styles.title, { color: colors.text }]}>Coach</Text>
@@ -126,9 +106,7 @@ export function CoachOverlay({ visible, onClose, dayId, dayTitle }: CoachOverlay
               color={colors.accent}
               style={{ marginRight: 6 }}
             />
-            <Text style={[styles.timerText, { color: colors.text }]}>
-              {formatTimer(elapsedSeconds)}
-            </Text>
+            <Text style={[styles.timerText, { color: colors.text }]}>{formatTimer(elapsedSeconds)}</Text>
           </Pressable>
 
           <Pressable
@@ -140,84 +118,37 @@ export function CoachOverlay({ visible, onClose, dayId, dayTitle }: CoachOverlay
           </Pressable>
         </View>
 
-        {/* Transcript */}
-        <ScrollView
-          ref={scrollRef}
-          style={styles.transcript}
-          contentContainerStyle={styles.transcriptContent}
-        >
-          {messages.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="basketball" size={44} color={colors.accent} />
-              <Text style={[styles.emptyTitle, { color: colors.text }]}>
-                Your coach is courtside
-              </Text>
-              <Text style={[styles.emptyHint, { color: colors.textSecondary }]}>
-                Try “What&apos;s next?”, “I made 8 of 10”, “Skip this drill”, or “How am I doing?”
-              </Text>
-            </View>
-          ) : (
-            messages.map((message, index) => (
-              <View
-                key={index}
-                style={[
-                  styles.bubble,
-                  message.role === "user"
-                    ? [styles.userBubble, { backgroundColor: colors.accent }]
-                    : [
-                        styles.coachBubble,
-                        { backgroundColor: colors.card, borderColor: colors.border },
-                      ],
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.bubbleText,
-                    { color: message.role === "user" ? "#FFFFFF" : colors.text },
-                  ]}
-                >
-                  {message.content}
-                </Text>
-              </View>
-            ))
-          )}
-        </ScrollView>
-
-        {/* Mic controls */}
-        <View style={[styles.controls, { paddingBottom: insets.bottom + 24 }]}>
+        {/* Center: listening / speaking / muted — no transcript */}
+        <View style={styles.center}>
           {error ? (
             <Text style={[styles.errorText, { color: colors.danger }]}>{error}</Text>
           ) : null}
-          <Text style={[styles.statusText, { color: colors.textSecondary }]}>{statusLabel}</Text>
+          <Text style={[styles.statusLabel, { color: colors.text }]}>{statusLabel}</Text>
 
-          <Pressable
-            onPress={handleMicPress}
-            disabled={status === "thinking"}
-            style={({ pressed }) => [
-              styles.micButton,
-              {
-                backgroundColor: micColor,
-                opacity: pressed ? 0.85 : 1,
-                shadowColor: micColor,
-              },
-            ]}
-          >
-            {status === "thinking" ? (
-              <ActivityIndicator size="large" color="#FFFFFF" />
-            ) : (
-              <Ionicons
-                name={
-                  status === "recording"
-                    ? "arrow-up"
-                    : status === "idle"
-                      ? "mic-off"
-                      : "mic"
-                }
-                size={38}
-                color="#FFFFFF"
-              />
-            )}
+          <Pressable onPress={toggleMute} disabled={status === "connecting"}>
+            <Animated.View
+              style={[
+                styles.coachOrb,
+                {
+                  backgroundColor: centerColor,
+                  shadowColor: colors.accent,
+                  transform: [{ scale: pulse }],
+                },
+              ]}
+            >
+              {status === "connecting" ? (
+                <ActivityIndicator size="large" color={colors.accent} />
+              ) : centerIcon ? (
+                <Ionicons name={centerIcon} size={52} color="#FFFFFF" />
+              ) : null}
+            </Animated.View>
           </Pressable>
+
+          <Text style={[styles.hint, { color: colors.textSecondary }]}>
+            {status === "muted" || status === "error"
+              ? "Tap the circle to start listening"
+              : "Just talk — your coach hears you"}
+          </Text>
         </View>
       </View>
     </Modal>
@@ -268,73 +199,38 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  transcript: {
+  center: {
     flex: 1,
-  },
-  transcriptContent: {
-    padding: 20,
-    paddingBottom: 16,
-    gap: 10,
-  },
-  emptyState: {
     alignItems: "center",
-    marginTop: 80,
-    paddingHorizontal: 24,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    marginTop: 16,
-  },
-  emptyHint: {
-    fontSize: 14,
-    textAlign: "center",
-    marginTop: 8,
-    lineHeight: 21,
-  },
-  bubble: {
-    maxWidth: "82%",
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  userBubble: {
-    alignSelf: "flex-end",
-    borderBottomRightRadius: 6,
-  },
-  coachBubble: {
-    alignSelf: "flex-start",
-    borderWidth: 1,
-    borderBottomLeftRadius: 6,
-  },
-  bubbleText: {
-    fontSize: 15,
-    lineHeight: 21,
-  },
-  controls: {
-    alignItems: "center",
-    paddingTop: 8,
-    paddingHorizontal: 24,
+    justifyContent: "center",
+    paddingHorizontal: 32,
   },
   errorText: {
     fontSize: 13,
-    marginBottom: 6,
+    marginBottom: 12,
     textAlign: "center",
   },
-  statusText: {
-    fontSize: 14,
-    marginBottom: 16,
-    textAlign: "center",
+  statusLabel: {
+    fontSize: 22,
+    fontWeight: "700",
+    marginBottom: 36,
+    letterSpacing: -0.3,
   },
-  micButton: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
+  coachOrb: {
+    width: 140,
+    height: 140,
+    borderRadius: 70,
     alignItems: "center",
     justifyContent: "center",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.45,
-    shadowRadius: 18,
-    elevation: 10,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.4,
+    shadowRadius: 24,
+    elevation: 14,
+  },
+  hint: {
+    fontSize: 14,
+    marginTop: 28,
+    textAlign: "center",
+    lineHeight: 20,
   },
 });

@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "HoopPlan",
-    "slug": "hoopplan",
+    "slug": "basketballtrainerai",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -10,7 +10,10 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.hoopplan.app"
+      "bundleIdentifier": "com.hoopplan.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -19,7 +22,13 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "package": "com.hoopplan.app"
+      "package": "com.hoopplan.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ]
     },
     "web": {
       "output": "static",
@@ -44,7 +53,7 @@
       ],
       "expo-font",
       [
-        "expo-audio",
+        "@config-plugins/react-native-webrtc",
         {
           "microphonePermission": "HoopPlan uses the microphone so you can talk to your AI basketball coach during workouts."
         }
