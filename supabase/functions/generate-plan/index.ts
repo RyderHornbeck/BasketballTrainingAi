@@ -520,6 +520,7 @@ async function runGeneration(
     if (profile?.push_token) {
       await sendExpoPushNotification(profile.push_token, "HoopPlan", "Your basketball plan is ready 🏀", {
         plan_id: planRow.id,
+        screen: "days",
       });
     }
 

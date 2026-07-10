@@ -299,6 +299,19 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "uncomplete_drill",
+      description:
+        "Mark a completed drill as not done when the user wants to redo it or accidentally marked it complete.",
+      parameters: {
+        type: "object",
+        properties: { exercise_id: { type: "string" } },
+        required: ["exercise_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "skip_drill",
       description: "Skip the current drill and move on when the user asks to skip.",
       parameters: {
@@ -473,6 +486,44 @@ async function executeTool(
       };
     }
 
+    case "uncomplete_drill": {
+      const exerciseId = validExercise(args.exercise_id);
+      if (!exerciseId) return { result: "Error: unknown exercise_id", dbChanged: false };
+      const existing = ctx.logs.get(exerciseId);
+      const ex = ctx.exercises.find((e) => e.id === exerciseId);
+
+      const { error } = await supabase.from("exercise_logs").upsert(
+        {
+          exercise_id: exerciseId,
+          day_id: dayId,
+          user_id: userId,
+          completed: false,
+          makes: existing?.makes ?? null,
+          attempts: existing?.attempts ?? null,
+          minutes_completed: existing?.minutes_completed ?? null,
+          difficulty: existing?.difficulty ?? null,
+          notes: existing?.notes ?? null,
+        },
+        { onConflict: "exercise_id" }
+      );
+      if (error) return { result: `Error: ${error.message}`, dbChanged: false };
+
+      // If the whole day was marked finished, reopen it so they can keep going.
+      if (ctx.day.completed) {
+        await supabase
+          .from("workout_days")
+          .update({ completed: false })
+          .eq("id", dayId)
+          .eq("user_id", userId);
+        ctx.day.completed = false;
+      }
+
+      return {
+        result: `Marked "${ex?.name ?? "drill"}" as not complete. You can run it again.`,
+        dbChanged: true,
+      };
+    }
+
     case "save_note": {
       const exerciseId = validExercise(args.exercise_id);
       if (!exerciseId) return { result: "Error: unknown exercise_id", dbChanged: false };
@@ -568,6 +619,7 @@ Rules:
 - You know the full workout from the context JSON: every drill, what's done, current stats, remaining time, and the athlete's profile. Never ask for information you already have.
 - When the athlete reports results ("I made 8 out of 10"), call save_shooting_results, then react with the percentage and a quick push.
 - When they finish or want to skip a drill, call complete_drill or skip_drill and tell them what's next.
+- When they want to redo a drill or say they marked one complete by mistake, call uncomplete_drill.
 - When they're done or say "end the workout", call finish_workout and give a short wrap-up referencing today's numbers.
 - Use start_timer/pause_timer/resume_timer when they mention the timer or starting/pausing the workout.
 - Use extend_workout/shorten_workout when they want more or less time, and rebalance your guidance accordingly.
