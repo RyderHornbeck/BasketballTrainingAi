@@ -6,6 +6,7 @@
 
 import { emitWorkoutUpdated } from "@/lib/coachEvents";
 import { supabase } from "@/lib/supabase";
+import { startVoiceCallAudio, stopVoiceCallAudio } from "@/lib/webrtcAudio";
 
 export type RealtimeCoachStatus = "connecting" | "listening" | "speaking" | "muted" | "error";
 
@@ -29,6 +30,13 @@ interface FunctionCallItem {
   arguments: string;
 }
 
+const MIC_CONSTRAINTS = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+};
+
 // Lazy-load WebRTC so the native module is not touched during app startup.
 async function loadWebRTC() {
   try {
@@ -44,17 +52,42 @@ async function loadWebRTC() {
 type WebRTCModule = Awaited<ReturnType<typeof loadWebRTC>>;
 type RnMediaStream = Awaited<ReturnType<WebRTCModule["mediaDevices"]["getUserMedia"]>>;
 
+function waitForDataChannelOpen(dc: any): Promise<void> {
+  if (dc.readyState === "open") return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Coach data channel timed out.")), 15000);
+
+    const onOpen = () => {
+      clearTimeout(timeout);
+      dc.removeEventListener("open", onOpen);
+      dc.removeEventListener("error", onError);
+      resolve();
+    };
+    const onError = () => {
+      clearTimeout(timeout);
+      dc.removeEventListener("open", onOpen);
+      dc.removeEventListener("error", onError);
+      reject(new Error("Coach data channel failed to open."));
+    };
+
+    dc.addEventListener("open", onOpen);
+    dc.addEventListener("error", onError);
+  });
+}
+
 export class RealtimeCoachSession {
-  // WebRTC objects come from react-native-webrtc globals; use loose typing to
-  // avoid conflicts with the DOM lib.
   private pc: any = null;
   private dc: any = null;
   private localStream: RnMediaStream | null = null;
+  private remoteStream: RnMediaStream | null = null;
   private callbacks: RealtimeCoachCallbacks | null = null;
   private dayId: string | null = null;
   private timer: TimerState = { running: false, elapsed_seconds: 0 };
   private active = false;
   private speaking = false;
+  private toolBusy = false;
+  private lastCoachAudioEnd = 0;
 
   async connect(
     dayId: string,
@@ -69,11 +102,17 @@ export class RealtimeCoachSession {
     callbacks.onStatus("connecting");
 
     try {
+      const audioProfile = await startVoiceCallAudio();
+
       const webrtc = await loadWebRTC();
       const { mediaDevices, RTCPeerConnection, RTCSessionDescription } = webrtc;
 
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" },
+        ],
+        bundlePolicy: "max-bundle",
       }) as any;
       this.pc = pc;
 
@@ -92,18 +131,30 @@ export class RealtimeCoachSession {
         }
       });
 
-      const stream = await mediaDevices.getUserMedia({ audio: true, video: false });
+      pc.addEventListener("track", (event: { streams?: RnMediaStream[]; track?: { enabled: boolean } }) => {
+        const [stream] = event.streams ?? [];
+        if (stream) {
+          this.remoteStream = stream;
+        }
+        if (event.track) {
+          event.track.enabled = true;
+        }
+      });
+
+      const stream = await mediaDevices.getUserMedia({
+        audio: MIC_CONSTRAINTS as Record<string, unknown>,
+        video: false,
+      });
       this.localStream = stream;
-      for (const track of stream.getTracks()) {
+      for (const track of stream.getAudioTracks()) {
+        track.enabled = true;
         pc.addTrack(track, stream);
       }
 
-      // Remote coach audio plays automatically through the WebRTC track.
-      pc.addEventListener("track", () => {
-        // Track attached — audio routing handled natively.
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: false,
       });
-
-      const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
       const { data, error } = await supabase.functions.invoke<{ sdp: string; error?: string }>(
@@ -113,6 +164,7 @@ export class RealtimeCoachSession {
             day_id: dayId,
             sdp: offer.sdp,
             timer,
+            audio_profile: audioProfile,
           },
         }
       );
@@ -124,6 +176,7 @@ export class RealtimeCoachSession {
         new RTCSessionDescription({ type: "answer", sdp: data.sdp })
       );
 
+      await waitForDataChannelOpen(dc);
       this.callbacks?.onStatus("listening");
     } catch (err) {
       console.error("Realtime coach connect failed:", err);
@@ -139,20 +192,18 @@ export class RealtimeCoachSession {
     }
   }
 
-  /** Mute the mic without tearing down the WebRTC session. */
   mute(): void {
     if (this.localStream) {
-      for (const track of this.localStream.getTracks()) {
+      for (const track of this.localStream.getAudioTracks()) {
         track.enabled = false;
       }
     }
     this.callbacks?.onStatus("muted");
   }
 
-  /** Re-enable the mic on an existing session. */
   unmute(): void {
     if (this.localStream) {
-      for (const track of this.localStream.getTracks()) {
+      for (const track of this.localStream.getAudioTracks()) {
         track.enabled = true;
       }
     }
@@ -166,6 +217,7 @@ export class RealtimeCoachSession {
   async disconnect(): Promise<void> {
     this.active = false;
     this.speaking = false;
+    this.toolBusy = false;
 
     if (this.dc) {
       try {
@@ -183,6 +235,13 @@ export class RealtimeCoachSession {
       this.localStream = null;
     }
 
+    if (this.remoteStream) {
+      for (const track of this.remoteStream.getTracks()) {
+        track.stop();
+      }
+      this.remoteStream = null;
+    }
+
     if (this.pc) {
       try {
         this.pc.close();
@@ -191,6 +250,8 @@ export class RealtimeCoachSession {
       }
       this.pc = null;
     }
+
+    await stopVoiceCallAudio();
   }
 
   private sendEvent(event: Record<string, unknown>): void {
@@ -209,6 +270,18 @@ export class RealtimeCoachSession {
     }
   }
 
+  private setSpeaking(speaking: boolean): void {
+    this.speaking = speaking;
+    if (speaking) {
+      this.callbacks?.onStatus("speaking");
+      return;
+    }
+
+    this.lastCoachAudioEnd = Date.now();
+    const tracksEnabled = this.localStream?.getAudioTracks().some((t) => t.enabled) ?? false;
+    this.callbacks?.onStatus(tracksEnabled ? "listening" : "muted");
+  }
+
   private processServerEvent(event: { type: string; [key: string]: unknown }): void {
     switch (event.type) {
       case "session.created":
@@ -217,17 +290,30 @@ export class RealtimeCoachSession {
         break;
 
       case "input_audio_buffer.speech_started":
-        // User is talking — barge-in is handled server-side.
-        if (!this.speaking) this.callbacks?.onStatus("listening");
+        // Ignore echo-triggered VAD for a short window after the coach finishes.
+        if (this.speaking || this.toolBusy) return;
+        if (Date.now() - this.lastCoachAudioEnd < 300) return;
+        this.callbacks?.onStatus("listening");
         break;
 
       case "response.created":
-        this.speaking = true;
-        this.callbacks?.onStatus("speaking");
+        this.setSpeaking(true);
         break;
 
       case "response.done":
-        this.handleResponseDone(event);
+        void this.handleResponseDone(event);
+        break;
+
+      case "response.cancelled":
+        this.setSpeaking(false);
+        break;
+
+      case "output_audio_buffer.started":
+        this.setSpeaking(true);
+        break;
+
+      case "output_audio_buffer.stopped":
+        this.setSpeaking(false);
         break;
 
       case "error":
@@ -246,16 +332,18 @@ export class RealtimeCoachSession {
     );
 
     if (functionCalls.length > 0) {
-      for (const call of functionCalls) {
-        await this.executeToolCall(call);
+      this.toolBusy = true;
+      try {
+        for (const call of functionCalls) {
+          await this.executeToolCall(call);
+        }
+      } finally {
+        this.toolBusy = false;
       }
       return;
     }
 
-    // Spoken response finished.
-    this.speaking = false;
-    const tracksEnabled = this.localStream?.getTracks().some((t) => t.enabled) ?? false;
-    this.callbacks?.onStatus(tracksEnabled ? "listening" : "muted");
+    this.setSpeaking(false);
   }
 
   private async executeToolCall(call: FunctionCallItem): Promise<void> {
@@ -301,6 +389,9 @@ export class RealtimeCoachSession {
           output: data.result,
         },
       });
+
+      // Brief pause before the next spoken response reduces audio glitches after tool calls.
+      await new Promise((r) => setTimeout(r, 150));
       this.sendEvent({ type: "response.create" });
     } catch (err) {
       console.error(`Tool ${call.name} failed:`, err);
@@ -312,6 +403,7 @@ export class RealtimeCoachSession {
           output: `Error: ${err instanceof Error ? err.message : "tool failed"}`,
         },
       });
+      await new Promise((r) => setTimeout(r, 150));
       this.sendEvent({ type: "response.create" });
     }
   }
