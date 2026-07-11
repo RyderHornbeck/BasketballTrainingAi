@@ -43,6 +43,7 @@ export interface AnalyticsSummary {
   weakestSkill: string | null;
   weeklyProgress: { label: string; minutes: number }[];
   weeklyShooting: { label: string; pct: number | null; makes: number; attempts: number }[];
+  weeklyPctTrend: { label: string; shootingPct: number | null; finishingPct: number | null }[];
   categoryStats: CategoryStats[];
   recentWorkouts: {
     id: string;
@@ -174,6 +175,7 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
 
   const weeklyProgress = computeWeeklyProgress(logs);
   const weeklyShooting = computeWeeklyShooting(exerciseLogs ?? []);
+  const weeklyPctTrend = computeWeeklyPctTrend(exerciseLogs ?? []);
   const shootingByPeriod = computeShootingByPeriod(exerciseLogs ?? []);
   const completionTrend = computeCompletionTrend(allDays ?? [], logs);
   const workoutHeatmap = computeWorkoutHeatmap(logs);
@@ -202,6 +204,7 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     weakestSkill,
     weeklyProgress,
     weeklyShooting,
+    weeklyPctTrend,
     categoryStats,
     recentWorkouts,
     shootingByPeriod,
@@ -251,6 +254,69 @@ function computeWeeklyProgress(logs: any[]): { label: string; minutes: number }[
   }
 
   return buckets.map((b) => ({ label: b.label, minutes: b.minutes }));
+}
+
+function computeWeeklyPctTrend(
+  exerciseLogs: any[]
+): { label: string; shootingPct: number | null; finishingPct: number | null }[] {
+  const now = new Date();
+  const buckets: {
+    label: string;
+    shootingMakes: number;
+    shootingAttempts: number;
+    finishingMakes: number;
+    finishingAttempts: number;
+    start: Date;
+    end: Date;
+  }[] = [];
+
+  for (let i = 5; i >= 0; i--) {
+    const end = new Date(now);
+    end.setDate(now.getDate() - i * 7);
+    end.setHours(23, 59, 59, 999);
+    const start = new Date(end);
+    start.setDate(end.getDate() - 6);
+    start.setHours(0, 0, 0, 0);
+    buckets.push({
+      label: `W${6 - i}`,
+      shootingMakes: 0,
+      shootingAttempts: 0,
+      finishingMakes: 0,
+      finishingAttempts: 0,
+      start,
+      end,
+    });
+  }
+
+  for (const log of exerciseLogs) {
+    if (log.makes == null && log.attempts == null) continue;
+    const category = log.workout_exercises?.category ?? "";
+    const date = new Date(log.created_at);
+    for (const bucket of buckets) {
+      if (date >= bucket.start && date <= bucket.end) {
+        const makes = log.makes ?? 0;
+        const attempts = log.attempts ?? 0;
+        if (category === "finishing") {
+          bucket.finishingMakes += makes;
+          bucket.finishingAttempts += attempts;
+        } else if (category === "shooting" || attempts > 0) {
+          bucket.shootingMakes += makes;
+          bucket.shootingAttempts += attempts;
+        }
+        break;
+      }
+    }
+  }
+
+  return buckets.map((b) => ({
+    label: b.label,
+    shootingPct:
+      b.shootingAttempts > 0 ? Math.round((b.shootingMakes / b.shootingAttempts) * 100) : null,
+    finishingPct:
+      b.finishingAttempts > 0
+        ? Math.round((b.finishingMakes / b.finishingAttempts) * 100)
+        : null,
+  }));
 }
 
 function computeWeeklyShooting(

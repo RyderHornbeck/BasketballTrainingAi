@@ -93,9 +93,7 @@ export default function AnalyticsScreen() {
 
         <Card style={styles.chartCard}>
           <Text style={[styles.chartTitle, { color: colors.text }]}>Shooting % Trend</Text>
-          <ShootingTrendLineChart
-            buckets={summary.weeklyShooting.map((w) => ({ label: w.label, pct: w.pct }))}
-          />
+          <ShootingTrendLineChart buckets={summary.weeklyPctTrend} />
         </Card>
 
         <Card style={styles.chartCard}>

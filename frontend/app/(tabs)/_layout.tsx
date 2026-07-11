@@ -8,7 +8,9 @@ import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const TAB_BAR_HEIGHT = 64;
+const TAB_BAR_HEIGHT = 72;
+const TAB_ICON_SIZE = 28;
+const COACH_ICON_SIZE = 34;
 const EDGE_INSET = 12;
 const COACH_BUTTON_SIZE = 64;
 const COACH_GAP = 12;
@@ -42,8 +44,8 @@ export default function TabsLayout() {
       borderRadius: 36,
       overflow: "hidden" as const,
       backgroundColor: colors.card,
-      borderWidth: 1,
-      borderColor: colors.border,
+      borderWidth: 2,
+      borderColor: scheme === "dark" ? "#3A3A3C" : "#C7C7CC",
       shadowColor: colors.shadow,
       shadowOffset: { width: 0, height: 10 },
       shadowOpacity: scheme === "dark" ? 0.5 : 0.14,
@@ -66,8 +68,8 @@ export default function TabsLayout() {
                 borderTopWidth: 0,
                 elevation: 0,
                 shadowOpacity: 0,
-                paddingBottom: 0,
-                paddingTop: 0,
+                paddingBottom: 6,
+                paddingTop: 2,
               }}
             />
           </View>
@@ -81,9 +83,16 @@ export default function TabsLayout() {
           tabBarLabelStyle: {
             fontFamily: "Poppins_600SemiBold",
             fontSize: 11,
+            lineHeight: 13,
+            marginTop: 2,
+            marginBottom: 4,
           },
           tabBarItemStyle: {
-            paddingTop: 8,
+            paddingTop: 4,
+            paddingBottom: 2,
+          },
+          tabBarIconStyle: {
+            marginBottom: 0,
           },
         }}
       >
@@ -91,8 +100,12 @@ export default function TabsLayout() {
           name="days"
           options={{
             title: "Days",
-            tabBarIcon: ({ color, size, focused }) => (
-              <Ionicons name={focused ? "basketball" : "basketball-outline"} size={size} color={color} />
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons
+                name={focused ? "basketball" : "basketball-outline"}
+                size={TAB_ICON_SIZE}
+                color={color}
+              />
             ),
           }}
         />
@@ -100,8 +113,12 @@ export default function TabsLayout() {
           name="analytics"
           options={{
             title: "Analytics",
-            tabBarIcon: ({ color, size, focused }) => (
-              <Ionicons name={focused ? "stats-chart" : "stats-chart-outline"} size={size} color={color} />
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons
+                name={focused ? "stats-chart" : "stats-chart-outline"}
+                size={TAB_ICON_SIZE}
+                color={color}
+              />
             ),
           }}
         />
@@ -109,8 +126,12 @@ export default function TabsLayout() {
           name="profile"
           options={{
             title: "Profile",
-            tabBarIcon: ({ color, size, focused }) => (
-              <Ionicons name={focused ? "person-circle" : "person-circle-outline"} size={size} color={color} />
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons
+                name={focused ? "person-circle" : "person-circle-outline"}
+                size={TAB_ICON_SIZE}
+                color={color}
+              />
             ),
           }}
         />
@@ -126,12 +147,14 @@ export default function TabsLayout() {
             height: COACH_BUTTON_SIZE,
             borderRadius: COACH_BUTTON_SIZE / 2,
             backgroundColor: colors.accent,
+            borderWidth: 2,
+            borderColor: scheme === "dark" ? "#3A3A3C" : "#C7C7CC",
             shadowColor: colors.accent,
             transform: [{ scale: pressed ? 0.94 : 1 }],
           },
         ]}
       >
-        <Ionicons name="basketball" size={30} color="#FFFFFF" />
+        <Ionicons name="basketball" size={COACH_ICON_SIZE} color="#FFFFFF" />
       </Pressable>
 
       {coachOpen ? (

@@ -12,7 +12,8 @@ import {
 } from "@/lib/exerciseSetLogs";
 import { ExerciseLogInput } from "@/lib/plan";
 import { buildYouTubeClipHtml } from "@/lib/youtubePlayer";
-import { hasVideoDemo, isCatalogOnlyClip } from "@/lib/exerciseClip";
+import { hasVideoDemo } from "@/lib/exerciseClip";
+import { parseDrillDescription } from "@/lib/drillDescription";
 import { WorkoutExerciseWithClip } from "@/types/plan";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -167,6 +168,41 @@ function SetShootingRow({
   );
 }
 
+function DrillDescriptionView({
+  description,
+  colors,
+  compact,
+}: {
+  description: string;
+  colors: ReturnType<typeof useTheme>["colors"];
+  compact?: boolean;
+}) {
+  const parsed = useMemo(() => parseDrillDescription(description), [description]);
+
+  return (
+    <View style={[styles.drillDescription, compact && styles.drillDescriptionCompact]}>
+      {parsed.intro ? (
+        <Text style={[styles.drillIntro, { color: colors.textSecondary }]}>
+          {parsed.intro.replace(/\.\s*$/, "")}.
+        </Text>
+      ) : null}
+      {parsed.steps.map((step) => (
+        <View key={step.number} style={styles.drillStepRow}>
+          <Text style={[styles.drillStepLabel, { color: colors.text }]}>
+            Step {step.number}:{" "}
+            <Text style={[styles.drillStepText, { color: colors.textSecondary }]}>
+              {step.text}
+            </Text>
+          </Text>
+        </View>
+      ))}
+      {parsed.repeat ? (
+        <Text style={[styles.drillRepeat, { color: colors.textMuted }]}>{parsed.repeat}.</Text>
+      ) : null}
+    </View>
+  );
+}
+
 export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardProps) {
   const { colors, scheme } = useTheme();
   const [expanded, setExpanded] = useState(false);
@@ -225,7 +261,6 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
   }, [exercise.id, exercise.log, baseSetPlan]);
 
   const clip = exercise.video_clip;
-  const catalogOnly = isCatalogOnlyClip(clip);
   const showVideo = hasVideoDemo(clip);
   const descriptionText =
     clip?.description ?? exercise.instructions ?? clip?.coaching_notes ?? null;
@@ -326,42 +361,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
     });
   };
 
-  const toggleHeaderComplete = () => {
-    if (readOnly) return;
-    if (completed) {
-      setSetLogs(
-        setLogs.map((row) => ({
-          ...row,
-          completed: false,
-          makes: null,
-          minutes: null,
-        }))
-      );
-      if (logType === "difficulty_rating") setDifficulty(0);
-      return;
-    }
-
-    if (logType === "makes_attempts") {
-      setSetLogs(
-        setLogs.map((row) => ({
-          ...row,
-          completed: true,
-          makes: row.makes ?? setPlan.perSetMakes,
-          attempts: row.attempts ?? setPlan.perSetAttempts,
-        }))
-      );
-    } else if (logType === "minutes" || logType === "checkbox") {
-      setSetLogs(
-        setLogs.map((row) => ({
-          ...row,
-          completed: true,
-          minutes: setPlan.perSetMinutes,
-        }))
-      );
-    } else if (logType === "difficulty_rating") {
-      setDifficulty(3);
-    }
-  };
+  const toggleExpand = () => setExpanded((v) => !v);
 
   const openInYouTube = () => {
     if (watchUrl) Linking.openURL(watchUrl);
@@ -428,7 +428,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
   const cardInner = (
     <>
       <View style={styles.headerRow}>
-        <Pressable onPress={() => setExpanded((v) => !v)} style={styles.headerPressable}>
+        <Pressable onPress={toggleExpand} style={styles.headerPressable}>
           <View style={styles.headerText}>
             <Text style={[styles.name, { color: colors.text }]}>{exercise.name}</Text>
             {exercise.category ? (
@@ -437,23 +437,11 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
               </Text>
             ) : null}
           </View>
-
-          {descriptionText ? (
-            <Text
-              style={[styles.instructions, { color: colors.textSecondary }]}
-              numberOfLines={expanded ? undefined : 2}
-            >
-              {descriptionText}
-            </Text>
-          ) : null}
         </Pressable>
 
         <View style={styles.headerActions}>
-          {!expanded && (completed || !readOnly) ? (
-            <Pressable
-              onPress={readOnly ? undefined : toggleHeaderComplete}
-              disabled={readOnly}
-              hitSlop={8}
+          <Pressable onPress={toggleExpand} hitSlop={8}>
+            <View
               style={[
                 styles.headerCheck,
                 {
@@ -465,20 +453,18 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
               {completed ? (
                 <Ionicons name="checkmark" size={16} color="#FFFFFF" />
               ) : null}
-            </Pressable>
-          ) : null}
-          <Pressable onPress={() => setExpanded((v) => !v)} hitSlop={8}>
-            <Ionicons
-              name={expanded ? "chevron-up" : "chevron-down"}
-              size={20}
-              color={colors.textMuted}
-            />
+            </View>
           </Pressable>
         </View>
       </View>
 
       {expanded && (
-        <View style={styles.expandedContent}>
+        <View
+          style={[
+            styles.expandedContent,
+            !showVideo && styles.expandedContentNoVideo,
+          ]}
+        >
           {showVideo ? (
             <View style={styles.videoSection}>
               {videoError ? (
@@ -530,23 +516,8 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
             </View>
           ) : null}
 
-          {clip && catalogOnly && descriptionText ? (
-            <View
-              style={[
-                styles.catalogDrillCard,
-                { backgroundColor: colors.cardAlt, borderColor: colors.border },
-              ]}
-            >
-              <Text style={[styles.catalogDrillTitle, { color: colors.text }]}>Drill steps</Text>
-              <Text style={[styles.catalogDrillBody, { color: colors.textSecondary }]}>
-                {descriptionText}
-              </Text>
-              {clip.coaching_notes ? (
-                <Text style={[styles.catalogDrillCue, { color: colors.accent }]}>
-                  {clip.coaching_notes}
-                </Text>
-              ) : null}
-            </View>
+          {descriptionText ? (
+            <DrillDescriptionView description={descriptionText} colors={colors} compact={!showVideo} />
           ) : null}
 
           {displayPrescription ? (
@@ -566,7 +537,13 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
           ) : null}
 
           {!readOnly && (
-            <View style={[styles.loggingSection, { borderTopColor: colors.border }]}>
+            <View
+              style={[
+                styles.loggingSection,
+                { borderTopColor: colors.border },
+                !showVideo && styles.loggingSectionNoVideo,
+              ]}
+            >
               <View style={styles.setRows}>{renderSetRows()}</View>
 
               {logType === "difficulty_rating" && (
@@ -703,34 +680,51 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginTop: 8,
   },
+  drillDescription: {
+    gap: 6,
+    marginBottom: 10,
+  },
+  drillDescriptionCompact: {
+    marginBottom: 6,
+  },
+  drillIntro: {
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 4,
+  },
+  drillStepRow: {
+    paddingLeft: 2,
+  },
+  drillStepLabel: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "700",
+  },
+  drillStepText: {
+    fontWeight: "400",
+  },
+  drillRepeat: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "600",
+    marginTop: 4,
+  },
   expandedContent: {
     marginTop: 14,
     paddingTop: 14,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: "rgba(128,128,128,0.25)",
   },
+  expandedContentNoVideo: {
+    marginTop: 8,
+    paddingTop: 8,
+  },
   videoSection: {
     marginBottom: 12,
   },
-  catalogDrillCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 14,
-    marginBottom: 12,
-    gap: 8,
-  },
-  catalogDrillTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  catalogDrillBody: {
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  catalogDrillCue: {
-    fontSize: 13,
-    fontWeight: "600",
-    lineHeight: 18,
+  loggingSectionNoVideo: {
+    marginTop: 0,
+    paddingTop: 10,
   },
   prescriptionPill: {
     alignSelf: "flex-start",
