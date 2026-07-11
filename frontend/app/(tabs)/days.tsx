@@ -12,6 +12,7 @@ import {
   finishWorkoutDay,
   getWorkoutDayWithExercises,
   isDayUnlocked,
+  requestNextBlockGeneration,
   saveExerciseLog,
 } from "@/lib/plan";
 import { WorkoutDayWithExercises } from "@/types/plan";
@@ -45,7 +46,7 @@ export default function DaysScreen() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [progressVersion, setProgressVersion] = useState(0);
   const logsRef = useRef<Map<string, ExerciseLogInput>>(new Map());
-  const finishingRef = useRef(false);
+  const [retryingBlock, setRetryingBlock] = useState(false);
 
   const defaultDayNumber = useMemo(() => {
     if (days.length === 0) return null;
@@ -210,6 +211,26 @@ export default function DaysScreen() {
     );
   }
 
+  const blockExhausted =
+    days.length > 0 && days.every((day) => day.completed);
+  const nextBlockIndex =
+    days.length > 0
+      ? Math.max(...days.map((day) => day.block_index ?? 1)) + 1
+      : 2;
+
+  const handleRetryBlock = useCallback(async () => {
+    if (!plan || retryingBlock) return;
+    setRetryingBlock(true);
+    try {
+      await requestNextBlockGeneration(plan.id, nextBlockIndex);
+      await refreshPlan();
+    } catch (err) {
+      console.error("Failed to retry block generation:", err);
+    } finally {
+      setRetryingBlock(false);
+    }
+  }, [nextBlockIndex, plan, refreshPlan, retryingBlock]);
+
   const canViewDay = selectedDay
     ? selectedDay.completed || isDayUnlocked(selectedDay)
     : false;
@@ -227,6 +248,32 @@ export default function DaysScreen() {
         <View style={[styles.blockBanner, { backgroundColor: colors.accentMuted }]}>
           <ActivityIndicator size="small" color={colors.accent} />
           <Text style={{ color: colors.accent }}>Building your next five workouts...</Text>
+        </View>
+      ) : null}
+      {plan &&
+      blockExhausted &&
+      generationRequest?.generation_type === "extend" &&
+      generationRequest.status === "failed" ? (
+        <View style={[styles.blockBanner, { backgroundColor: colors.cardAlt }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colors.text, fontWeight: "700" }}>
+              Couldn&apos;t build your next workouts
+            </Text>
+            <Text style={{ color: colors.textSecondary, marginTop: 4, fontSize: 13 }}>
+              {generationRequest.error_message ?? "Tap retry to try again."}
+            </Text>
+          </View>
+          <Pressable
+            onPress={handleRetryBlock}
+            disabled={retryingBlock}
+            style={[styles.retryButton, { backgroundColor: colors.accent }]}
+          >
+            {retryingBlock ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={styles.retryButtonText}>Retry</Text>
+            )}
+          </Pressable>
         </View>
       ) : null}
 
@@ -407,6 +454,19 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
+  },
+  retryButton: {
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    minWidth: 72,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  retryButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 13,
   },
   lockedCard: {
     alignItems: "center",

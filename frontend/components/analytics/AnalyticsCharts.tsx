@@ -6,10 +6,9 @@ import {
   HeatmapPoint,
   ShootingBucket,
 } from "@/lib/analytics";
-import Heatmap from "@rific/heatmap";
 import React, { useMemo } from "react";
 import { Dimensions, Pressable, StyleSheet, View } from "react-native";
-import { BarChart, LineChart } from "react-native-gifted-charts";
+import Svg, { Circle, Line, Polyline, Rect, Text as SvgText } from "react-native-svg";
 
 const SHOTS_PER_LINE = 5;
 const SEGMENT_GAP = 2;
@@ -77,36 +76,6 @@ function chunkShots(total: number): number[] {
   return chunks;
 }
 
-function buildSegmentedStacks(
-  makes: number,
-  misses: number,
-  makeColor: string,
-  missColor: string
-) {
-  const stacks: { value: number; color: string; marginBottom?: number }[] = [];
-
-  const makeChunks = chunkShots(makes);
-  makeChunks.forEach((value, index) => {
-    const isLastMake = index === makeChunks.length - 1;
-    stacks.push({
-      value,
-      color: makeColor,
-      marginBottom: !isLastMake ? SEGMENT_GAP : misses > 0 ? SEGMENT_GAP : 0,
-    });
-  });
-
-  const missChunks = chunkShots(misses);
-  missChunks.forEach((value, index) => {
-    stacks.push({
-      value,
-      color: missColor,
-      marginBottom: index < missChunks.length - 1 ? SEGMENT_GAP : 0,
-    });
-  });
-
-  return stacks;
-}
-
 function maxStackTotal(buckets: ShootingBucket[]): number {
   const peak = Math.max(...buckets.map((b) => b.makes + b.misses), SHOTS_PER_LINE);
   return Math.ceil(peak / SHOTS_PER_LINE) * SHOTS_PER_LINE || SHOTS_PER_LINE;
@@ -115,16 +84,6 @@ function maxStackTotal(buckets: ShootingBucket[]): number {
 export function MakesMissesBarChart({ buckets }: { buckets: ShootingBucket[] }) {
   const { colors, scheme } = useTheme();
   const missColor = scheme === "dark" ? MISS_GREY.dark : MISS_GREY.light;
-
-  const stackData = useMemo(
-    () =>
-      buckets.map((bucket) => ({
-        label: bucket.label,
-        spacing: 18,
-        stacks: buildSegmentedStacks(bucket.makes, bucket.misses, colors.accent, missColor),
-      })),
-    [buckets, colors.accent, missColor]
-  );
 
   const hasData = buckets.some((b) => b.makes > 0 || b.misses > 0);
   if (!hasData) {
@@ -136,27 +95,80 @@ export function MakesMissesBarChart({ buckets }: { buckets: ShootingBucket[] }) 
   }
 
   const chartMax = maxStackTotal(buckets);
-  const barCount = buckets.length;
+  const barWidth = 28;
+  const barGap = 18;
+  const chartInnerWidth = Math.max(CHART_WIDTH, buckets.length * (barWidth + barGap) + 32);
+  const plotHeight = CHART_HEIGHT - 36;
+  const leftPad = 28;
+  const bottomPad = 28;
 
   return (
     <View>
-      <BarChart
-        stackData={stackData}
-        width={Math.max(CHART_WIDTH, barCount * 52)}
-        height={CHART_HEIGHT}
-        barWidth={28}
-        maxValue={chartMax}
-        noOfSections={4}
-        stackBorderTopLeftRadius={4}
-        stackBorderTopRightRadius={4}
-        yAxisTextStyle={{ color: colors.textMuted, fontSize: 10 }}
-        xAxisLabelTextStyle={{ color: colors.textMuted, fontSize: 10 }}
-        rulesColor={colors.border}
-        yAxisColor="transparent"
-        xAxisColor={colors.border}
-        initialSpacing={16}
-        spacing={18}
-      />
+      <Svg width={chartInnerWidth} height={CHART_HEIGHT}>
+        {[0, 0.25, 0.5, 0.75, 1].map((fraction) => {
+          const y = plotHeight - fraction * plotHeight + 8;
+          const value = Math.round(chartMax * fraction);
+          return (
+            <React.Fragment key={fraction}>
+              <Line
+                x1={leftPad}
+                y1={y}
+                x2={chartInnerWidth - 8}
+                y2={y}
+                stroke={colors.border}
+                strokeWidth={1}
+              />
+              <SvgText x={4} y={y + 4} fill={colors.textMuted} fontSize={10}>
+                {value}
+              </SvgText>
+            </React.Fragment>
+          );
+        })}
+
+        {buckets.map((bucket, bucketIndex) => {
+          const x = leftPad + bucketIndex * (barWidth + barGap) + 8;
+          let stackTop = plotHeight + 8;
+          const makeChunks = chunkShots(bucket.makes);
+          const missChunks = chunkShots(bucket.misses);
+          const segments = [
+            ...makeChunks.map((value) => ({ value, color: colors.accent })),
+            ...missChunks.map((value) => ({ value, color: missColor })),
+          ];
+
+          return (
+            <React.Fragment key={bucket.label}>
+              {segments.map((segment, segmentIndex) => {
+                const height = (segment.value / chartMax) * plotHeight;
+                stackTop -= height;
+                const rectY = stackTop;
+                if (segmentIndex < segments.length - 1) {
+                  stackTop -= SEGMENT_GAP;
+                }
+                return (
+                  <Rect
+                    key={`${bucket.label}-${segmentIndex}`}
+                    x={x}
+                    y={rectY}
+                    width={barWidth}
+                    height={height}
+                    rx={4}
+                    fill={segment.color}
+                  />
+                );
+              })}
+              <SvgText
+                x={x + barWidth / 2}
+                y={CHART_HEIGHT - 6}
+                fill={colors.textMuted}
+                fontSize={10}
+                textAnchor="middle"
+              >
+                {bucket.label}
+              </SvgText>
+            </React.Fragment>
+          );
+        })}
+      </Svg>
       <View style={styles.legendRow}>
         <View style={styles.legendItem}>
           <View style={[styles.legendDot, { backgroundColor: colors.accent }]} />
@@ -173,38 +185,88 @@ export function MakesMissesBarChart({ buckets }: { buckets: ShootingBucket[] }) 
   );
 }
 
-function useGradientLineProps() {
+function SimpleLineChart({
+  data,
+  maxValue,
+  formatLabel,
+  caption,
+}: {
+  data: { label: string; value: number; dataPointText?: string }[];
+  maxValue: number;
+  formatLabel?: (value: number) => string;
+  caption?: string;
+}) {
   const { colors } = useTheme();
-  return {
-    areaChart: true as const,
-    curved: true as const,
-    height: CHART_HEIGHT,
-    width: CHART_WIDTH,
-    thickness: 3,
-    color: colors.accent,
-    startFillColor: colors.accent,
-    endFillColor: colors.card,
-    startOpacity: 0.38,
-    endOpacity: 0.03,
-    gradientDirection: "vertical" as const,
-    dataPointsColor: colors.accent,
-    dataPointsRadius: 4,
-    hideDataPoints: false,
-    noOfSections: 4,
-    yAxisTextStyle: { color: colors.textMuted, fontSize: 10 },
-    xAxisLabelTextStyle: { color: colors.textMuted, fontSize: 10 },
-    rulesColor: colors.border,
-    yAxisColor: "transparent",
-    xAxisColor: colors.border,
-    initialSpacing: 20,
-    spacing: Math.max(36, CHART_WIDTH / 8),
-  };
+  const plotHeight = CHART_HEIGHT - 40;
+  const leftPad = 34;
+  const rightPad = 12;
+  const topPad = 12;
+  const bottomPad = 28;
+  const usableWidth = CHART_WIDTH - leftPad - rightPad;
+  const step = data.length > 1 ? usableWidth / (data.length - 1) : 0;
+
+  const points = data.map((point, index) => {
+    const x = leftPad + index * step;
+    const y = topPad + plotHeight - (point.value / maxValue) * plotHeight;
+    return { ...point, x, y };
+  });
+
+  const polyline = points.map((point) => `${point.x},${point.y}`).join(" ");
+
+  return (
+    <View>
+      <Svg width={CHART_WIDTH} height={CHART_HEIGHT}>
+        {[0, 0.25, 0.5, 0.75, 1].map((fraction) => {
+          const y = topPad + plotHeight - fraction * plotHeight;
+          const value = Math.round(maxValue * fraction);
+          return (
+            <React.Fragment key={fraction}>
+              <Line
+                x1={leftPad}
+                y1={y}
+                x2={CHART_WIDTH - rightPad}
+                y2={y}
+                stroke={colors.border}
+                strokeWidth={1}
+              />
+              <SvgText x={4} y={y + 4} fill={colors.textMuted} fontSize={10}>
+                {formatLabel ? formatLabel(value) : String(value)}
+              </SvgText>
+            </React.Fragment>
+          );
+        })}
+        <Polyline
+          points={polyline}
+          fill="none"
+          stroke={colors.accent}
+          strokeWidth={3}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        {points.map((point) => (
+          <Circle key={point.label} cx={point.x} cy={point.y} r={4} fill={colors.accent} />
+        ))}
+        {points.map((point) => (
+          <SvgText
+            key={`${point.label}-label`}
+            x={point.x}
+            y={CHART_HEIGHT - 8}
+            fill={colors.textMuted}
+            fontSize={10}
+            textAnchor="middle"
+          >
+            {point.label}
+          </SvgText>
+        ))}
+      </Svg>
+      {caption ? (
+        <Text style={[styles.caption, { color: colors.textMuted }]}>{caption}</Text>
+      ) : null}
+    </View>
+  );
 }
 
 export function CompletionLineChart({ points }: { points: CompletionTrendPoint[] }) {
-  const { colors } = useTheme();
-  const lineProps = useGradientLineProps();
-
   const data = useMemo(
     () =>
       points.map((point) => ({
@@ -225,12 +287,12 @@ export function CompletionLineChart({ points }: { points: CompletionTrendPoint[]
   }
 
   return (
-    <View>
-      <LineChart {...lineProps} data={data} maxValue={100} formatYLabel={(v) => `${v}%`} />
-      <Text style={[styles.caption, { color: colors.textMuted }]}>
-        Cumulative plan completion by week
-      </Text>
-    </View>
+    <SimpleLineChart
+      data={data}
+      maxValue={100}
+      formatLabel={(value) => `${value}%`}
+      caption="Cumulative plan completion by week"
+    />
   );
 }
 
@@ -239,9 +301,6 @@ export function ShootingTrendLineChart({
 }: {
   buckets: { label: string; pct: number | null }[];
 }) {
-  const { colors } = useTheme();
-  const lineProps = useGradientLineProps();
-
   const data = useMemo(
     () =>
       buckets.map((bucket) => ({
@@ -261,7 +320,16 @@ export function ShootingTrendLineChart({
     );
   }
 
-  return <LineChart {...lineProps} data={data} maxValue={100} formatYLabel={(v) => `${v}%`} />;
+  return <SimpleLineChart data={data} maxValue={100} formatLabel={(value) => `${value}%`} />;
+}
+
+function heatColor(value: number, scheme: "light" | "dark", accent: string): string {
+  if (value <= 0) return scheme === "dark" ? "#2A2A2D" : "#EBEBF0";
+  if (value < 15) return scheme === "dark" ? "#5C3D24" : "#FFD9BF";
+  if (value < 30) return scheme === "dark" ? "#8A5528" : "#FFB880";
+  if (value < 45) return scheme === "dark" ? "#B86E22" : "#FF8F3D";
+  if (value < 60) return accent;
+  return accent;
 }
 
 export function WorkoutActivityHeatmap({ data }: { data: HeatmapPoint[] }) {
@@ -275,37 +343,37 @@ export function WorkoutActivityHeatmap({ data }: { data: HeatmapPoint[] }) {
     );
   }
 
-  const orangeScale = {
-    thresholds: [15, 30, 45, 60],
-    colors: [
-      scheme === "dark" ? "#2A2A2D" : "#EBEBF0",
-      scheme === "dark" ? "#5C3D24" : "#FFD9BF",
-      scheme === "dark" ? "#8A5528" : "#FFB880",
-      scheme === "dark" ? "#B86E22" : "#FF8F3D",
-      colors.accent,
-    ],
-    emptyColor: scheme === "dark" ? "#2A2A2D" : "#EBEBF0",
-  };
+  const cellSize = 12;
+  const cellGap = 3;
+  const weeks = 12;
+  const daysPerWeek = 7;
+  const recent = [...data]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(-weeks * daysPerWeek);
+  const padded = Array.from({ length: weeks * daysPerWeek }, (_, index) => {
+    const point = recent[index];
+    return { date: point?.date ?? "", value: point?.value ?? 0 };
+  });
 
   return (
     <View style={styles.heatmapWrap}>
-      <Heatmap.Calendar
-        data={data}
-        autoScale={false}
-        colorScale={orangeScale}
-        colorScheme={scheme}
-        scrollEnabled
-        tooltipLabel="min"
-        tooltipEmptyLabel="Rest day"
-        theme={{
-          backgroundColor: "transparent",
-          monthLabelColor: colors.textMuted,
-          dayLabelColor: colors.textMuted,
-          todayBorderColor: colors.accent,
-          tooltipBackgroundColor: scheme === "dark" ? "#1C1C1E" : "#111113",
-          tooltipTextColor: "#FFFFFF",
-        }}
-      />
+      <View style={styles.heatmapGrid}>
+        {padded.map((point, index) => (
+          <View
+            key={`${point.date}-${index}`}
+            style={[
+              styles.heatmapCell,
+              {
+                width: cellSize,
+                height: cellSize,
+                marginRight: (index + 1) % daysPerWeek === 0 ? 0 : cellGap,
+                marginBottom: cellGap,
+                backgroundColor: heatColor(point.value, scheme, colors.accent),
+              },
+            ]}
+          />
+        ))}
+      </View>
       <Text style={[styles.caption, { color: colors.textMuted }]}>
         Darker orange = more training minutes that day
       </Text>
@@ -357,5 +425,13 @@ const styles = StyleSheet.create({
   },
   heatmapWrap: {
     marginHorizontal: -4,
+  },
+  heatmapGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    width: 7 * 15,
+  },
+  heatmapCell: {
+    borderRadius: 2,
   },
 });
