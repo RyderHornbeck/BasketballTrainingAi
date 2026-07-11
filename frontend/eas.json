@@ -22,6 +22,12 @@
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "hornbeck@yahoo.com",
+        "ascAppId": "6789691200",
+        "appleTeamId": "L43Q26N3RR"
+      }
+    }
   }
 }
