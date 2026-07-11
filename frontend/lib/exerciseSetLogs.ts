@@ -14,6 +14,7 @@ export interface SetLogEntry {
 export interface ExerciseLogMeta {
   set_logs?: SetLogEntry[];
   user_notes?: string | null;
+  per_set_attempts_override?: number | null;
 }
 
 export interface ExerciseSetPlan {
@@ -88,8 +89,48 @@ export function decodeExerciseLogMeta(notes: string | null | undefined): Exercis
 export function encodeExerciseLogMeta(meta: ExerciseLogMeta): string | null {
   const hasSets = (meta.set_logs?.length ?? 0) > 0;
   const hasNotes = Boolean(meta.user_notes?.trim());
-  if (!hasSets && !hasNotes) return null;
+  const hasAttemptsOverride = meta.per_set_attempts_override != null;
+  if (!hasSets && !hasNotes && !hasAttemptsOverride) return null;
   return SET_LOG_META_PREFIX + JSON.stringify(meta);
+}
+
+export function scaleTargetMakes(
+  baseMakes: number | null,
+  baseAttempts: number | null,
+  nextAttempts: number | null
+): number | null {
+  if (baseMakes == null || baseAttempts == null || baseAttempts <= 0) return baseMakes;
+  if (nextAttempts == null || nextAttempts <= 0) return baseMakes;
+  return Math.max(1, Math.round((nextAttempts / baseAttempts) * baseMakes));
+}
+
+export function applyAttemptsOverride(
+  plan: ExerciseSetPlan,
+  attemptsOverride: number | null | undefined
+): ExerciseSetPlan {
+  if (plan.logType !== "makes_attempts" || attemptsOverride == null || attemptsOverride <= 0) {
+    return plan;
+  }
+  return {
+    ...plan,
+    perSetAttempts: attemptsOverride,
+    perSetMakes: scaleTargetMakes(plan.perSetMakes, plan.perSetAttempts, attemptsOverride),
+  };
+}
+
+export function resolveAttemptsOverride(
+  meta: ExerciseLogMeta,
+  setLogs: SetLogEntry[]
+): number | null {
+  if (meta.per_set_attempts_override != null && meta.per_set_attempts_override > 0) {
+    return meta.per_set_attempts_override;
+  }
+  const attempts = setLogs
+    .map((row) => row.attempts)
+    .filter((value): value is number => value != null && value > 0);
+  if (!attempts.length) return null;
+  const first = attempts[0];
+  return attempts.every((value) => value === first) ? first : attempts[attempts.length - 1];
 }
 
 export function createEmptySetLogs(plan: ExerciseSetPlan): SetLogEntry[] {

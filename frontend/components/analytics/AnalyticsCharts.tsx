@@ -32,6 +32,8 @@ const COMPACT_SKILL_LABELS: Record<string, string> = {
   basketball_iq: "IQ",
 };
 
+const MISS_GREY = { dark: "#636366", light: "#AEAEB2" };
+
 function polarPoint(
   centerX: number,
   centerY: number,

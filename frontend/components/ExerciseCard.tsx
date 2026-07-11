@@ -1,15 +1,18 @@
 import { useTheme } from "@/hooks/useTheme";
 import {
   aggregateSetLogs,
+  applyAttemptsOverride,
   buildSetPlan,
   decodeExerciseLogMeta,
   encodeExerciseLogMeta,
   hydrateSetLogs,
   normalizeSetLogs,
+  resolveAttemptsOverride,
   SetLogEntry,
 } from "@/lib/exerciseSetLogs";
 import { ExerciseLogInput } from "@/lib/plan";
 import { buildYouTubeClipHtml } from "@/lib/youtubePlayer";
+import { hasVideoDemo, isCatalogOnlyClip } from "@/lib/exerciseClip";
 import { WorkoutExerciseWithClip } from "@/types/plan";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -155,9 +158,9 @@ function SetShootingRow({
           />
         </View>
       </View>
-      {targetMakes != null || targetAttempts != null ? (
+      {targetMakes != null ? (
         <Text style={[styles.setTargetHint, { color: colors.textMuted }]}>
-          Target {targetMakes ?? "—"} makes · {targetAttempts ?? "—"} attempts per set
+          Target {targetMakes} makes
         </Text>
       ) : null}
     </View>
@@ -170,8 +173,29 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
   const [videoError, setVideoError] = useState(false);
   const [videoStarted, setVideoStarted] = useState(false);
 
-  const setPlan = useMemo(() => buildSetPlan(exercise), [exercise]);
+  const baseSetPlan = useMemo(() => buildSetPlan(exercise), [exercise]);
+  const [attemptsOverride, setAttemptsOverride] = useState<number | null>(() => {
+    const meta = decodeExerciseLogMeta(exercise.log?.notes ?? null);
+    const logs = hydrateSetLogs(baseSetPlan, meta, exercise.log ?? undefined);
+    return resolveAttemptsOverride(meta, logs);
+  });
+  const setPlan = useMemo(
+    () => applyAttemptsOverride(baseSetPlan, attemptsOverride),
+    [baseSetPlan, attemptsOverride]
+  );
   const logType = setPlan.logType;
+
+  const displayPrescription = useMemo(() => {
+    const { setCount, perSetAttempts, setSideLabels } = setPlan;
+    if (logType === "makes_attempts" && perSetAttempts != null) {
+      const shotLabel = perSetAttempts === 1 ? "1 shot" : `${perSetAttempts} shots`;
+      let label =
+        setCount === 1 ? `1 set · ${shotLabel}` : `${setCount} sets · ${shotLabel} each`;
+      if (setSideLabels?.length) label += " · alternate sides";
+      return label;
+    }
+    return setPlan.prescriptionLabel;
+  }, [setPlan, logType]);
 
   const [setLogs, setSetLogs] = useState<SetLogEntry[]>(() =>
     hydrateSetLogs(setPlan, decodeExerciseLogMeta(exercise.log?.notes ?? null), exercise.log ?? undefined)
@@ -190,17 +214,19 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
 
   useEffect(() => {
     const meta = decodeExerciseLogMeta(exercise.log?.notes ?? null);
-    setSetLogs(
-      hydrateSetLogs(setPlan, meta, exercise.log ?? undefined)
-    );
+    const hydrated = hydrateSetLogs(baseSetPlan, meta, exercise.log ?? undefined);
+    setAttemptsOverride(resolveAttemptsOverride(meta, hydrated));
+    setSetLogs(hydrated);
     setDifficulty(exercise.log?.difficulty ?? 0);
     setUserNotes(meta.user_notes ?? "");
     setExpanded(false);
     setVideoStarted(false);
     setVideoError(false);
-  }, [exercise.id, exercise.log, setPlan]);
+  }, [exercise.id, exercise.log, baseSetPlan]);
 
   const clip = exercise.video_clip;
+  const catalogOnly = isCatalogOnlyClip(clip);
+  const showVideo = hasVideoDemo(clip);
   const descriptionText =
     clip?.description ?? exercise.instructions ?? clip?.coaching_notes ?? null;
   const watchUrl = clip
@@ -208,13 +234,18 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
     : null;
 
   const videoHtml = useMemo(() => {
-    if (!clip || !videoStarted) return null;
+    if (!showVideo || !clip || !videoStarted) return null;
     return buildYouTubeClipHtml(clip.youtube_video_id, clip.start_seconds, clip.end_seconds, {
       autoplay: true,
     });
   }, [clip, videoStarted]);
 
-  const emitLog = (nextSets: SetLogEntry[], nextDifficulty = difficulty, nextNotes = userNotes) => {
+  const emitLog = (
+    nextSets: SetLogEntry[],
+    nextDifficulty = difficulty,
+    nextNotes = userNotes,
+    nextAttemptsOverride = attemptsOverride
+  ) => {
     const normalized = normalizeSetLogs(nextSets, setPlan);
     const totals = aggregateSetLogs(normalized, setPlan);
     const drillComplete =
@@ -230,18 +261,58 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
       notes: encodeExerciseLogMeta({
         set_logs: normalized,
         user_notes: nextNotes.trim() || null,
+        per_set_attempts_override: nextAttemptsOverride,
       }),
     });
   };
 
-  useEffect(() => {
-    emitLog(setLogs);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setLogs, difficulty, userNotes]);
-
   const updateSet = (setNumber: number, patch: Partial<SetLogEntry>) => {
     setSetLogs((prev) =>
       prev.map((row) => (row.set_number === setNumber ? { ...row, ...patch } : row))
+    );
+  };
+
+  useEffect(() => {
+    emitLog(setLogs, difficulty, userNotes, attemptsOverride);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setLogs, difficulty, userNotes, attemptsOverride, setPlan]);
+
+  const syncAttemptsAcrossSets = (text: string) => {
+    const attemptsNum = text ? parseInt(text.replace(/[^0-9]/g, ""), 10) : 0;
+    if (!attemptsNum || attemptsNum <= 0) {
+      setAttemptsOverride(null);
+      const resetPlan = applyAttemptsOverride(baseSetPlan, null);
+      setSetLogs((prev) =>
+        prev.map((row) => {
+          const makesNum = row.makes ?? 0;
+          const attempts = resetPlan.perSetAttempts;
+          return {
+            ...row,
+            attempts,
+            completed:
+              resetPlan.perSetMakes != null
+                ? makesNum >= resetPlan.perSetMakes
+                : makesNum > 0 && makesNum >= (attempts ?? 0),
+          };
+        })
+      );
+      return;
+    }
+
+    const scaledPlan = applyAttemptsOverride(baseSetPlan, attemptsNum);
+    setAttemptsOverride(attemptsNum);
+    setSetLogs((prev) =>
+      prev.map((row) => {
+        const makesNum = row.makes ?? 0;
+        return {
+          ...row,
+          attempts: attemptsNum,
+          completed:
+            scaledPlan.perSetMakes != null
+              ? makesNum >= scaledPlan.perSetMakes
+              : makesNum > 0 && makesNum >= attemptsNum,
+        };
+      })
     );
   };
 
@@ -326,17 +397,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
                   : makesNum > 0 && makesNum >= attemptsNum,
             });
           }}
-          onAttemptsChange={(text) => {
-            const attemptsNum = text ? parseInt(text.replace(/[^0-9]/g, ""), 10) : 0;
-            const makesNum = row.makes ?? 0;
-            updateSet(row.set_number, {
-              attempts: text ? attemptsNum : setPlan.perSetAttempts,
-              completed:
-                setPlan.perSetMakes != null
-                  ? makesNum >= setPlan.perSetMakes
-                  : makesNum > 0 && makesNum >= attemptsNum,
-            });
-          }}
+          onAttemptsChange={syncAttemptsAcrossSets}
         />
       ));
     }
@@ -418,7 +479,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
 
       {expanded && (
         <View style={styles.expandedContent}>
-          {clip ? (
+          {showVideo ? (
             <View style={styles.videoSection}>
               {videoError ? (
                 <Pressable
@@ -469,7 +530,26 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
             </View>
           ) : null}
 
-          {setPlan.prescriptionLabel ? (
+          {clip && catalogOnly && descriptionText ? (
+            <View
+              style={[
+                styles.catalogDrillCard,
+                { backgroundColor: colors.cardAlt, borderColor: colors.border },
+              ]}
+            >
+              <Text style={[styles.catalogDrillTitle, { color: colors.text }]}>Drill steps</Text>
+              <Text style={[styles.catalogDrillBody, { color: colors.textSecondary }]}>
+                {descriptionText}
+              </Text>
+              {clip.coaching_notes ? (
+                <Text style={[styles.catalogDrillCue, { color: colors.accent }]}>
+                  {clip.coaching_notes}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+
+          {displayPrescription ? (
             <View
               style={[
                 styles.prescriptionPill,
@@ -480,7 +560,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
               ]}
             >
               <Text style={[styles.prescriptionText, { color: colors.textSecondary }]}>
-                {setPlan.prescriptionLabel}
+                {displayPrescription}
               </Text>
             </View>
           ) : null}
@@ -631,6 +711,26 @@ const styles = StyleSheet.create({
   },
   videoSection: {
     marginBottom: 12,
+  },
+  catalogDrillCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 14,
+    marginBottom: 12,
+    gap: 8,
+  },
+  catalogDrillTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  catalogDrillBody: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  catalogDrillCue: {
+    fontSize: 13,
+    fontWeight: "600",
+    lineHeight: 18,
   },
   prescriptionPill: {
     alignSelf: "flex-start",
