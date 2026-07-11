@@ -46,6 +46,7 @@ export default function DaysScreen() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [progressVersion, setProgressVersion] = useState(0);
   const logsRef = useRef<Map<string, ExerciseLogInput>>(new Map());
+  const finishingRef = useRef(false);
   const [retryingBlock, setRetryingBlock] = useState(false);
 
   const defaultDayNumber = useMemo(() => {

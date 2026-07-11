@@ -267,6 +267,7 @@ function SimpleLineChart({
 }
 
 export function CompletionLineChart({ points }: { points: CompletionTrendPoint[] }) {
+  const { colors } = useTheme();
   const data = useMemo(
     () =>
       points.map((point) => ({
@@ -301,6 +302,7 @@ export function ShootingTrendLineChart({
 }: {
   buckets: { label: string; pct: number | null }[];
 }) {
+  const { colors } = useTheme();
   const data = useMemo(
     () =>
       buckets.map((bucket) => ({
