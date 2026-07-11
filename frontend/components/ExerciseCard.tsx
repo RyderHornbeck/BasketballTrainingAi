@@ -1,4 +1,13 @@
 import { useTheme } from "@/hooks/useTheme";
+import {
+  aggregateSetLogs,
+  buildSetPlan,
+  decodeExerciseLogMeta,
+  encodeExerciseLogMeta,
+  hydrateSetLogs,
+  normalizeSetLogs,
+  SetLogEntry,
+} from "@/lib/exerciseSetLogs";
 import { ExerciseLogInput } from "@/lib/plan";
 import { buildYouTubeClipHtml } from "@/lib/youtubePlayer";
 import { WorkoutExerciseWithClip } from "@/types/plan";
@@ -30,65 +39,105 @@ const CATEGORY_LABELS: Record<string, string> = {
   basketball_iq: "Basketball IQ",
 };
 
-function parseTargetMinutes(exercise: WorkoutExerciseWithClip): number | null {
-  const sources = [exercise.duration, exercise.reps];
-  for (const value of sources) {
-    if (!value) continue;
-    const match = value.match(/(\d+)\s*min/i);
-    if (match) return parseInt(match[1], 10);
-  }
-  return null;
-}
-
-function buildPreviewBubbles(exercise: WorkoutExerciseWithClip): string[] {
-  const bubbles: string[] = [];
-  if (exercise.sets) {
-    const n = parseInt(exercise.sets, 10);
-    bubbles.push(n === 1 ? "1 set" : `${exercise.sets} sets`);
-  }
-  if (exercise.duration) {
-    const minMatch = exercise.duration.match(/(\d+)\s*min/i);
-    if (minMatch) bubbles.push(`${minMatch[1]} min`);
-    else bubbles.push(exercise.duration);
-  } else if (exercise.reps) {
-    const minMatch = exercise.reps.match(/(\d+)\s*min/i);
-    if (minMatch) bubbles.push(`${minMatch[1]} min`);
-  }
-  if (exercise.target_makes != null) {
-    bubbles.push(`${exercise.target_makes} makes`);
-  }
-  if (exercise.target_attempts != null) {
-    bubbles.push(`${exercise.target_attempts} attempts`);
-  }
-  return bubbles;
-}
-
-function BubbleRow({
-  labels,
-  scheme,
+function SetCheckboxRow({
+  label,
+  completed,
+  onToggle,
+  readOnly,
   colors,
 }: {
-  labels: string[];
-  scheme: "light" | "dark";
+  label: string;
+  completed: boolean;
+  onToggle: () => void;
+  readOnly?: boolean;
   colors: ReturnType<typeof useTheme>["colors"];
 }) {
-  if (labels.length === 0) return null;
   return (
-    <View style={styles.bubbleRow}>
-      {labels.map((label) => (
-        <View
-          key={label}
-          style={[
-            styles.bubble,
-            {
-              backgroundColor: scheme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
-              borderColor: colors.border,
-            },
-          ]}
-        >
-          <Text style={[styles.bubbleText, { color: colors.textSecondary }]}>{label}</Text>
+    <Pressable
+      onPress={readOnly ? undefined : onToggle}
+      disabled={readOnly}
+      style={[
+        styles.setRow,
+        { backgroundColor: completed ? colors.accentMuted : colors.cardAlt, borderColor: colors.border },
+      ]}
+    >
+      <View
+        style={[
+          styles.checkbox,
+          {
+            backgroundColor: completed ? colors.accent : "transparent",
+            borderColor: colors.accent,
+          },
+        ]}
+      >
+        {completed ? <Text style={styles.checkmark}>✓</Text> : null}
+      </View>
+      <Text style={[styles.setRowLabel, { color: colors.text }]}>{label}</Text>
+      <Text style={[styles.setRowHint, { color: colors.textMuted }]}>
+        {completed ? "Done" : "Tap when finished"}
+      </Text>
+    </Pressable>
+  );
+}
+
+function SetShootingRow({
+  setNumber,
+  makes,
+  targetAttempts,
+  targetMakes,
+  completed,
+  onMakesChange,
+  readOnly,
+  colors,
+}: {
+  setNumber: number;
+  makes: string;
+  targetAttempts: number | null;
+  targetMakes: number | null;
+  completed: boolean;
+  onMakesChange: (value: string) => void;
+  readOnly?: boolean;
+  colors: ReturnType<typeof useTheme>["colors"];
+}) {
+  return (
+    <View
+      style={[
+        styles.setRow,
+        styles.shootingSetRow,
+        {
+          backgroundColor: completed ? colors.accentMuted : colors.cardAlt,
+          borderColor: colors.border,
+        },
+      ]}
+    >
+      <Text style={[styles.setNumber, { color: colors.text }]}>Set {setNumber}</Text>
+      <View style={styles.shootingInputs}>
+        <View style={styles.shootingCol}>
+          <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Makes</Text>
+          <RNTextInput
+            value={makes}
+            onChangeText={readOnly ? undefined : onMakesChange}
+            editable={!readOnly}
+            keyboardType="number-pad"
+            placeholder="0"
+            placeholderTextColor={colors.textMuted}
+            style={[
+              styles.shootingInput,
+              { backgroundColor: colors.card, color: colors.text, borderColor: colors.border },
+            ]}
+          />
         </View>
-      ))}
+        <Text style={[styles.shootingSlash, { color: colors.textMuted }]}>/</Text>
+        <View style={styles.shootingCol}>
+          <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Attempts</Text>
+          <Text style={[styles.attemptsTarget, { color: colors.text }]}>{targetAttempts ?? "—"}</Text>
+        </View>
+      </View>
+      {targetMakes != null ? (
+        <Text style={[styles.setTargetHint, { color: colors.textMuted }]}>
+          Target {targetMakes} makes
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -99,30 +148,35 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
   const [videoError, setVideoError] = useState(false);
   const [videoStarted, setVideoStarted] = useState(false);
 
-  const [completed, setCompleted] = useState(exercise.log?.completed ?? false);
-  const [makes, setMakes] = useState(exercise.log?.makes?.toString() ?? "");
-  const [minutes, setMinutes] = useState(exercise.log?.minutes_completed?.toString() ?? "");
+  const setPlan = useMemo(() => buildSetPlan(exercise), [exercise]);
+  const logType = setPlan.logType;
+
+  const [setLogs, setSetLogs] = useState<SetLogEntry[]>(() =>
+    hydrateSetLogs(setPlan, decodeExerciseLogMeta(exercise.log?.notes ?? null), exercise.log ?? undefined)
+  );
   const [difficulty, setDifficulty] = useState(exercise.log?.difficulty ?? 0);
-  const [notes, setNotes] = useState(exercise.log?.notes ?? "");
+  const [userNotes, setUserNotes] = useState(
+    () => decodeExerciseLogMeta(exercise.log?.notes ?? null).user_notes ?? ""
+  );
 
-  const logType = exercise.log_type ?? "checkbox";
-  const targetMakes = exercise.target_makes ?? null;
-  const targetAttempts = exercise.target_attempts ?? null;
-
-  const targetMinutes = parseTargetMinutes(exercise);
-
-  const previewBubbles = useMemo(() => buildPreviewBubbles(exercise), [exercise]);
+  const normalizedSets = useMemo(() => normalizeSetLogs(setLogs, setPlan), [setLogs, setPlan]);
+  const aggregated = useMemo(
+    () => aggregateSetLogs(normalizedSets, setPlan),
+    [normalizedSets, setPlan]
+  );
+  const completed = aggregated.completed || (logType === "difficulty_rating" && difficulty > 0);
 
   useEffect(() => {
-    setCompleted(exercise.log?.completed ?? false);
-    setMakes(exercise.log?.makes?.toString() ?? "");
-    setMinutes(exercise.log?.minutes_completed?.toString() ?? "");
+    const meta = decodeExerciseLogMeta(exercise.log?.notes ?? null);
+    setSetLogs(
+      hydrateSetLogs(setPlan, meta, exercise.log ?? undefined)
+    );
     setDifficulty(exercise.log?.difficulty ?? 0);
-    setNotes(exercise.log?.notes ?? "");
+    setUserNotes(meta.user_notes ?? "");
     setExpanded(false);
     setVideoStarted(false);
     setVideoError(false);
-  }, [exercise.id, exercise.log]);
+  }, [exercise.id, exercise.log, setPlan]);
 
   const clip = exercise.video_clip;
   const watchUrl = clip
@@ -136,32 +190,83 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
     });
   }, [clip, videoStarted]);
 
-  // Auto-complete when makes hit the target (shooting drills).
-  useEffect(() => {
-    if (logType !== "makes_attempts" || targetMakes == null) return;
-    const makesNum = makes ? parseInt(makes, 10) : 0;
-    const hitTarget = makesNum >= targetMakes;
-    if (hitTarget !== completed) setCompleted(hitTarget);
-  }, [makes, targetMakes, logType, completed]);
-
-  useEffect(() => {
-    const makesNum = makes ? parseInt(makes, 10) : null;
-    const attemptsNum =
-      logType === "makes_attempts" && targetAttempts != null
-        ? targetAttempts
-        : null;
+  const emitLog = (nextSets: SetLogEntry[], nextDifficulty = difficulty, nextNotes = userNotes) => {
+    const normalized = normalizeSetLogs(nextSets, setPlan);
+    const totals = aggregateSetLogs(normalized, setPlan);
+    const drillComplete =
+      logType === "difficulty_rating" ? nextDifficulty > 0 : totals.completed;
 
     onLogChange({
       exercise_id: exercise.id,
-      completed,
-      makes: makesNum,
-      attempts: attemptsNum,
-      minutes_completed: minutes ? parseInt(minutes, 10) : null,
-      difficulty: difficulty || null,
-      notes: notes || null,
+      completed: drillComplete,
+      makes: totals.makes,
+      attempts: totals.attempts,
+      minutes_completed: totals.minutes_completed,
+      difficulty: logType === "difficulty_rating" ? nextDifficulty || null : null,
+      notes: encodeExerciseLogMeta({
+        set_logs: normalized,
+        user_notes: nextNotes.trim() || null,
+      }),
     });
+  };
+
+  useEffect(() => {
+    emitLog(setLogs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [completed, makes, minutes, difficulty, notes, targetAttempts, logType]);
+  }, [setLogs, difficulty, userNotes]);
+
+  const updateSet = (setNumber: number, patch: Partial<SetLogEntry>) => {
+    setSetLogs((prev) =>
+      prev.map((row) => (row.set_number === setNumber ? { ...row, ...patch } : row))
+    );
+  };
+
+  const toggleSetComplete = (setNumber: number) => {
+    const row = setLogs.find((s) => s.set_number === setNumber);
+    if (!row) return;
+    const next = !row.completed;
+    updateSet(setNumber, {
+      completed: next,
+      minutes: next ? setPlan.perSetMinutes : null,
+    });
+  };
+
+  const toggleHeaderComplete = () => {
+    if (readOnly) return;
+    if (completed) {
+      setSetLogs(
+        setLogs.map((row) => ({
+          ...row,
+          completed: false,
+          makes: null,
+          minutes: null,
+        }))
+      );
+      if (logType === "difficulty_rating") setDifficulty(0);
+      return;
+    }
+
+    if (logType === "makes_attempts") {
+      setSetLogs(
+        setLogs.map((row) => ({
+          ...row,
+          completed: true,
+          makes: row.makes ?? setPlan.perSetMakes,
+          attempts: row.attempts ?? setPlan.perSetAttempts,
+        }))
+      );
+    } else if (logType === "minutes" || logType === "checkbox") {
+      setSetLogs(
+        setLogs.map((row) => ({
+          ...row,
+          completed: true,
+          minutes: setPlan.perSetMinutes,
+        }))
+      );
+    } else if (logType === "difficulty_rating") {
+      setDifficulty(3);
+    }
+  };
 
   const openInYouTube = () => {
     if (watchUrl) Linking.openURL(watchUrl);
@@ -172,27 +277,50 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
       ? (["rgba(255,122,26,0.45)", "rgba(28,28,30,0.95)", "rgba(11,11,12,1)"] as const)
       : (["rgba(255,122,26,0.28)", "rgba(255,255,255,0.98)", "rgba(255,255,255,1)"] as const);
 
-  const toggleCompleted = () => {
-    if (readOnly) return;
-    if (logType === "makes_attempts" && targetMakes != null) {
-      const makesNum = makes ? parseInt(makes, 10) : 0;
-      if (!completed && makesNum < targetMakes) {
-        setMakes(String(targetMakes));
-      }
-      setCompleted(!completed);
-      return;
+  const renderSetRows = () => {
+    if (logType === "makes_attempts") {
+      return normalizedSets.map((row) => (
+        <SetShootingRow
+          key={row.set_number}
+          setNumber={row.set_number}
+          makes={row.makes?.toString() ?? ""}
+          targetAttempts={setPlan.perSetAttempts}
+          targetMakes={setPlan.perSetMakes}
+          completed={row.completed}
+          readOnly={readOnly}
+          colors={colors}
+          onMakesChange={(text) => {
+            const makesNum = text ? parseInt(text.replace(/[^0-9]/g, ""), 10) : 0;
+            updateSet(row.set_number, {
+              makes: text ? makesNum : null,
+              completed:
+                setPlan.perSetMakes != null ? makesNum >= setPlan.perSetMakes : Boolean(text),
+            });
+          }}
+        />
+      ));
     }
-    if (logType === "minutes") {
-      const next = !completed;
-      setCompleted(next);
-      if (next) {
-        setMinutes(targetMinutes != null ? String(targetMinutes) : "");
-      } else {
-        setMinutes("");
-      }
-      return;
+
+    if (logType === "minutes" || logType === "checkbox") {
+      return normalizedSets.map((row) => {
+        const label =
+          logType === "minutes" && setPlan.perSetMinutes
+            ? `Set ${row.set_number} · ${setPlan.perSetMinutes} min`
+            : `Set ${row.set_number}`;
+        return (
+          <SetCheckboxRow
+            key={row.set_number}
+            label={label}
+            completed={row.completed}
+            readOnly={readOnly}
+            colors={colors}
+            onToggle={() => toggleSetComplete(row.set_number)}
+          />
+        );
+      });
     }
-    setCompleted(!completed);
+
+    return null;
   };
 
   const cardInner = (
@@ -216,14 +344,12 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
               {exercise.instructions}
             </Text>
           ) : null}
-
-          <BubbleRow labels={previewBubbles} scheme={scheme} colors={colors} />
         </Pressable>
 
         <View style={styles.headerActions}>
           {!expanded && (completed || !readOnly) ? (
             <Pressable
-              onPress={readOnly ? undefined : toggleCompleted}
+              onPress={readOnly ? undefined : toggleHeaderComplete}
               disabled={readOnly}
               hitSlop={8}
               style={[
@@ -302,105 +428,34 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
             </View>
           ) : null}
 
+          {setPlan.prescriptionLabel ? (
+            <View
+              style={[
+                styles.prescriptionPill,
+                {
+                  backgroundColor: scheme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+                  borderColor: colors.border,
+                },
+              ]}
+            >
+              <Text style={[styles.prescriptionText, { color: colors.textSecondary }]}>
+                {setPlan.prescriptionLabel}
+              </Text>
+            </View>
+          ) : null}
+
           {!readOnly && (
             <View style={[styles.loggingSection, { borderTopColor: colors.border }]}>
-              {logType === "checkbox" && (
-                <Pressable
-                  onPress={() => setCompleted(!completed)}
-                  style={[
-                    styles.checkboxRow,
-                    { backgroundColor: completed ? colors.accentMuted : colors.cardAlt },
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.checkbox,
-                      {
-                        backgroundColor: completed ? colors.accent : "transparent",
-                        borderColor: colors.accent,
-                      },
-                    ]}
-                  >
-                    {completed ? <Text style={styles.checkmark}>✓</Text> : null}
-                  </View>
-                  <Text style={[styles.checkboxLabel, { color: colors.text }]}>
-                    {completed ? "Marked complete" : "Mark complete"}
-                  </Text>
-                </Pressable>
-              )}
-
-              {logType === "makes_attempts" && (
-                <View style={styles.shootingRow}>
-                  <View style={styles.shootingCol}>
-                    <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Makes</Text>
-                    <RNTextInput
-                      value={makes}
-                      onChangeText={(t) => setMakes(t.replace(/[^0-9]/g, ""))}
-                      keyboardType="number-pad"
-                      placeholder="0"
-                      placeholderTextColor={colors.textMuted}
-                      style={[
-                        styles.shootingInput,
-                        { backgroundColor: colors.cardAlt, color: colors.text, borderColor: colors.border },
-                      ]}
-                    />
-                  </View>
-
-                  <Text style={[styles.shootingSlash, { color: colors.textMuted }]}>/</Text>
-
-                  <View style={styles.shootingCol}>
-                    <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Attempts</Text>
-                    <Text style={[styles.attemptsTarget, { color: colors.text }]}>
-                      {targetAttempts ?? "—"}
-                    </Text>
-                  </View>
-                </View>
-              )}
-
-              {logType === "minutes" && (
-                <Pressable
-                  onPress={() => {
-                    const next = !completed;
-                    setCompleted(next);
-                    if (next) {
-                      setMinutes(targetMinutes != null ? String(targetMinutes) : "");
-                    } else {
-                      setMinutes("");
-                    }
-                  }}
-                  style={[
-                    styles.checkboxRow,
-                    { backgroundColor: completed ? colors.accentMuted : colors.cardAlt },
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.checkbox,
-                      {
-                        backgroundColor: completed ? colors.accent : "transparent",
-                        borderColor: colors.accent,
-                      },
-                    ]}
-                  >
-                    {completed ? <Text style={styles.checkmark}>✓</Text> : null}
-                  </View>
-                  <Text style={[styles.checkboxLabel, { color: colors.text }]}>
-                    {completed ? "Completed" : "Mark complete"}
-                  </Text>
-                </Pressable>
-              )}
+              <View style={styles.setRows}>{renderSetRows()}</View>
 
               {logType === "difficulty_rating" && (
-                <View>
+                <View style={styles.difficultyBlock}>
                   <Text style={[styles.smallLabel, { color: colors.textSecondary }]}>How hard was it?</Text>
                   <View style={styles.difficultyRow}>
                     {[1, 2, 3, 4, 5].map((d) => (
                       <Pressable
                         key={d}
-                        onPress={() => {
-                          setDifficulty(d);
-                          setCompleted(true);
-                        }}
+                        onPress={() => setDifficulty(d)}
                         style={[
                           styles.difficultyPill,
                           {
@@ -426,8 +481,8 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
               <View style={styles.notesWrapper}>
                 <Text style={[styles.smallLabel, { color: colors.textSecondary }]}>Notes (optional)</Text>
                 <RNTextInput
-                  value={notes}
-                  onChangeText={setNotes}
+                  value={userNotes}
+                  onChangeText={setUserNotes}
                   placeholder="How did it feel?"
                   placeholderTextColor={colors.textMuted}
                   multiline
@@ -527,22 +582,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginTop: 8,
   },
-  bubbleRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    marginTop: 10,
-  },
-  bubble: {
-    borderRadius: 20,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  bubbleText: {
-    fontSize: 12,
-    fontWeight: "600",
-  },
   expandedContent: {
     marginTop: 14,
     paddingTop: 14,
@@ -551,6 +590,18 @@ const styles = StyleSheet.create({
   },
   videoSection: {
     marginBottom: 12,
+  },
+  prescriptionPill: {
+    alignSelf: "flex-start",
+    borderRadius: 20,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginBottom: 14,
+  },
+  prescriptionText: {
+    fontSize: 13,
+    fontWeight: "700",
   },
   videoPlayOverlay: {
     borderRadius: 18,
@@ -613,35 +664,44 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     borderTopWidth: 1,
   },
-  checkboxRow: {
+  setRows: {
+    gap: 10,
+  },
+  setRow: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 14,
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    borderRadius: 16,
-    padding: 14,
   },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 7,
-    borderWidth: 1.5,
-    alignItems: "center",
-    justifyContent: "center",
+  shootingSetRow: {
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: 12,
   },
-  checkmark: {
-    color: "#FFFFFF",
-    fontSize: 13,
+  setNumber: {
+    fontSize: 14,
     fontWeight: "800",
   },
-  checkboxLabel: {
+  setRowLabel: {
+    flex: 1,
     fontSize: 14,
     fontWeight: "600",
   },
-  shootingRow: {
+  setRowHint: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  setTargetHint: {
+    fontSize: 12,
+    fontWeight: "600",
+    alignSelf: "flex-end",
+  },
+  shootingInputs: {
     flexDirection: "row",
     alignItems: "flex-end",
     gap: 12,
-    marginBottom: 8,
   },
   shootingCol: {
     flex: 1,
@@ -672,13 +732,21 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     paddingVertical: 8,
   },
-  numberInput: {
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 7,
     borderWidth: 1.5,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-    fontFamily: "Poppins_600SemiBold",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  checkmark: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  difficultyBlock: {
+    marginTop: 14,
   },
   smallLabel: {
     fontSize: 12,

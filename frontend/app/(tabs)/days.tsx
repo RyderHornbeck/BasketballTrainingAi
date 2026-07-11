@@ -6,6 +6,7 @@ import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
+import { calculateDayPerformance, getPerformanceColor } from "@/lib/dayPerformance";
 import {
   ExerciseLogInput,
   finishWorkoutDay,
@@ -166,6 +167,13 @@ export default function DaysScreen() {
     };
   }, [dayDetail, progressVersion]);
 
+  const dayPerformance = useMemo(() => {
+    if (!dayDetail) return { score: 0, hasData: false };
+    return calculateDayPerformance(dayDetail.exercises, logsRef.current);
+  }, [dayDetail, progressVersion]);
+
+  const performanceColor = getPerformanceColor(dayPerformance.score, colors);
+
   if (planLoading) {
     return (
       <SafeAreaView style={[styles.center, { backgroundColor: "transparent" }]} edges={["top"]}>
@@ -214,24 +222,41 @@ export default function DaysScreen() {
           <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
         ) : viewMode === "overview" ? (
           <View>
-            <Card style={styles.daySummaryCard}>
-              <Text style={[styles.dayLabel, { color: colors.textSecondary }]}>Day {selectedDayNumber}</Text>
-              <View style={styles.daySummaryRow}>
-                <ProgressRing
-                  progress={exerciseStats.progress}
-                  completed={exerciseStats.completed}
-                  total={exerciseStats.total}
-                />
-                <View style={styles.daySummaryText}>
-                  <Text style={[styles.exerciseCount, { color: colors.text }]}>
-                    {exerciseStats.completed}/{exerciseStats.total}
-                  </Text>
-                  <Text style={[styles.exerciseCountLabel, { color: colors.textSecondary }]}>
-                    exercises completed
+            <Text style={[styles.dayLabel, { color: colors.textSecondary }]}>Day {selectedDayNumber}</Text>
+            <View style={styles.statsSquareRow}>
+              <Card style={styles.statSquare}>
+                <View style={styles.statSquareContent}>
+                  <ProgressRing
+                    progress={exerciseStats.progress}
+                    completed={exerciseStats.completed}
+                    total={exerciseStats.total}
+                    size={76}
+                    strokeWidth={7}
+                  />
+                  <Text style={[styles.statSquareLabel, { color: colors.textSecondary }]}>
+                    Exercises completed
                   </Text>
                 </View>
-              </View>
-            </Card>
+              </Card>
+
+              <Card style={styles.statSquare}>
+                <View style={styles.statSquareContent}>
+                  <Text
+                    style={[
+                      styles.performanceScore,
+                      {
+                        color: dayPerformance.hasData ? performanceColor : colors.textMuted,
+                      },
+                    ]}
+                  >
+                    {dayPerformance.hasData ? `${dayPerformance.score}%` : "--"}
+                  </Text>
+                  <Text style={[styles.statSquareLabel, { color: colors.textSecondary }]}>
+                    Today&apos;s performance
+                  </Text>
+                </View>
+              </Card>
+            </View>
 
             <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Today&apos;s Goal</Text>
             <Card style={styles.goalCard}>
@@ -285,6 +310,20 @@ export default function DaysScreen() {
               <Ionicons name="chevron-back" size={22} color={colors.accent} />
               <Text style={[styles.backText, { color: colors.accent }]}>Back to day overview</Text>
             </Pressable>
+
+            <View style={styles.workoutHeader}>
+              <Text style={[styles.workoutHeaderTitle, { color: colors.text }]}>
+                {dayDetail.exercises.length}{" "}
+                {dayDetail.exercises.length === 1 ? "exercise" : "exercises"}
+              </Text>
+              {dayDetail.estimated_minutes ? (
+                <Text style={[styles.workoutHeaderMeta, { color: colors.textSecondary }]}>
+                  ~{dayDetail.estimated_minutes} min workout
+                </Text>
+              ) : null}
+            </View>
+
+            <Text style={[styles.drillsLabel, { color: colors.textMuted }]}>Drills</Text>
 
             {dayDetail.exercises
               .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
@@ -345,33 +384,41 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     textAlign: "center",
   },
-  daySummaryCard: {
-    marginBottom: 20,
-  },
   dayLabel: {
     fontSize: 13,
     fontWeight: "700",
     textTransform: "uppercase",
     letterSpacing: 0.6,
-    marginBottom: 14,
+    marginBottom: 12,
+    paddingHorizontal: 4,
   },
-  daySummaryRow: {
+  statsSquareRow: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 20,
+    gap: 12,
+    marginBottom: 20,
   },
-  daySummaryText: {
+  statSquare: {
     flex: 1,
+    aspectRatio: 1,
+    padding: 14,
+    justifyContent: "center",
   },
-  exerciseCount: {
-    fontSize: 28,
-    fontWeight: "800",
-    letterSpacing: -0.5,
+  statSquareContent: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
   },
-  exerciseCountLabel: {
-    fontSize: 15,
+  statSquareLabel: {
+    fontSize: 12,
     fontWeight: "600",
-    marginTop: 4,
+    textAlign: "center",
+    lineHeight: 16,
+  },
+  performanceScore: {
+    fontSize: 36,
+    fontWeight: "800",
+    letterSpacing: -1,
   },
   sectionLabel: {
     fontSize: 13,
@@ -439,6 +486,29 @@ const styles = StyleSheet.create({
   backText: {
     fontSize: 15,
     fontWeight: "700",
+  },
+  workoutHeader: {
+    marginBottom: 6,
+    paddingHorizontal: 2,
+  },
+  workoutHeaderTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    letterSpacing: -0.4,
+  },
+  workoutHeaderMeta: {
+    fontSize: 14,
+    fontWeight: "600",
+    marginTop: 4,
+  },
+  drillsLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: 10,
+    marginTop: 4,
+    paddingHorizontal: 2,
   },
   completedBanner: {
     marginTop: 12,

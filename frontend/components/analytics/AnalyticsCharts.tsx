@@ -6,12 +6,16 @@ import {
   HeatmapPoint,
   ShootingBucket,
 } from "@/lib/analytics";
-import { Poppins_500Medium, Poppins_600SemiBold } from "@expo-google-fonts/poppins";
-import { useFont } from "@shopify/react-native-skia";
 import Heatmap from "@rific/heatmap";
 import React, { useMemo } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
-import { CartesianChart, Line, BarGroup } from "victory-native";
+import { Dimensions, Pressable, StyleSheet, View } from "react-native";
+import { BarChart, LineChart } from "react-native-gifted-charts";
+
+const SHOTS_PER_LINE = 5;
+const SEGMENT_GAP = 2;
+const CHART_HEIGHT = 190;
+const SCREEN_WIDTH = Dimensions.get("window").width;
+const CHART_WIDTH = SCREEN_WIDTH - 76;
 
 const PERIOD_LABELS: Record<AnalyticsPeriod, string> = {
   daily: "Daily",
@@ -19,6 +23,8 @@ const PERIOD_LABELS: Record<AnalyticsPeriod, string> = {
   monthly: "Monthly",
   alltime: "All Time",
 };
+
+const MISS_GREY = { dark: "#636366", light: "#AEAEB2" };
 
 export function PeriodSelector({
   value,
@@ -61,29 +67,63 @@ export function PeriodSelector({
   );
 }
 
-type ChartDatum = {
-  x: number;
-  makes: number;
-  misses: number;
-  label: string;
-};
+function chunkShots(total: number): number[] {
+  const chunks: number[] = [];
+  let remaining = total;
+  while (remaining > 0) {
+    chunks.push(Math.min(SHOTS_PER_LINE, remaining));
+    remaining -= SHOTS_PER_LINE;
+  }
+  return chunks;
+}
 
-function toChartData(buckets: ShootingBucket[]): ChartDatum[] {
-  return buckets.map((bucket, index) => ({
-    x: index,
-    makes: bucket.makes,
-    misses: bucket.misses,
-    label: bucket.label,
-  }));
+function buildSegmentedStacks(
+  makes: number,
+  misses: number,
+  makeColor: string,
+  missColor: string
+) {
+  const stacks: { value: number; color: string; marginBottom?: number }[] = [];
+
+  const makeChunks = chunkShots(makes);
+  makeChunks.forEach((value, index) => {
+    const isLastMake = index === makeChunks.length - 1;
+    stacks.push({
+      value,
+      color: makeColor,
+      marginBottom: !isLastMake ? SEGMENT_GAP : misses > 0 ? SEGMENT_GAP : 0,
+    });
+  });
+
+  const missChunks = chunkShots(misses);
+  missChunks.forEach((value, index) => {
+    stacks.push({
+      value,
+      color: missColor,
+      marginBottom: index < missChunks.length - 1 ? SEGMENT_GAP : 0,
+    });
+  });
+
+  return stacks;
+}
+
+function maxStackTotal(buckets: ShootingBucket[]): number {
+  const peak = Math.max(...buckets.map((b) => b.makes + b.misses), SHOTS_PER_LINE);
+  return Math.ceil(peak / SHOTS_PER_LINE) * SHOTS_PER_LINE || SHOTS_PER_LINE;
 }
 
 export function MakesMissesBarChart({ buckets }: { buckets: ShootingBucket[] }) {
-  const { colors } = useTheme();
-  const font = useFont(Poppins_500Medium, 10);
-  const data = useMemo(() => toChartData(buckets), [buckets]);
-  const labelByX = useMemo(
-    () => Object.fromEntries(data.map((point) => [point.x, point.label])),
-    [data]
+  const { colors, scheme } = useTheme();
+  const missColor = scheme === "dark" ? MISS_GREY.dark : MISS_GREY.light;
+
+  const stackData = useMemo(
+    () =>
+      buckets.map((bucket) => ({
+        label: bucket.label,
+        spacing: 18,
+        stacks: buildSegmentedStacks(bucket.makes, bucket.misses, colors.accent, missColor),
+      })),
+    [buckets, colors.accent, missColor]
   );
 
   const hasData = buckets.some((b) => b.makes > 0 || b.misses > 0);
@@ -95,44 +135,39 @@ export function MakesMissesBarChart({ buckets }: { buckets: ShootingBucket[] }) 
     );
   }
 
-  if (!font) {
-    return <View style={styles.chartPlaceholder} />;
-  }
+  const chartMax = maxStackTotal(buckets);
+  const barCount = buckets.length;
 
   return (
-    <View style={styles.chartBox}>
-      <CartesianChart
-        data={data}
-        xKey="x"
-        yKeys={["makes", "misses"]}
-        domainPadding={{ left: 24, right: 24, top: 20 }}
-        axisOptions={{
-          font,
-          tickCount: { x: data.length, y: 4 },
-          formatXLabel: (value) => labelByX[value] ?? "",
-          labelColor: colors.textMuted,
-          lineColor: colors.border,
-        }}
-      >
-        {({ points, chartBounds }) => (
-          <BarGroup
-            chartBounds={chartBounds}
-            betweenGroupPadding={0.35}
-            withinGroupPadding={0.15}
-            roundedCorners={{ topLeft: 6, topRight: 6 }}
-          >
-            <BarGroup.Bar points={points.makes} color={colors.accent} />
-            <BarGroup.Bar points={points.misses} color={colors.danger} />
-          </BarGroup>
-        )}
-      </CartesianChart>
+    <View>
+      <BarChart
+        stackData={stackData}
+        width={Math.max(CHART_WIDTH, barCount * 52)}
+        height={CHART_HEIGHT}
+        barWidth={28}
+        maxValue={chartMax}
+        noOfSections={4}
+        isAnimated
+        animationDuration={600}
+        stackBorderTopLeftRadius={4}
+        stackBorderTopRightRadius={4}
+        yAxisTextStyle={{ color: colors.textMuted, fontSize: 10 }}
+        xAxisLabelTextStyle={{ color: colors.textMuted, fontSize: 10 }}
+        rulesColor={colors.border}
+        yAxisColor="transparent"
+        xAxisColor={colors.border}
+        initialSpacing={16}
+        spacing={18}
+      />
       <View style={styles.legendRow}>
         <View style={styles.legendItem}>
           <View style={[styles.legendDot, { backgroundColor: colors.accent }]} />
-          <Text style={[styles.legendText, { color: colors.textSecondary }]}>Makes</Text>
+          <Text style={[styles.legendText, { color: colors.textSecondary }]}>
+            Makes (5 shots per line)
+          </Text>
         </View>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: colors.danger }]} />
+          <View style={[styles.legendDot, { backgroundColor: missColor }]} />
           <Text style={[styles.legendText, { color: colors.textSecondary }]}>Misses</Text>
         </View>
       </View>
@@ -140,27 +175,48 @@ export function MakesMissesBarChart({ buckets }: { buckets: ShootingBucket[] }) 
   );
 }
 
-type TrendDatum = {
-  x: number;
-  rate: number;
-  label: string;
-};
+function useGradientLineProps() {
+  const { colors } = useTheme();
+  return {
+    areaChart: true as const,
+    curved: true as const,
+    isAnimated: true as const,
+    animationDuration: 700,
+    height: CHART_HEIGHT,
+    width: CHART_WIDTH,
+    thickness: 3,
+    color: colors.accent,
+    startFillColor: colors.accent,
+    endFillColor: colors.background,
+    startOpacity: 0.38,
+    endOpacity: 0.03,
+    gradientDirection: "vertical" as const,
+    dataPointsColor: colors.accent,
+    dataPointsRadius: 4,
+    hideDataPoints: false,
+    noOfSections: 4,
+    yAxisTextStyle: { color: colors.textMuted, fontSize: 10 },
+    xAxisLabelTextStyle: { color: colors.textMuted, fontSize: 10 },
+    rulesColor: colors.border,
+    yAxisColor: "transparent",
+    xAxisColor: colors.border,
+    initialSpacing: 20,
+    spacing: Math.max(36, CHART_WIDTH / 8),
+  };
+}
 
 export function CompletionLineChart({ points }: { points: CompletionTrendPoint[] }) {
   const { colors } = useTheme();
-  const font = useFont(Poppins_500Medium, 10);
-  const data = useMemo<TrendDatum[]>(
+  const lineProps = useGradientLineProps();
+
+  const data = useMemo(
     () =>
-      points.map((point, index) => ({
-        x: index,
-        rate: point.rate,
+      points.map((point) => ({
+        value: point.rate,
         label: point.label,
+        dataPointText: `${point.rate}%`,
       })),
     [points]
-  );
-  const labelByX = useMemo(
-    () => Object.fromEntries(data.map((point) => [point.x, point.label])),
-    [data]
   );
 
   const hasData = points.some((p) => p.rate > 0);
@@ -172,42 +228,44 @@ export function CompletionLineChart({ points }: { points: CompletionTrendPoint[]
     );
   }
 
-  if (!font) {
-    return <View style={styles.chartPlaceholder} />;
-  }
-
   return (
-    <View style={styles.chartBox}>
-      <CartesianChart
-        data={data}
-        xKey="x"
-        yKeys={["rate"]}
-        domain={{ y: [0, 100] }}
-        domainPadding={{ left: 24, right: 24, top: 20 }}
-        axisOptions={{
-          font,
-          tickCount: { x: data.length, y: 5 },
-          formatXLabel: (value) => labelByX[value] ?? "",
-          formatYLabel: (value) => `${value}%`,
-          labelColor: colors.textMuted,
-          lineColor: colors.border,
-        }}
-      >
-        {({ points }) => (
-          <Line
-            points={points.rate}
-            color={colors.accent}
-            strokeWidth={3}
-            curveType="natural"
-            animate={{ type: "spring" }}
-          />
-        )}
-      </CartesianChart>
+    <View>
+      <LineChart {...lineProps} data={data} maxValue={100} formatYLabel={(v) => `${v}%`} />
       <Text style={[styles.caption, { color: colors.textMuted }]}>
         Cumulative plan completion by week
       </Text>
     </View>
   );
+}
+
+export function ShootingTrendLineChart({
+  buckets,
+}: {
+  buckets: { label: string; pct: number | null }[];
+}) {
+  const { colors } = useTheme();
+  const lineProps = useGradientLineProps();
+
+  const data = useMemo(
+    () =>
+      buckets.map((bucket) => ({
+        value: bucket.pct ?? 0,
+        label: bucket.label,
+        dataPointText: bucket.pct != null ? `${bucket.pct}%` : "",
+      })),
+    [buckets]
+  );
+
+  const hasData = buckets.some((b) => b.pct != null);
+  if (!hasData) {
+    return (
+      <Text style={{ color: colors.textSecondary }}>
+        Log shooting drills to see your weekly shooting trend.
+      </Text>
+    );
+  }
+
+  return <LineChart {...lineProps} data={data} maxValue={100} formatYLabel={(v) => `${v}%`} />;
 }
 
 export function WorkoutActivityHeatmap({ data }: { data: HeatmapPoint[] }) {
@@ -259,72 +317,6 @@ export function WorkoutActivityHeatmap({ data }: { data: HeatmapPoint[] }) {
   );
 }
 
-export function ShootingTrendLineChart({
-  buckets,
-}: {
-  buckets: { label: string; pct: number | null }[];
-}) {
-  const { colors } = useTheme();
-  const font = useFont(Poppins_600SemiBold, 10);
-  const data = useMemo(
-    () =>
-      buckets.map((bucket, index) => ({
-        x: index,
-        pct: bucket.pct ?? 0,
-        label: bucket.label,
-        hasData: bucket.pct != null,
-      })),
-    [buckets]
-  );
-  const labelByX = useMemo(
-    () => Object.fromEntries(data.map((point) => [point.x, point.label])),
-    [data]
-  );
-
-  const hasData = buckets.some((b) => b.pct != null);
-  if (!hasData) {
-    return (
-      <Text style={{ color: colors.textSecondary }}>
-        Log shooting drills to see your weekly shooting trend.
-      </Text>
-    );
-  }
-
-  if (!font) {
-    return <View style={styles.chartPlaceholder} />;
-  }
-
-  return (
-    <View style={styles.chartBox}>
-      <CartesianChart
-        data={data}
-        xKey="x"
-        yKeys={["pct"]}
-        domain={{ y: [0, 100] }}
-        domainPadding={{ left: 24, right: 24, top: 20 }}
-        axisOptions={{
-          font,
-          tickCount: { x: data.length, y: 5 },
-          formatXLabel: (value) => labelByX[value] ?? "",
-          formatYLabel: (value) => `${value}%`,
-          labelColor: colors.textMuted,
-          lineColor: colors.border,
-        }}
-      >
-        {({ points }) => (
-          <Line
-            points={points.pct}
-            color={colors.accent}
-            strokeWidth={3}
-            curveType="natural"
-            animate={{ type: "spring" }}
-          />
-        )}
-      </CartesianChart>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   periodRow: {
     flexDirection: "row",
@@ -342,17 +334,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
-  chartBox: {
-    height: 220,
-    width: "100%",
-  },
-  chartPlaceholder: {
-    height: 220,
-    width: "100%",
-  },
   legendRow: {
     flexDirection: "row",
-    gap: 16,
+    flexWrap: "wrap",
+    gap: 14,
     marginTop: 10,
   },
   legendItem: {

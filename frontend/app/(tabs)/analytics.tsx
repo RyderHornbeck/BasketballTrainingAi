@@ -72,53 +72,19 @@ export default function AnalyticsScreen() {
       >
         <Text style={[styles.header, { color: colors.text }]}>Analytics</Text>
         <Text style={[styles.subheader, { color: colors.textSecondary }]}>
-          Shooting, completion, and training trends from your logged workouts.
+          Your shooting and workout trends at a glance.
         </Text>
 
         <View style={styles.statsGrid}>
           <StatCard label="Workouts" value={String(summary.totalWorkoutsCompleted)} />
           <StatCard label="Streak" value={`${summary.currentStreak}d`} />
         </View>
-        <View style={styles.statsGrid}>
-          <StatCard label="Minutes" value={String(summary.totalMinutesTrained)} />
-          <StatCard
-            label="Shooting %"
-            value={summary.shootingPercentage != null ? `${summary.shootingPercentage}%` : "--"}
-          />
-        </View>
-        <View style={styles.statsGrid}>
-          <StatCard label="Makes" value={String(summary.totalMakes)} />
-          <StatCard label="Misses" value={String(summary.totalMisses)} />
-        </View>
-        <View style={styles.statsGrid}>
-          <StatCard label="Completion" value={`${summary.completionRate}%`} />
-          <StatCard
-            label="Avg Session"
-            value={
-              summary.totalWorkoutsCompleted > 0
-                ? `${Math.round(summary.totalMinutesTrained / summary.totalWorkoutsCompleted)}m`
-                : "--"
-            }
-          />
-        </View>
-
-        <View style={styles.rowGrid}>
-          <Card style={styles.skillCard}>
-            <Text style={[styles.skillLabel, { color: colors.textMuted }]}>Strongest</Text>
-            <Text style={[styles.skillValue, { color: colors.accent }]}>
-              {summary.strongestSkill ?? "Keep logging"}
-            </Text>
-          </Card>
-          <Card style={styles.skillCard}>
-            <Text style={[styles.skillLabel, { color: colors.textMuted }]}>Focus Area</Text>
-            <Text style={[styles.skillValue, { color: colors.danger }]}>
-              {summary.weakestSkill ?? "Keep logging"}
-            </Text>
-          </Card>
-        </View>
 
         <Card style={styles.chartCard}>
           <Text style={[styles.chartTitle, { color: colors.text }]}>Makes & Misses</Text>
+          <Text style={[styles.chartSubtitle, { color: colors.textMuted }]}>
+            Stacked bars — each horizontal line is 5 shots
+          </Text>
           <PeriodSelector value={shootingPeriod} onChange={setShootingPeriod} />
           <MakesMissesBarChart buckets={summary.shootingByPeriod[shootingPeriod]} />
         </Card>
@@ -139,27 +105,6 @@ export default function AnalyticsScreen() {
           <Text style={[styles.chartTitle, { color: colors.text }]}>Training Activity</Text>
           <WorkoutActivityHeatmap data={summary.workoutHeatmap} />
         </Card>
-
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>Recent Workouts</Text>
-        {summary.recentWorkouts.length === 0 ? (
-          <Card>
-            <Text style={{ color: colors.textSecondary }}>No workouts logged yet.</Text>
-          </Card>
-        ) : (
-          summary.recentWorkouts.map((w) => (
-            <Card key={w.id} style={styles.historyCard}>
-              <View>
-                <Text style={[styles.historyTitle, { color: colors.text }]}>{w.title}</Text>
-                <Text style={[styles.historyDate, { color: colors.textMuted }]}>
-                  {new Date(w.completedAt).toLocaleDateString()}
-                </Text>
-              </View>
-              {w.totalMinutes != null ? (
-                <Text style={[styles.historyMinutes, { color: colors.accent }]}>{w.totalMinutes} min</Text>
-              ) : null}
-            </Card>
-          ))
-        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -189,25 +134,7 @@ const styles = StyleSheet.create({
   statsGrid: {
     flexDirection: "row",
     gap: 12,
-    marginBottom: 12,
-  },
-  rowGrid: {
-    flexDirection: "row",
-    gap: 12,
     marginBottom: 8,
-  },
-  skillCard: {
-    flex: 1,
-  },
-  skillLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-  },
-  skillValue: {
-    fontSize: 15,
-    fontWeight: "800",
-    marginTop: 6,
   },
   chartCard: {
     marginTop: 12,
@@ -217,28 +144,9 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     marginBottom: 4,
   },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "800",
-    marginTop: 24,
-    marginBottom: 12,
-  },
-  historyCard: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 10,
-  },
-  historyTitle: {
-    fontSize: 15,
-    fontWeight: "700",
-  },
-  historyDate: {
+  chartSubtitle: {
     fontSize: 12,
-    marginTop: 2,
-  },
-  historyMinutes: {
-    fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "500",
+    marginBottom: 8,
   },
 });

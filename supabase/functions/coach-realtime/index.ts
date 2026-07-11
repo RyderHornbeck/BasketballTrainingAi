@@ -64,6 +64,7 @@ Deno.serve(async (req: Request) => {
       day_id?: string;
       sdp?: string;
       timer?: TimerState;
+      audio_profile?: "bluetooth" | "speaker";
     };
 
     if (!body.day_id) return jsonResponse({ error: "day_id is required" }, 400);
@@ -88,7 +89,8 @@ Deno.serve(async (req: Request) => {
     const sessionConfig = buildRealtimeSessionConfig(
       instructions,
       REALTIME_MODEL,
-      REALTIME_VOICE
+      REALTIME_VOICE,
+      body.audio_profile === "speaker" ? "speaker" : "bluetooth"
     );
 
     const form = new FormData();

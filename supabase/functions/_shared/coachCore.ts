@@ -2,6 +2,17 @@
 // (function execution from the Realtime data channel).
 
 import { SupabaseClient } from "npm:@supabase/supabase-js@2";
+import {
+  aggregateSetLogs,
+  buildSetPlan,
+  decodeExerciseLogMeta,
+  encodeExerciseLogMeta,
+  getCurrentSetNumber,
+  hydrateSetLogs,
+  markAllSetsComplete,
+  clearSetLogs,
+  updateSetLog,
+} from "./exerciseSetLogs.ts";
 
 export interface TimerState {
   running: boolean;
@@ -61,7 +72,8 @@ Rules:
 - Your replies are spoken aloud. Keep them SHORT: 1-3 sentences, under ~35 words, unless the athlete explicitly asks for a detailed explanation.
 - Sound like a real trainer courtside, never robotic or overly enthusiastic. No emojis, no markdown, no lists.
 - You know the full workout from the context JSON: every drill, what's done, current stats, remaining time, and the athlete's profile. Never ask for information you already have.
-- When the athlete reports results ("I made 8 out of 10"), call save_shooting_results, then react with the percentage and a quick push.
+- When the athlete reports results ("I made 8 out of 10"), call save_shooting_results with the correct exercise_id and set_number when they mention a set; otherwise use the current_set from context.
+- Drills may have multiple sets. Context includes set_logs, current_set, and per-set shot targets. Reference which set they are on ("nice on set 2") and how many attempts that set has.
 - When they finish or want to skip a drill, call complete_drill or skip_drill and tell them what's next.
 - When they want to redo a drill or say they marked one complete by mistake, call uncomplete_drill.
 - When they're done or say "end the workout", call finish_workout and give a short wrap-up referencing today's numbers.
@@ -75,16 +87,20 @@ const TOOL_DEFS = [
   {
     name: "save_shooting_results",
     description:
-      "Save makes and attempts for a shooting drill after the user reports results (e.g. 'I made 7 out of 10').",
+      "Save makes and attempts for a shooting drill after the user reports results (e.g. 'I made 7 out of 10 on set 2').",
     parameters: {
       type: "object",
       properties: {
         exercise_id: { type: "string", description: "The drill's exercise_id from context" },
         makes: { type: "number" },
         attempts: { type: "number" },
+        set_number: {
+          type: "number",
+          description: "Which set (1-based). Defaults to current_set from context.",
+        },
         completed: {
           type: "boolean",
-          description: "True if this set finishes the drill (target reached or user is done with it)",
+          description: "True if this set finishes the drill (all sets done or user is done with it)",
         },
       },
       required: ["exercise_id", "makes", "attempts"],
@@ -233,6 +249,12 @@ export function buildContextSummary(
 ): string {
   const drills = ctx.exercises.map((ex) => {
     const log = ctx.logs.get(ex.id);
+    const plan = buildSetPlan(ex);
+    const meta = decodeExerciseLogMeta(log?.notes ?? null);
+    const setLogs = hydrateSetLogs(plan, meta, log ?? undefined);
+    const totals = aggregateSetLogs(setLogs, plan);
+    const currentSet = getCurrentSetNumber(setLogs, plan);
+
     return {
       exercise_id: ex.id,
       name: ex.name,
@@ -243,10 +265,16 @@ export function buildContextSummary(
       target_makes: ex.target_makes,
       target_attempts: ex.target_attempts,
       log_type: ex.log_type,
-      completed: log?.completed ?? false,
-      logged_makes: log?.makes ?? null,
-      logged_attempts: log?.attempts ?? null,
-      notes: log?.notes ?? null,
+      sets_total: plan.setCount,
+      per_set_target_makes: plan.perSetMakes,
+      per_set_target_attempts: plan.perSetAttempts,
+      per_set_minutes: plan.perSetMinutes,
+      completed: totals.completed,
+      logged_makes: totals.makes,
+      logged_attempts: totals.attempts,
+      current_set: currentSet,
+      set_logs: totals.set_logs,
+      notes: meta.user_notes ?? null,
     };
   });
 
@@ -273,7 +301,15 @@ export function buildContextSummary(
       day_completed: ctx.day.completed,
     },
     drills,
-    current_drill: current ? { exercise_id: current.exercise_id, name: current.name } : null,
+    current_drill: current
+      ? {
+          exercise_id: current.exercise_id,
+          name: current.name,
+          current_set: current.current_set,
+          sets_total: current.sets_total,
+          per_set_target_attempts: current.per_set_target_attempts,
+        }
+      : null,
     progress: {
       completed_drills: completedCount,
       total_drills: drills.length,
@@ -309,31 +345,51 @@ export async function executeCoachTool(
       const attempts = Number(args.attempts ?? 0);
       const existing = ctx.logs.get(exerciseId);
       const ex = ctx.exercises.find((e) => e.id === exerciseId);
-      const completed =
+      if (!ex) return { result: "Error: exercise not found", dbChanged: false };
+
+      const plan = buildSetPlan(ex);
+      const meta = decodeExerciseLogMeta(existing?.notes ?? null);
+      let setLogs = hydrateSetLogs(plan, meta, existing ?? undefined);
+      const currentSet = getCurrentSetNumber(setLogs, plan);
+      const setNumber =
+        typeof args.set_number === "number" && args.set_number > 0
+          ? Math.min(args.set_number, plan.setCount)
+          : currentSet ?? 1;
+
+      const setCompleted =
         typeof args.completed === "boolean"
           ? args.completed
-          : ex?.target_makes != null
-            ? makes >= ex.target_makes
+          : plan.perSetMakes != null
+            ? makes >= plan.perSetMakes
             : false;
+
+      setLogs = updateSetLog(setLogs, plan, setNumber, {
+        makes,
+        attempts: attempts || plan.perSetAttempts,
+        completed: setCompleted,
+      });
+
+      const totals = aggregateSetLogs(setLogs, plan);
+      const drillCompleted = totals.completed;
 
       const { error } = await supabase.from("exercise_logs").upsert(
         {
           exercise_id: exerciseId,
           day_id: dayId,
           user_id: userId,
-          completed: completed || (existing?.completed ?? false),
-          makes,
-          attempts,
+          completed: drillCompleted,
+          makes: totals.makes,
+          attempts: totals.attempts,
           minutes_completed: existing?.minutes_completed ?? null,
           difficulty: existing?.difficulty ?? null,
-          notes: existing?.notes ?? null,
+          notes: encodeExerciseLogMeta({ set_logs: totals.set_logs, user_notes: meta.user_notes ?? null }),
         },
         { onConflict: "exercise_id" }
       );
       if (error) return { result: `Error saving: ${error.message}`, dbChanged: false };
       const pct = attempts > 0 ? Math.round((makes / attempts) * 100) : 0;
       return {
-        result: `Saved ${makes}/${attempts} (${pct}%). Drill completed: ${completed}.`,
+        result: `Saved set ${setNumber}: ${makes}/${attempts} (${pct}%). Drill completed: ${drillCompleted}.`,
         dbChanged: true,
       };
     }
@@ -343,21 +399,32 @@ export async function executeCoachTool(
       const exerciseId = validExercise(args.exercise_id);
       if (!exerciseId) return { result: "Error: unknown exercise_id", dbChanged: false };
       const existing = ctx.logs.get(exerciseId);
+      const ex = ctx.exercises.find((e) => e.id === exerciseId);
+      if (!ex) return { result: "Error: exercise not found", dbChanged: false };
+
+      const plan = buildSetPlan(ex);
+      const meta = decodeExerciseLogMeta(existing?.notes ?? null);
+      const setLogs = markAllSetsComplete(hydrateSetLogs(plan, meta, existing ?? undefined), plan);
+      const totals = aggregateSetLogs(setLogs, plan);
       const skipNote =
         name === "skip_drill"
           ? `Skipped${typeof args.reason === "string" && args.reason ? `: ${args.reason}` : ""}`
           : null;
+
       const { error } = await supabase.from("exercise_logs").upsert(
         {
           exercise_id: exerciseId,
           day_id: dayId,
           user_id: userId,
           completed: true,
-          makes: existing?.makes ?? null,
-          attempts: existing?.attempts ?? null,
-          minutes_completed: existing?.minutes_completed ?? null,
+          makes: totals.makes,
+          attempts: totals.attempts,
+          minutes_completed: totals.minutes_completed ?? existing?.minutes_completed ?? null,
           difficulty: existing?.difficulty ?? null,
-          notes: skipNote ?? existing?.notes ?? null,
+          notes: encodeExerciseLogMeta({
+            set_logs: totals.set_logs,
+            user_notes: skipNote ?? meta.user_notes ?? null,
+          }),
         },
         { onConflict: "exercise_id" }
       );
@@ -377,6 +444,11 @@ export async function executeCoachTool(
       if (!exerciseId) return { result: "Error: unknown exercise_id", dbChanged: false };
       const existing = ctx.logs.get(exerciseId);
       const ex = ctx.exercises.find((e) => e.id === exerciseId);
+      if (!ex) return { result: "Error: exercise not found", dbChanged: false };
+
+      const plan = buildSetPlan(ex);
+      const meta = decodeExerciseLogMeta(existing?.notes ?? null);
+      const cleared = clearSetLogs(plan);
 
       const { error } = await supabase.from("exercise_logs").upsert(
         {
@@ -384,11 +456,11 @@ export async function executeCoachTool(
           day_id: dayId,
           user_id: userId,
           completed: false,
-          makes: existing?.makes ?? null,
-          attempts: existing?.attempts ?? null,
-          minutes_completed: existing?.minutes_completed ?? null,
+          makes: null,
+          attempts: null,
+          minutes_completed: null,
           difficulty: existing?.difficulty ?? null,
-          notes: existing?.notes ?? null,
+          notes: encodeExerciseLogMeta({ set_logs: cleared, user_notes: meta.user_notes ?? null }),
         },
         { onConflict: "exercise_id" }
       );
@@ -495,8 +567,11 @@ export async function executeCoachTool(
 export function buildRealtimeSessionConfig(
   instructions: string,
   model: string,
-  voice: string
+  voice: string,
+  audioProfile: "bluetooth" | "speaker" = "bluetooth"
 ): Record<string, unknown> {
+  const isBluetooth = audioProfile === "bluetooth";
+
   return {
     type: "realtime",
     model,
@@ -504,9 +579,24 @@ export function buildRealtimeSessionConfig(
     output_modalities: ["audio"],
     audio: {
       input: {
-        turn_detection: {
-          type: "semantic_vad",
-        },
+        // near_field for Bluetooth/headphones; far_field only when on phone speaker.
+        noise_reduction: { type: isBluetooth ? "near_field" : "far_field" },
+        turn_detection: isBluetooth
+          ? {
+              // Headphones have little echo — semantic VAD feels more natural.
+              type: "semantic_vad",
+              eagerness: "low",
+              create_response: true,
+              interrupt_response: true,
+            }
+          : {
+              type: "server_vad",
+              threshold: 0.78,
+              prefix_padding_ms: 400,
+              silence_duration_ms: 1000,
+              create_response: true,
+              interrupt_response: true,
+            },
       },
       output: {
         voice,
