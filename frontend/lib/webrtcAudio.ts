@@ -6,6 +6,39 @@ import { Platform } from "react-native";
 export type VoiceAudioProfile = "bluetooth" | "speaker";
 
 let active = false;
+let keepAwakeActive = false;
+
+const KEEP_AWAKE_TAG = "voice-coach";
+
+async function enableKeepScreenOn(InCallManager: Awaited<ReturnType<typeof loadInCallManager>>) {
+  if (InCallManager) {
+    InCallManager.setKeepScreenOn(true);
+  }
+
+  try {
+    const { activateKeepAwakeAsync } = await import("expo-keep-awake");
+    await activateKeepAwakeAsync(KEEP_AWAKE_TAG);
+    keepAwakeActive = true;
+  } catch (err) {
+    console.warn("Keep-awake unavailable:", err);
+  }
+}
+
+async function disableKeepScreenOn(InCallManager: Awaited<ReturnType<typeof loadInCallManager>>) {
+  if (InCallManager) {
+    InCallManager.setKeepScreenOn(false);
+  }
+
+  if (keepAwakeActive) {
+    try {
+      const { deactivateKeepAwake } = await import("expo-keep-awake");
+      deactivateKeepAwake(KEEP_AWAKE_TAG);
+    } catch {
+      // Ignore teardown errors.
+    }
+    keepAwakeActive = false;
+  }
+}
 
 async function loadInCallManager() {
   try {
@@ -39,6 +72,10 @@ export async function startVoiceCallAudio(): Promise<VoiceAudioProfile> {
     } else {
       // Do not force speaker — iOS routes to Bluetooth/AirPods when connected.
     }
+
+    await enableKeepScreenOn(InCallManager);
+  } else {
+    await enableKeepScreenOn(null);
   }
 
   if (Platform.OS === "ios") {
@@ -66,6 +103,8 @@ export async function stopVoiceCallAudio(): Promise<void> {
       // Already stopped.
     }
   }
+
+  await disableKeepScreenOn(InCallManager);
 
   if (Platform.OS === "ios") {
     try {

@@ -6,6 +6,7 @@ import { Text } from "@/components/Text";
 import { useCoach } from "@/hooks/useCoach";
 import { useTheme } from "@/hooks/useTheme";
 import { Ionicons } from "@expo/vector-icons";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import React, { useEffect, useRef } from "react";
 import { ActivityIndicator, Animated, Modal, Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -31,8 +32,10 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     useCoach(dayId);
 
   useEffect(() => {
+    void activateKeepAwakeAsync("coach-overlay");
     startSession();
     return () => {
+      deactivateKeepAwake("coach-overlay");
       stopSession();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
