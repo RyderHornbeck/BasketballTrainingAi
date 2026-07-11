@@ -196,28 +196,16 @@ export default function DaysScreen() {
 
   const performanceColor = getPerformanceColor(dayPerformance.score, colors);
 
-  if (planLoading) {
-    return (
-      <SafeAreaView style={[styles.center, { backgroundColor: "transparent" }]} edges={["top"]}>
-        <ActivityIndicator size="large" color={colors.accent} />
-      </SafeAreaView>
-    );
-  }
+  const blockExhausted = useMemo(
+    () => days.length > 0 && days.every((day) => day.completed),
+    [days]
+  );
 
-  if (!plan || days.length === 0) {
-    return (
-      <SafeAreaView style={[styles.center, { backgroundColor: "transparent" }]} edges={["top"]}>
-        <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No active plan yet.</Text>
-      </SafeAreaView>
-    );
-  }
-
-  const blockExhausted =
-    days.length > 0 && days.every((day) => day.completed);
-  const nextBlockIndex =
-    days.length > 0
-      ? Math.max(...days.map((day) => day.block_index ?? 1)) + 1
-      : 2;
+  const nextBlockIndex = useMemo(
+    () =>
+      days.length > 0 ? Math.max(...days.map((day) => day.block_index ?? 1)) + 1 : 2,
+    [days]
+  );
 
   const handleRetryBlock = useCallback(async () => {
     if (!plan || retryingBlock) return;
@@ -235,6 +223,22 @@ export default function DaysScreen() {
   const canViewDay = selectedDay
     ? selectedDay.completed || isDayUnlocked(selectedDay)
     : false;
+
+  if (planLoading) {
+    return (
+      <SafeAreaView style={[styles.center, { backgroundColor: "transparent" }]} edges={["top"]}>
+        <ActivityIndicator size="large" color={colors.accent} />
+      </SafeAreaView>
+    );
+  }
+
+  if (!plan || days.length === 0) {
+    return (
+      <SafeAreaView style={[styles.center, { backgroundColor: "transparent" }]} edges={["top"]}>
+        <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No active plan yet.</Text>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: "transparent" }]} edges={["top"]}>
