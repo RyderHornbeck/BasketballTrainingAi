@@ -1,6 +1,5 @@
 // Full-screen realtime voice coach. Audio-only — no transcript.
-// Tap the center control to mute/unmute. Coach speaks through WebRTC.
-// Only mount this component when the coach UI is open so WebRTC stays lazy.
+// Wake phrase ("Hey Coach") or tap orb activates a short-lived Realtime session.
 
 import { Text } from "@/components/Text";
 import { useCoach } from "@/hooks/useCoach";
@@ -28,22 +27,27 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
   const insets = useSafeAreaInsets();
   const pulse = useRef(new Animated.Value(1)).current;
 
-  const { status, error, timerRunning, elapsedSeconds, startSession, stopSession, toggleMute, toggleTimer } =
-    useCoach(dayId);
+  const {
+    status,
+    error,
+    wakeHint,
+    timerRunning,
+    elapsedSeconds,
+    activateCoach,
+    shutdownCoach,
+    toggleTimer,
+  } = useCoach(dayId);
 
   useEffect(() => {
     void activateKeepAwakeAsync("coach-overlay");
-    startSession();
     return () => {
       deactivateKeepAwake("coach-overlay");
-      stopSession();
+      void shutdownCoach();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [shutdownCoach]);
 
-  // Gentle pulse while listening.
   useEffect(() => {
-    if (status === "listening") {
+    if (status === "wake_word_listening" || status === "listening" || status === "follow_up") {
       const anim = Animated.loop(
         Animated.sequence([
           Animated.timing(pulse, { toValue: 1.12, duration: 900, useNativeDriver: true }),
@@ -57,7 +61,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
   }, [status, pulse]);
 
   const handleClose = () => {
-    stopSession();
+    void shutdownCoach();
     onClose();
   };
 
@@ -66,25 +70,39 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
       ? "Connecting to your coach…"
       : status === "listening"
         ? "Listening"
-        : status === "speaking"
-          ? "Coach is talking"
-          : status === "muted"
-            ? "Mic off — tap to listen"
-            : status === "error"
-              ? "Tap to retry"
-              : "Tap to talk";
+        : status === "thinking"
+          ? "Thinking"
+          : status === "speaking"
+            ? "Coach is talking"
+            : status === "follow_up"
+              ? "Still here — ask a follow-up"
+              : status === "wake_word_listening"
+                ? 'Say "Hey Coach" or tap below'
+                : status === "disconnecting"
+                  ? "Disconnecting…"
+                  : status === "error"
+                    ? "Tap to retry"
+                    : "Tap to talk";
 
   const centerColor =
     status === "speaking"
       ? colors.accentMuted
-      : status === "listening"
+      : status === "listening" || status === "follow_up"
         ? colors.accent
-        : status === "connecting"
+        : status === "connecting" || status === "thinking"
           ? colors.cardAlt
           : colors.card;
 
   const centerIcon =
-    status === "connecting" ? null : status === "speaking" ? "volume-high" : status === "muted" || status === "error" ? "mic-off" : "mic";
+    status === "connecting" || status === "thinking"
+      ? null
+      : status === "speaking"
+        ? "volume-high"
+        : status === "error"
+          ? "mic-off"
+          : "mic";
+
+  const orbDisabled = status === "connecting" || status === "disconnecting" || status === "thinking";
 
   return (
     <Modal visible animationType="slide" onRequestClose={handleClose}>
@@ -121,14 +139,16 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
           </Pressable>
         </View>
 
-        {/* Center: listening / speaking / muted — no transcript */}
         <View style={styles.center}>
           {error ? (
             <Text style={[styles.errorText, { color: colors.danger }]}>{error}</Text>
           ) : null}
+          {wakeHint ? (
+            <Text style={[styles.hint, { color: colors.textSecondary, marginBottom: 8 }]}>{wakeHint}</Text>
+          ) : null}
           <Text style={[styles.statusLabel, { color: colors.text }]}>{statusLabel}</Text>
 
-          <Pressable onPress={toggleMute} disabled={status === "connecting"}>
+          <Pressable onPress={() => void activateCoach()} disabled={orbDisabled}>
             <Animated.View
               style={[
                 styles.coachOrb,
@@ -139,7 +159,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
                 },
               ]}
             >
-              {status === "connecting" ? (
+              {status === "connecting" || status === "thinking" ? (
                 <ActivityIndicator size="large" color={colors.accent} />
               ) : centerIcon ? (
                 <Ionicons name={centerIcon} size={52} color="#FFFFFF" />
@@ -148,9 +168,13 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
           </Pressable>
 
           <Text style={[styles.hint, { color: colors.textSecondary }]}>
-            {status === "muted" || status === "error"
-              ? "Tap the circle to start listening"
-              : "Just talk — your coach hears you"}
+            {status === "wake_word_listening"
+              ? 'Say "Hey Coach" when you need help, or tap the circle'
+              : status === "follow_up"
+                ? "You have about 25 seconds for a follow-up"
+                : status === "error"
+                  ? "Tap the circle to try again"
+                  : "Short answers only — coach disconnects when idle"}
           </Text>
         </View>
       </View>

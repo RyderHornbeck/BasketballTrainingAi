@@ -12,7 +12,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.hoopplan.app",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSSpeechRecognitionUsageDescription": "HoopPlan uses on-device speech recognition to detect \"Hey Coach\" during workouts.",
+        "NSMicrophoneUsageDescription": "HoopPlan uses the microphone for wake-word listening and live coach conversations during workouts."
       }
     },
     "android": {
@@ -60,7 +62,14 @@
           "microphonePermission": "HoopPlan uses the microphone so you can talk to your AI basketball coach during workouts."
         }
       ],
-      "expo-config-plugin-incall-manager"
+      "expo-config-plugin-incall-manager",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "HoopPlan uses the microphone for on-device \"Hey Coach\" wake-word listening during workouts.",
+          "speechRecognitionPermission": "HoopPlan uses speech recognition on-device to detect \"Hey Coach\" without sending audio to the cloud."
+        }
+      ]
     ],
     "notification": {
       "icon": "./assets/images/icon.png",
