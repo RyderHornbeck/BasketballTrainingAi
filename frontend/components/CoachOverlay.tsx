@@ -3,6 +3,7 @@
 import { Text } from "@/components/Text";
 import { useCoach } from "@/hooks/useCoach";
 import { useTheme } from "@/hooks/useTheme";
+import { formatCoachBudgetCents } from "@/lib/coachUsage";
 import { Ionicons } from "@expo/vector-icons";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import React, { useEffect, useRef } from "react";
@@ -31,11 +32,18 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     error,
     timerRunning,
     elapsedSeconds,
+    workoutBudget,
     startSession,
     stopSession,
     toggleMute,
     toggleTimer,
   } = useCoach(dayId);
+
+  const budgetExhausted = status === "budget_exhausted";
+  const budgetProgress =
+    workoutBudget && workoutBudget.budgetUsd > 0
+      ? Math.min(1, workoutBudget.spentUsd / workoutBudget.budgetUsd)
+      : 0;
 
   useEffect(() => {
     void activateKeepAwakeAsync("coach-overlay");
@@ -64,8 +72,9 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     onClose();
   };
 
-  const statusLabel =
-    status === "connecting"
+  const statusLabel = budgetExhausted
+    ? "Coach time used up"
+    : status === "connecting"
       ? "Connecting to your coach…"
       : status === "listening"
         ? "Listening"
@@ -81,8 +90,9 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
                   ? "Tap to retry"
                   : "Starting coach…";
 
-  const centerColor =
-    status === "speaking"
+  const centerColor = budgetExhausted
+    ? colors.cardAlt
+    : status === "speaking"
       ? colors.accentMuted
       : status === "listening"
         ? colors.accent
@@ -90,8 +100,9 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
           ? colors.cardAlt
           : colors.card;
 
-  const centerIcon =
-    status === "connecting" || status === "thinking"
+  const centerIcon = budgetExhausted
+    ? "hourglass-outline"
+    : status === "connecting" || status === "thinking"
       ? null
       : status === "speaking"
         ? "volume-high"
@@ -99,7 +110,18 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
           ? "mic-off"
           : "mic";
 
-  const orbDisabled = status === "connecting" || status === "disconnecting" || status === "thinking";
+  const orbDisabled =
+    budgetExhausted || status === "connecting" || status === "disconnecting" || status === "thinking";
+
+  const hint = budgetExhausted
+    ? "Your assistant refills on your next workout. You can still use the timer and log drills manually."
+    : status === "muted"
+      ? "Tap the circle to turn the mic back on"
+      : status === "error"
+        ? "Tap the circle to reconnect"
+        : workoutBudget
+          ? `${formatCoachBudgetCents(workoutBudget.remainingUsd)} of coach time left this workout`
+          : "Just talk — your coach is listening";
 
   return (
     <Modal visible animationType="slide" onRequestClose={handleClose}>
@@ -136,14 +158,43 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
           </Pressable>
         </View>
 
+        {workoutBudget ? (
+          <View style={styles.budgetRow}>
+            <View style={[styles.budgetTrack, { backgroundColor: colors.card }]}>
+              <View
+                style={[
+                  styles.budgetFill,
+                  {
+                    backgroundColor: budgetExhausted ? colors.danger : colors.accent,
+                    width: `${Math.max(4, budgetProgress * 100)}%`,
+                  },
+                ]}
+              />
+            </View>
+            <Text style={[styles.budgetLabel, { color: colors.textSecondary }]}>
+              {budgetExhausted
+                ? "Coach limit reached for this workout"
+                : `${formatCoachBudgetCents(workoutBudget.remainingUsd)} left this workout`}
+            </Text>
+          </View>
+        ) : null}
+
         <View style={styles.center}>
           {error ? (
-            <Text style={[styles.errorText, { color: colors.danger }]}>{error}</Text>
+            <Text
+              style={[
+                styles.errorText,
+                { color: budgetExhausted ? colors.textSecondary : colors.danger },
+              ]}
+            >
+              {error}
+            </Text>
           ) : null}
           <Text style={[styles.statusLabel, { color: colors.text }]}>{statusLabel}</Text>
 
           <Pressable
             onPress={() => {
+              if (budgetExhausted) return;
               if (status === "error") void startSession();
               else toggleMute();
             }}
@@ -167,13 +218,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
             </Animated.View>
           </Pressable>
 
-          <Text style={[styles.hint, { color: colors.textSecondary }]}>
-            {status === "muted"
-              ? "Tap the circle to turn the mic back on"
-              : status === "error"
-                ? "Tap the circle to reconnect"
-                : "Just talk — your coach is listening"}
-          </Text>
+          <Text style={[styles.hint, { color: colors.textSecondary }]}>{hint}</Text>
         </View>
       </View>
     </Modal>
@@ -202,6 +247,24 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 13,
     marginTop: 2,
+  },
+  budgetRow: {
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+    gap: 6,
+  },
+  budgetTrack: {
+    height: 6,
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  budgetFill: {
+    height: "100%",
+    borderRadius: 999,
+  },
+  budgetLabel: {
+    fontSize: 12,
+    fontWeight: "600",
   },
   timerChip: {
     flexDirection: "row",
@@ -234,6 +297,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginBottom: 12,
     textAlign: "center",
+    lineHeight: 18,
   },
   statusLabel: {
     fontSize: 22,

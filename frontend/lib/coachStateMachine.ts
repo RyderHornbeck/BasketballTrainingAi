@@ -5,6 +5,7 @@ export type CoachMachineState =
   | "thinking"
   | "speaking"
   | "muted"
+  | "budget_exhausted"
   | "disconnecting"
   | "error";
 

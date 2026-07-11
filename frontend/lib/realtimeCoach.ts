@@ -3,9 +3,12 @@
 import { emitWorkoutUpdated } from "@/lib/coachEvents";
 import {
   appendConversationSummary,
+  COACH_LIMIT_MESSAGES,
+  COACH_WORKOUT_BUDGET_USD,
   createClientRequestId,
   createSessionKey,
   createUsageTracker,
+  isWorkoutBudgetExhausted,
   logCoachUsage,
 } from "@/lib/coachUsage";
 import {
@@ -24,7 +27,17 @@ async function edgeFunctionErrorMessage(error: {
   try {
     const res = error.context;
     if (res) {
-      const body = (await res.json()) as { error?: string; detail?: string };
+      const body = (await res.json()) as {
+        error?: string;
+        detail?: string;
+        code?: string;
+      };
+      if (body.code === "workout_budget_exhausted") {
+        return COACH_LIMIT_MESSAGES.workoutBudgetExhausted;
+      }
+      if (body.code === "daily_budget_exhausted") {
+        return COACH_LIMIT_MESSAGES.dailyBudgetExhausted;
+      }
       if (body.detail) return `${body.error ?? error.message}: ${body.detail}`;
       if (body.error) return body.error;
     }
@@ -41,6 +54,7 @@ export type RealtimeCoachStatus =
   | "thinking"
   | "speaking"
   | "muted"
+  | "budget_exhausted"
   | "disconnecting"
   | "error";
 
@@ -57,6 +71,7 @@ export interface RealtimeCoachCallbacks {
   onTimerAction: (action: ClientTimerAction) => void;
   onConversationSummary?: (summary: string) => void;
   onUsage?: (totals: ReturnType<ReturnType<typeof createUsageTracker>["snapshot"]>) => void;
+  onBudgetUpdate?: (spentUsd: number, budgetUsd: number) => void;
   onSessionEnded?: (reason: string) => void;
 }
 
@@ -127,6 +142,8 @@ export class RealtimeCoachSession {
   private lastCoachAudioEnd = 0;
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
   private disconnectReason = "manual";
+  private workoutSpentBaseline = 0;
+  private workoutBudgetUsd = COACH_WORKOUT_BUDGET_USD;
   private usageTracker: ReturnType<typeof createUsageTracker> | null = null;
   private handledToolCalls = new Set<string>();
   private cancelledShortSpeech = false;
@@ -139,15 +156,25 @@ export class RealtimeCoachSession {
     dayId: string,
     timer: TimerState,
     conversationSummary: string,
-    callbacks: RealtimeCoachCallbacks
+    callbacks: RealtimeCoachCallbacks,
+    options?: { workoutSpentUsd?: number; workoutBudgetUsd?: number }
   ): Promise<void> {
     if (this.connecting) return;
     if (this.active) return;
     if (this.pc) await this.disconnect("reconnect");
 
     this.connecting = true;
-    this.active = true;
     this.callbacks = callbacks;
+    this.workoutSpentBaseline = options?.workoutSpentUsd ?? 0;
+    this.workoutBudgetUsd = options?.workoutBudgetUsd ?? COACH_WORKOUT_BUDGET_USD;
+
+    if (isWorkoutBudgetExhausted(this.workoutSpentBaseline, this.workoutBudgetUsd)) {
+      this.connecting = false;
+      this.callbacks.onError(COACH_LIMIT_MESSAGES.workoutBudgetExhausted);
+      this.callbacks.onStatus("budget_exhausted");
+      return;
+    }
+    this.active = true;
     this.dayId = dayId;
     this.timer = timer;
     this.conversationSummary = conversationSummary;
@@ -213,9 +240,20 @@ export class RealtimeCoachSession {
       const { data, error } = await supabase.functions.invoke<{
         sdp: string;
         error?: string;
+        code?: string;
         model?: string;
         session_key?: string;
         workout_context?: string;
+        workout_usage?: {
+          spent_usd: number;
+          budget_usd: number;
+          remaining_usd: number;
+        };
+        daily_usage?: {
+          spent_usd: number;
+          budget_usd: number;
+          remaining_usd: number;
+        };
       }>("coach-realtime", {
         body: {
           day_id: dayId,
@@ -228,7 +266,21 @@ export class RealtimeCoachSession {
       });
 
       if (error) throw new Error(await edgeFunctionErrorMessage(error));
-      if (!data?.sdp) throw new Error(data?.error ?? "No SDP answer from coach-realtime.");
+      if (!data?.sdp) {
+        if (data?.code === "workout_budget_exhausted") {
+          throw new Error(COACH_LIMIT_MESSAGES.workoutBudgetExhausted);
+        }
+        if (data?.code === "daily_budget_exhausted") {
+          throw new Error(COACH_LIMIT_MESSAGES.dailyBudgetExhausted);
+        }
+        throw new Error(data?.error ?? "No SDP answer from coach-realtime.");
+      }
+
+      if (data.workout_usage) {
+        this.workoutSpentBaseline = data.workout_usage.spent_usd;
+        this.workoutBudgetUsd = data.workout_usage.budget_usd;
+        this.callbacks?.onBudgetUpdate?.(this.workoutSpentBaseline, this.workoutBudgetUsd);
+      }
 
       this.model = data.model ?? this.model;
       this.usageTracker = createUsageTracker(this.model);
@@ -332,7 +384,11 @@ export class RealtimeCoachSession {
     this.handledToolCalls.clear();
 
     if (reason !== "connect_failed") {
-      this.callbacks?.onStatus("idle");
+      if (reason === "workout_budget" || reason === "daily_budget") {
+        this.callbacks?.onStatus("budget_exhausted");
+      } else {
+        this.callbacks?.onStatus("idle");
+      }
     }
     this.callbacks?.onSessionEnded?.(reason);
   }
@@ -478,7 +534,7 @@ export class RealtimeCoachSession {
     }
 
     this.usageTracker?.addResponseUsage(event.response?.usage);
-    this.callbacks?.onUsage?.(this.usageTracker?.snapshot() ?? {
+    const totals = this.usageTracker?.snapshot() ?? {
       model: this.model,
       responseCount: 0,
       sessionDurationMs: 0,
@@ -488,7 +544,16 @@ export class RealtimeCoachSession {
       outputTextTokens: 0,
       outputAudioTokens: 0,
       estimatedCostUsd: 0,
-    });
+    };
+    this.callbacks?.onUsage?.(totals);
+
+    const totalSpentUsd = this.workoutSpentBaseline + totals.estimatedCostUsd;
+    this.callbacks?.onBudgetUpdate?.(totalSpentUsd, this.workoutBudgetUsd);
+    if (isWorkoutBudgetExhausted(totalSpentUsd, this.workoutBudgetUsd)) {
+      this.callbacks?.onError(COACH_LIMIT_MESSAGES.workoutBudgetExhausted);
+      void this.disconnect("workout_budget");
+      return;
+    }
 
     const output = event.response?.output ?? [];
     const functionCalls = output.filter(
@@ -523,18 +588,7 @@ export class RealtimeCoachSession {
       args = {};
     }
 
-    const mutatingTools = new Set([
-      "save_shooting_results",
-      "complete_drill",
-      "skip_drill",
-      "extend_workout",
-      "shorten_workout",
-      "start_timer",
-      "pause_timer",
-      "stop_timer",
-    ]);
-
-    if (mutatingTools.has(call.name) && typeof args.client_request_id !== "string") {
+    if (typeof args.client_request_id !== "string") {
       args.client_request_id = createClientRequestId(call.name);
     }
 

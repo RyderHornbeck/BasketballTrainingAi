@@ -2,6 +2,72 @@
 
 import { supabase } from "@/lib/supabase";
 
+export const COACH_WORKOUT_BUDGET_USD = 0.2;
+export const COACH_DAILY_BUDGET_USD = 1;
+
+export const COACH_LIMIT_MESSAGES = {
+  workoutBudgetExhausted:
+    "Coach time used up for this workout. Your assistant refills on your next workout.",
+  dailyBudgetExhausted:
+    "Daily coach limit reached. Your assistant refills tomorrow.",
+} as const;
+
+export interface CoachWorkoutBudget {
+  spentUsd: number;
+  budgetUsd: number;
+  remainingUsd: number;
+  exhausted: boolean;
+}
+
+export function isWorkoutBudgetExhausted(
+  spentUsd: number,
+  budgetUsd = COACH_WORKOUT_BUDGET_USD
+): boolean {
+  return spentUsd >= budgetUsd;
+}
+
+export function remainingWorkoutBudgetUsd(
+  spentUsd: number,
+  budgetUsd = COACH_WORKOUT_BUDGET_USD
+): number {
+  return Math.max(0, budgetUsd - spentUsd);
+}
+
+export function coachWorkoutBudgetFromUsage(
+  spentUsd: number,
+  budgetUsd = COACH_WORKOUT_BUDGET_USD
+): CoachWorkoutBudget {
+  const remainingUsd = remainingWorkoutBudgetUsd(spentUsd, budgetUsd);
+  return {
+    spentUsd,
+    budgetUsd,
+    remainingUsd,
+    exhausted: isWorkoutBudgetExhausted(spentUsd, budgetUsd),
+  };
+}
+
+export async function fetchWorkoutCoachBudget(dayId: string): Promise<CoachWorkoutBudget> {
+  const budgetUsd = COACH_WORKOUT_BUDGET_USD;
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData.user) throw new Error("Not authenticated");
+
+  const { data, error } = await supabase
+    .from("coach_usage_logs")
+    .select("estimated_cost_usd")
+    .eq("user_id", userData.user.id)
+    .eq("day_id", dayId);
+
+  if (error) throw new Error(error.message);
+
+  const spentUsd = (data ?? []).reduce((sum, row) => sum + Number(row.estimated_cost_usd ?? 0), 0);
+  return coachWorkoutBudgetFromUsage(spentUsd, budgetUsd);
+}
+
+export function formatCoachBudgetCents(usd: number): string {
+  const cents = Math.max(0, Math.round(usd * 100));
+  return `${cents}¢`;
+}
+
 export const REALTIME_MINI_RATES = {
   textInput: 0.6 / 1_000_000,
   textOutput: 2.4 / 1_000_000,
