@@ -49,9 +49,8 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     void activateKeepAwakeAsync("coach-overlay");
     return () => {
       deactivateKeepAwake("coach-overlay");
-      void stopSession();
     };
-  }, [stopSession]);
+  }, []);
 
   useEffect(() => {
     if (status === "listening") {
@@ -195,8 +194,11 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
           <Pressable
             onPress={() => {
               if (budgetExhausted) return;
-              if (status === "error") void startSession();
-              else toggleMute();
+              if (status === "error" && !error?.toLowerCase().includes("limit reached")) {
+                void startSession();
+              } else if (!budgetExhausted) {
+                toggleMute();
+              }
             }}
             disabled={orbDisabled}
           >

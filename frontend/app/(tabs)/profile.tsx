@@ -47,12 +47,12 @@ export default function ProfileScreen() {
 
   const handleRegenerate = () => {
     Alert.alert(
-      "Regenerate plan?",
-      "This will replace your current active plan with a brand new one. Your workout history will be kept.",
+      "Start a new adaptive block?",
+      "This creates a new five-workout plan using your onboarding answers and workout history. Your current plan stays available until the new block is ready.",
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Regenerate",
+          text: "Build New Block",
           style: "destructive",
           onPress: async () => {
             setRegenerating(true);
@@ -137,7 +137,7 @@ export default function ProfileScreen() {
 
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Plan</Text>
         <Button
-          title="Regenerate Plan"
+          title="Start New Adaptive Block"
           variant="secondary"
           onPress={handleRegenerate}
           loading={regenerating}

@@ -31,7 +31,13 @@ type DaysViewMode = "overview" | "workout";
 
 export default function DaysScreen() {
   const { colors } = useTheme();
-  const { plan, days, loading: planLoading, refresh: refreshPlan } = usePlan();
+  const {
+    plan,
+    days,
+    generationRequest,
+    loading: planLoading,
+    refresh: refreshPlan,
+  } = usePlan();
 
   const [selectedDayNumber, setSelectedDayNumber] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<DaysViewMode>("overview");
@@ -56,6 +62,20 @@ export default function DaysScreen() {
       setSelectedDayNumber(defaultDayNumber);
     }
   }, [defaultDayNumber, selectedDayNumber]);
+
+  useEffect(() => {
+    if (selectedDayNumber == null) return;
+    const selected = days.find((day) => day.day_number === selectedDayNumber);
+    const next = days.find(
+      (day) =>
+        !day.completed &&
+        isDayUnlocked(day) &&
+        (day.day_number ?? 0) > selectedDayNumber
+    );
+    if (selected?.completed && next?.day_number != null) {
+      setSelectedDayNumber(next.day_number);
+    }
+  }, [days, selectedDayNumber]);
 
   const selectedDay = days.find((d) => d.day_number === selectedDayNumber) ?? null;
 
@@ -201,6 +221,14 @@ export default function DaysScreen() {
         selectedDayNumber={selectedDayNumber ?? 1}
         onSelect={handleSelectDay}
       />
+      {plan &&
+      generationRequest?.generation_type === "extend" &&
+      (generationRequest.status === "pending" || generationRequest.status === "generating") ? (
+        <View style={[styles.blockBanner, { backgroundColor: colors.accentMuted }]}>
+          <ActivityIndicator size="small" color={colors.accent} />
+          <Text style={{ color: colors.accent }}>Building your next five workouts...</Text>
+        </View>
+      ) : null}
 
       <ScrollView
         style={styles.scroll}
@@ -369,6 +397,16 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingTop: 4,
     paddingBottom: 120,
+  },
+  blockBanner: {
+    marginHorizontal: 20,
+    marginBottom: 8,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
   lockedCard: {
     alignItems: "center",

@@ -48,10 +48,39 @@ export async function submitOnboardingAnswers(
   if (profileError) throw new Error(profileError.message);
 }
 
-/** Creates a plan_generation_requests row and invokes the generate-plan Edge Function. */
-export async function requestPlanGeneration(): Promise<PlanGenerationRequest> {
+interface PlanGenerationOptions {
+  generationType?: "initial" | "extend";
+  targetPlanId?: string | null;
+  blockIndex?: number;
+}
+
+async function getInFlightGenerationRequest(): Promise<PlanGenerationRequest | null> {
+  const { data, error } = await supabase
+    .from("plan_generation_requests")
+    .select("*")
+    .in("status", ["pending", "generating"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as PlanGenerationRequest) ?? null;
+}
+
+/** Creates or reuses an idempotent five-workout generation request. */
+export async function requestPlanGeneration(
+  options: PlanGenerationOptions = {}
+): Promise<PlanGenerationRequest> {
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError || !userData.user) throw new Error("Not authenticated");
+  const generationType = options.generationType ?? "initial";
+  const targetPlanId = generationType === "extend" ? options.targetPlanId ?? null : null;
+  const blockIndex = generationType === "extend" ? options.blockIndex ?? 2 : 1;
+  if (generationType === "extend" && !targetPlanId) {
+    throw new Error("A target plan is required for an extension.");
+  }
+
+  const existing = await getInFlightGenerationRequest();
+  if (existing) return existing;
 
   // Save a push token before generation starts so the user gets notified
   // even if they leave the app while the plan is building.
@@ -59,11 +88,19 @@ export async function requestPlanGeneration(): Promise<PlanGenerationRequest> {
 
   const { data: request, error: insertError } = await supabase
     .from("plan_generation_requests")
-    .insert({ user_id: userData.user.id, status: "pending" })
+    .insert({
+      user_id: userData.user.id,
+      status: "pending",
+      generation_type: generationType,
+      target_plan_id: targetPlanId,
+      block_index: blockIndex,
+    })
     .select()
     .single();
 
   if (insertError || !request) {
+    const racedRequest = await getInFlightGenerationRequest();
+    if (racedRequest) return racedRequest;
     throw new Error(insertError?.message ?? "Failed to create generation request");
   }
 
@@ -82,6 +119,17 @@ export async function requestPlanGeneration(): Promise<PlanGenerationRequest> {
   }
 
   return request as PlanGenerationRequest;
+}
+
+export async function requestNextBlockGeneration(
+  planId: string,
+  blockIndex: number
+): Promise<PlanGenerationRequest> {
+  return requestPlanGeneration({
+    generationType: "extend",
+    targetPlanId: planId,
+    blockIndex,
+  });
 }
 
 export async function getLatestGenerationRequest(): Promise<PlanGenerationRequest | null> {
@@ -241,11 +289,14 @@ export async function finishWorkoutDay(
 
   const totalMinutes = logs.reduce((sum, l) => sum + (l.minutes_completed ?? 0), 0);
 
-  const { error: dayLogError } = await supabase.from("workout_day_logs").insert({
-    day_id: day.id,
-    user_id: userId,
-    total_minutes: totalMinutes || day.estimated_minutes || null,
-  });
+  const { error: dayLogError } = await supabase.from("workout_day_logs").upsert(
+    {
+      day_id: day.id,
+      user_id: userId,
+      total_minutes: totalMinutes || day.estimated_minutes || null,
+    },
+    { onConflict: "day_id" }
+  );
   if (dayLogError) throw new Error(`Failed to create day log: ${dayLogError.message}`);
 
   const { error: dayUpdateError } = await supabase
@@ -261,18 +312,34 @@ export async function finishWorkoutDay(
       .eq("plan_id", day.plan_id)
       .eq("day_number", day.day_number + 1);
     if (unlockError) console.error("Failed to unlock next day:", unlockError.message);
+
+    const { data: remainingDay, error: remainingError } = await supabase
+      .from("workout_days")
+      .select("id")
+      .eq("plan_id", day.plan_id)
+      .eq("completed", false)
+      .limit(1)
+      .maybeSingle();
+    if (!remainingError && !remainingDay) {
+      try {
+        await requestNextBlockGeneration(day.plan_id, (day.block_index ?? 1) + 1);
+      } catch (err) {
+        // The completed workout remains saved. usePlan retries an exhausted
+        // block on the next refresh, so a transient generation failure never
+        // blocks workout completion.
+        console.error("Failed to request next workout block:", err);
+      }
+    }
   }
 }
 
-/** Marks the current active plan inactive and kicks off a fresh generation request. */
+/** Builds a fresh adaptive five-workout plan while preserving history. */
 export async function regeneratePlan(): Promise<PlanGenerationRequest> {
   const { data: userData } = await supabase.auth.getUser();
   const userId = userData.user?.id;
   if (!userId) throw new Error("Not authenticated");
 
-  await supabase.from("workout_plans").update({ active: false }).eq("user_id", userId).eq("active", true);
-
-  return requestPlanGeneration();
+  return requestPlanGeneration({ generationType: "initial" });
 }
 
 export async function hasCompletedOnboarding(userId: string): Promise<boolean> {

@@ -1,7 +1,7 @@
 import { isDayUnlocked } from "@/lib/plan";
 import { useTheme } from "@/hooks/useTheme";
 import { WorkoutDay } from "@/types/database";
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { Text } from "./Text";
 
@@ -13,8 +13,28 @@ interface DaySelectorProps {
 
 export function DaySelector({ days, selectedDayNumber, onSelect }: DaySelectorProps) {
   const { colors, scheme } = useTheme();
+  const scrollRef = useRef<ScrollView>(null);
+  const [viewportWidth, setViewportWidth] = useState(0);
 
-  const sorted = [...days].sort((a, b) => (a.day_number ?? 0) - (b.day_number ?? 0));
+  const selectedDay = days.find((day) => day.day_number === selectedDayNumber);
+  const currentBlock =
+    selectedDay?.block_index ??
+    days.find((day) => !day.completed)?.block_index ??
+    Math.max(1, ...days.map((day) => day.block_index ?? 1));
+  const sorted = days
+    .filter((day) => (day.block_index ?? 1) === currentBlock)
+    .sort((a, b) => (a.day_number ?? 0) - (b.day_number ?? 0));
+  const selectedIndex = sorted.findIndex((day) => day.day_number === selectedDayNumber);
+
+  useEffect(() => {
+    if (viewportWidth <= 0 || selectedIndex < 0) return;
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({
+        x: selectedIndex * (44 + 12),
+        animated: true,
+      });
+    });
+  }, [selectedIndex, viewportWidth]);
 
   return (
     <View style={styles.wrapper}>
@@ -27,10 +47,15 @@ export function DaySelector({ days, selectedDayNumber, onSelect }: DaySelectorPr
         HoopPlan
       </Text>
     <ScrollView
+      ref={scrollRef}
       horizontal
       showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.scrollContent}
+      contentContainerStyle={[
+        styles.scrollContent,
+        { paddingHorizontal: Math.max(20, viewportWidth / 2 - 22) },
+      ]}
       style={styles.scroll}
+      onLayout={(event) => setViewportWidth(event.nativeEvent.layout.width)}
       keyboardShouldPersistTaps="always"
       nestedScrollEnabled
     >

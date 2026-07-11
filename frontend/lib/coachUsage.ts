@@ -2,7 +2,7 @@
 
 import { supabase } from "@/lib/supabase";
 
-export const COACH_WORKOUT_BUDGET_USD = 0.2;
+export const COACH_WORKOUT_BUDGET_USD = 0.5;
 export const COACH_DAILY_BUDGET_USD = 1;
 
 export const COACH_LIMIT_MESSAGES = {
@@ -10,7 +10,16 @@ export const COACH_LIMIT_MESSAGES = {
     "Coach time used up for this workout. Your assistant refills on your next workout.",
   dailyBudgetExhausted:
     "Daily coach limit reached. Your assistant refills tomorrow.",
+  dailyResponseLimit:
+    "Daily coach response limit reached. Your assistant refills tomorrow.",
+  workoutResponseLimit:
+    "Coach response limit reached for this workout. Open your next workout for more.",
 } as const;
+
+export function isCoachLimitMessage(msg: string): boolean {
+  const values = Object.values(COACH_LIMIT_MESSAGES);
+  return values.includes(msg as (typeof values)[number]) || msg.toLowerCase().includes("limit reached");
+}
 
 export interface CoachWorkoutBudget {
   spentUsd: number;
@@ -73,7 +82,8 @@ export const REALTIME_MINI_RATES = {
   textOutput: 2.4 / 1_000_000,
   audioInput: 10 / 1_000_000,
   audioOutput: 20 / 1_000_000,
-  cachedTextInput: 0.3 / 1_000_000,
+  cachedTextInput: 0.06 / 1_000_000,
+  cachedAudioInput: 0.30 / 1_000_000,
 } as const;
 
 export interface CoachUsageTotals {
@@ -81,18 +91,42 @@ export interface CoachUsageTotals {
   responseCount: number;
   sessionDurationMs: number;
   inputTextTokens: number;
-  cachedInputTokens: number;
+  cachedTextTokens: number;
+  cachedAudioTokens: number;
   inputAudioTokens: number;
   outputTextTokens: number;
   outputAudioTokens: number;
   estimatedCostUsd: number;
 }
 
+function splitCachedTokens(usage?: {
+  input_token_details?: {
+    text_tokens?: number;
+    audio_tokens?: number;
+    cached_tokens?: number;
+    cached_tokens_details?: {
+      text_tokens?: number;
+      audio_tokens?: number;
+    };
+  };
+}): { cachedText: number; cachedAudio: number } {
+  const details = usage?.input_token_details?.cached_tokens_details;
+  if (details) {
+    return {
+      cachedText: details.text_tokens ?? 0,
+      cachedAudio: details.audio_tokens ?? 0,
+    };
+  }
+  const cached = usage?.input_token_details?.cached_tokens ?? 0;
+  return { cachedText: cached, cachedAudio: 0 };
+}
+
 export function createUsageTracker(model: string) {
   const startedAt = Date.now();
   let responseCount = 0;
   let inputTextTokens = 0;
-  let cachedInputTokens = 0;
+  let cachedTextTokens = 0;
+  let cachedAudioTokens = 0;
   let inputAudioTokens = 0;
   let outputTextTokens = 0;
   let outputAudioTokens = 0;
@@ -103,6 +137,10 @@ export function createUsageTracker(model: string) {
         text_tokens?: number;
         audio_tokens?: number;
         cached_tokens?: number;
+        cached_tokens_details?: {
+          text_tokens?: number;
+          audio_tokens?: number;
+        };
       };
       output_token_details?: {
         text_tokens?: number;
@@ -112,18 +150,22 @@ export function createUsageTracker(model: string) {
       responseCount += 1;
       const input = usage?.input_token_details;
       const output = usage?.output_token_details;
+      const cached = splitCachedTokens(usage);
       inputTextTokens += input?.text_tokens ?? 0;
-      cachedInputTokens += input?.cached_tokens ?? 0;
+      cachedTextTokens += cached.cachedText;
+      cachedAudioTokens += cached.cachedAudio;
       inputAudioTokens += input?.audio_tokens ?? 0;
       outputTextTokens += output?.text_tokens ?? 0;
       outputAudioTokens += output?.audio_tokens ?? 0;
     },
     snapshot(): CoachUsageTotals {
-      const uncachedText = Math.max(0, inputTextTokens - cachedInputTokens);
+      const uncachedText = Math.max(0, inputTextTokens - cachedTextTokens);
+      const uncachedAudio = Math.max(0, inputAudioTokens - cachedAudioTokens);
       const estimatedCostUsd =
         uncachedText * REALTIME_MINI_RATES.textInput +
-        cachedInputTokens * REALTIME_MINI_RATES.cachedTextInput +
-        inputAudioTokens * REALTIME_MINI_RATES.audioInput +
+        cachedTextTokens * REALTIME_MINI_RATES.cachedTextInput +
+        uncachedAudio * REALTIME_MINI_RATES.audioInput +
+        cachedAudioTokens * REALTIME_MINI_RATES.cachedAudioInput +
         outputTextTokens * REALTIME_MINI_RATES.textOutput +
         outputAudioTokens * REALTIME_MINI_RATES.audioOutput;
 
@@ -132,7 +174,8 @@ export function createUsageTracker(model: string) {
         responseCount,
         sessionDurationMs: Date.now() - startedAt,
         inputTextTokens,
-        cachedInputTokens,
+        cachedTextTokens,
+        cachedAudioTokens,
         inputAudioTokens,
         outputTextTokens,
         outputAudioTokens,
@@ -156,7 +199,8 @@ export async function logCoachUsage(params: {
         response_count: params.totals.responseCount,
         session_duration_ms: params.totals.sessionDurationMs,
         input_text_tokens: params.totals.inputTextTokens,
-        cached_input_tokens: params.totals.cachedInputTokens,
+        cached_text_tokens: params.totals.cachedTextTokens,
+        cached_audio_tokens: params.totals.cachedAudioTokens,
         input_audio_tokens: params.totals.inputAudioTokens,
         output_text_tokens: params.totals.outputTextTokens,
         output_audio_tokens: params.totals.outputAudioTokens,

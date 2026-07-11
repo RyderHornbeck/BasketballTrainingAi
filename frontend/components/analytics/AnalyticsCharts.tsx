@@ -147,8 +147,6 @@ export function MakesMissesBarChart({ buckets }: { buckets: ShootingBucket[] }) 
         barWidth={28}
         maxValue={chartMax}
         noOfSections={4}
-        isAnimated
-        animationDuration={600}
         stackBorderTopLeftRadius={4}
         stackBorderTopRightRadius={4}
         yAxisTextStyle={{ color: colors.textMuted, fontSize: 10 }}
@@ -180,14 +178,12 @@ function useGradientLineProps() {
   return {
     areaChart: true as const,
     curved: true as const,
-    isAnimated: true as const,
-    animationDuration: 700,
     height: CHART_HEIGHT,
     width: CHART_WIDTH,
     thickness: 3,
     color: colors.accent,
     startFillColor: colors.accent,
-    endFillColor: colors.background,
+    endFillColor: colors.card,
     startOpacity: 0.38,
     endOpacity: 0.03,
     gradientDirection: "vertical" as const,
@@ -283,9 +279,9 @@ export function WorkoutActivityHeatmap({ data }: { data: HeatmapPoint[] }) {
     thresholds: [15, 30, 45, 60],
     colors: [
       scheme === "dark" ? "#2A2A2D" : "#EBEBF0",
-      "rgba(255,122,26,0.25)",
-      "rgba(255,122,26,0.45)",
-      "rgba(255,122,26,0.7)",
+      scheme === "dark" ? "#5C3D24" : "#FFD9BF",
+      scheme === "dark" ? "#8A5528" : "#FFB880",
+      scheme === "dark" ? "#B86E22" : "#FF8F3D",
       colors.accent,
     ],
     emptyColor: scheme === "dark" ? "#2A2A2D" : "#EBEBF0",
@@ -295,7 +291,7 @@ export function WorkoutActivityHeatmap({ data }: { data: HeatmapPoint[] }) {
     <View style={styles.heatmapWrap}>
       <Heatmap.Calendar
         data={data}
-        animated
+        autoScale={false}
         colorScale={orangeScale}
         colorScheme={scheme}
         scrollEnabled

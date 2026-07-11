@@ -8,6 +8,7 @@ import {
   createClientRequestId,
   createSessionKey,
   createUsageTracker,
+  isCoachLimitMessage,
   isWorkoutBudgetExhausted,
   logCoachUsage,
 } from "@/lib/coachUsage";
@@ -32,6 +33,12 @@ async function edgeFunctionErrorMessage(error: {
         detail?: string;
         code?: string;
       };
+      if (body.code === "daily_response_limit") {
+        return COACH_LIMIT_MESSAGES.dailyResponseLimit;
+      }
+      if (body.code === "workout_response_limit") {
+        return COACH_LIMIT_MESSAGES.workoutResponseLimit;
+      }
       if (body.code === "workout_budget_exhausted") {
         return COACH_LIMIT_MESSAGES.workoutBudgetExhausted;
       }
@@ -298,7 +305,11 @@ export class RealtimeCoachSession {
       console.error("Realtime coach connect failed:", err);
       const msg = err instanceof Error ? err.message : "Failed to connect to coach.";
       this.callbacks?.onError(msg);
-      this.callbacks?.onStatus("error");
+      if (isCoachLimitMessage(msg)) {
+        this.callbacks?.onStatus("budget_exhausted");
+      } else {
+        this.callbacks?.onStatus("error");
+      }
       await this.disconnect("connect_failed");
       throw err;
     } finally {
@@ -386,7 +397,7 @@ export class RealtimeCoachSession {
     if (reason !== "connect_failed") {
       if (reason === "workout_budget" || reason === "daily_budget") {
         this.callbacks?.onStatus("budget_exhausted");
-      } else {
+      } else if (!this.active && !this.connecting) {
         this.callbacks?.onStatus("idle");
       }
     }
@@ -402,7 +413,7 @@ export class RealtimeCoachSession {
         content: [
           {
             type: "input_text",
-            text: `Current workout context (reference only — do not repeat aloud):\n${contextJson}`,
+            text: `Today's workout data (use to answer questions — name drills when the athlete asks):\n${contextJson}`,
           },
         ],
       },
@@ -539,7 +550,8 @@ export class RealtimeCoachSession {
       responseCount: 0,
       sessionDurationMs: 0,
       inputTextTokens: 0,
-      cachedInputTokens: 0,
+      cachedTextTokens: 0,
+      cachedAudioTokens: 0,
       inputAudioTokens: 0,
       outputTextTokens: 0,
       outputAudioTokens: 0,

@@ -46,6 +46,7 @@ export type LogType =
   | "notes";
 
 export type GenerationStatus = "pending" | "generating" | "completed" | "failed";
+export type GenerationType = "initial" | "extend";
 
 export interface Profile {
   id: string;
@@ -107,6 +108,9 @@ export interface PlanGenerationRequest {
   id: string;
   user_id: string;
   status: GenerationStatus;
+  generation_type: GenerationType;
+  target_plan_id: string | null;
+  block_index: number;
   error_message: string | null;
   created_at: string;
   completed_at: string | null;
@@ -128,6 +132,7 @@ export interface WorkoutDay {
   plan_id: string;
   user_id: string;
   day_number: number | null;
+  block_index: number;
   title: string | null;
   focus: string | null;
   estimated_minutes: number | null;

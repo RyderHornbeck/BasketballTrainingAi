@@ -86,7 +86,7 @@ export default function AnalyticsScreen() {
             Stacked bars — each horizontal line is 5 shots
           </Text>
           <PeriodSelector value={shootingPeriod} onChange={setShootingPeriod} />
-          <MakesMissesBarChart buckets={summary.shootingByPeriod[shootingPeriod]} />
+          <MakesMissesBarChart buckets={summary.shootingByPeriod[shootingPeriod] ?? []} />
         </Card>
 
         <Card style={styles.chartCard}>

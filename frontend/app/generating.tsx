@@ -53,9 +53,9 @@ export default function GeneratingScreen() {
         {!isFailed && !hasNoRequestYet && (
           <>
             <ActivityIndicator size="large" color={colors.accent} style={styles.spinner} />
-            <Text style={[styles.title, { color: colors.text }]}>Building your basketball plan...</Text>
+            <Text style={[styles.title, { color: colors.text }]}>Building your first five workouts...</Text>
             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-              Our AI coach is analyzing your answers and picking drills from the exercise catalog. This
+              Our AI coach is analyzing your answers and picking a balanced five-workout block. This
               usually takes less than a minute. You can leave the app — we&apos;ll notify you when your
               plan is ready.
             </Text>
@@ -78,7 +78,7 @@ export default function GeneratingScreen() {
           <>
             <Text style={[styles.title, { color: colors.text }]}>Ready to build your plan?</Text>
             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-              We&apos;ll create a personalized basketball training plan based on your answers.
+              We&apos;ll create your first five personalized workouts based on your answers.
             </Text>
             <Button title="Generate My Plan" onPress={handleRetry} loading={retrying} style={styles.button} />
           </>
