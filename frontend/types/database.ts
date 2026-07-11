@@ -93,6 +93,7 @@ export interface ExerciseVideoClip {
   end_seconds: number | null;
   description: string | null;
   coaching_notes: string | null;
+  requires_both_sides: boolean;
   skill_levels: string[] | null;
   goals: string[] | null;
   weaknesses: string[] | null;
@@ -158,6 +159,7 @@ export interface WorkoutExercise {
   target_makes: number | null;
   target_attempts: number | null;
   log_type: LogType | null;
+  set_side_labels: string[] | null;
   created_at: string;
 }
 

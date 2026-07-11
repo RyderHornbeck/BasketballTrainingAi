@@ -22,6 +22,7 @@ export interface ExerciseSetPlan {
   perSetMakes: number | null;
   perSetAttempts: number | null;
   perSetMinutes: number | null;
+  setSideLabels: string[] | null;
   prescriptionLabel: string;
 }
 
@@ -43,12 +44,14 @@ export function buildSetPlan(exercise: WorkoutExerciseWithClip): ExerciseSetPlan
   const perSetAttempts = exercise.target_attempts ?? perSetMakes;
   const perSetMinutes =
     parseMinutesFromText(exercise.duration) ?? parseMinutesFromText(exercise.reps);
+  const setSideLabels = exercise.set_side_labels ?? null;
 
   let prescriptionLabel = "";
   if (logType === "makes_attempts" && perSetAttempts != null) {
     const shotLabel = perSetAttempts === 1 ? "1 shot" : `${perSetAttempts} shots`;
     prescriptionLabel =
       setCount === 1 ? `1 set · ${shotLabel}` : `${setCount} sets · ${shotLabel} each`;
+    if (setSideLabels?.length) prescriptionLabel += " · alternate sides";
   } else if (logType === "minutes" && perSetMinutes != null) {
     const minLabel = perSetMinutes === 1 ? "1 minute" : `${perSetMinutes} minutes`;
     prescriptionLabel =
@@ -65,6 +68,7 @@ export function buildSetPlan(exercise: WorkoutExerciseWithClip): ExerciseSetPlan
     perSetMakes,
     perSetAttempts,
     perSetMinutes,
+    setSideLabels,
     prescriptionLabel,
   };
 }

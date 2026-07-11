@@ -224,6 +224,9 @@ export async function getWorkoutDayWithExercises(
   return { ...(day as WorkoutDay), exercises: exercisesWithClip };
 }
 
+/** Full adaptive plan length shown in the day selector strip. */
+export const PLAN_TOTAL_DAYS = 100;
+
 /** A day is unlocked if it isn't flagged locked, OR its scheduled date has arrived. */
 export function isDayUnlocked(day: WorkoutDay): boolean {
   if (!day.locked) return true;

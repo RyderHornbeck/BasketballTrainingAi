@@ -1,3 +1,5 @@
+import { OnboardingAnswers } from "@/types/database";
+import { computeSkillProfile, SkillProfile } from "./skillRatings";
 import { supabase } from "./supabase";
 
 export interface CategoryStats {
@@ -51,6 +53,7 @@ export interface AnalyticsSummary {
   shootingByPeriod: Record<AnalyticsPeriod, ShootingBucket[]>;
   completionTrend: CompletionTrendPoint[];
   workoutHeatmap: HeatmapPoint[];
+  skillProfile: SkillProfile;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -72,19 +75,29 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
   const userId = userData.user?.id;
   if (!userId) throw new Error("Not authenticated");
 
-  const [{ data: dayLogs }, { data: allDays }, { data: exerciseLogs }] = await Promise.all([
-    supabase
-      .from("workout_day_logs")
-      .select("*, workout_days(title)")
-      .eq("user_id", userId)
-      .order("completed_at", { ascending: false }),
-    supabase.from("workout_days").select("id, completed, plan_id").eq("user_id", userId),
-    supabase
-      .from("exercise_logs")
-      .select("*, workout_exercises(category, name)")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: true }),
-  ]);
+  const [{ data: dayLogs }, { data: allDays }, { data: exerciseLogs }, { data: onboarding }] =
+    await Promise.all([
+      supabase
+        .from("workout_day_logs")
+        .select("*, workout_days(title)")
+        .eq("user_id", userId)
+        .order("completed_at", { ascending: false }),
+      supabase.from("workout_days").select("id, completed, plan_id").eq("user_id", userId),
+      supabase
+        .from("exercise_logs")
+        .select(
+          "*, workout_exercises(category, name, sets, duration, target_makes, target_attempts, log_type)"
+        )
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("onboarding_answers")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
 
   const logs = dayLogs ?? [];
   const totalWorkoutsCompleted = logs.length;
@@ -172,6 +185,11 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     totalMinutes: l.total_minutes,
   }));
 
+  const skillProfile = computeSkillProfile(
+    (onboarding as OnboardingAnswers | null) ?? null,
+    exerciseLogs ?? []
+  );
+
   return {
     totalWorkoutsCompleted,
     currentStreak,
@@ -189,6 +207,7 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     shootingByPeriod,
     completionTrend,
     workoutHeatmap,
+    skillProfile,
   };
 }
 

@@ -82,20 +82,26 @@ function SetCheckboxRow({
 
 function SetShootingRow({
   setNumber,
+  sideLabel,
   makes,
+  attempts,
   targetAttempts,
   targetMakes,
   completed,
   onMakesChange,
+  onAttemptsChange,
   readOnly,
   colors,
 }: {
   setNumber: number;
+  sideLabel?: string | null;
   makes: string;
+  attempts: string;
   targetAttempts: number | null;
   targetMakes: number | null;
   completed: boolean;
   onMakesChange: (value: string) => void;
+  onAttemptsChange: (value: string) => void;
   readOnly?: boolean;
   colors: ReturnType<typeof useTheme>["colors"];
 }) {
@@ -110,7 +116,12 @@ function SetShootingRow({
         },
       ]}
     >
-      <Text style={[styles.setNumber, { color: colors.text }]}>Set {setNumber}</Text>
+      <View style={styles.setHeaderRow}>
+        <Text style={[styles.setNumber, { color: colors.text }]}>Set {setNumber}</Text>
+        {sideLabel ? (
+          <Text style={[styles.sideLabel, { color: colors.accent }]}>{sideLabel}</Text>
+        ) : null}
+      </View>
       <View style={styles.shootingInputs}>
         <View style={styles.shootingCol}>
           <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Makes</Text>
@@ -130,12 +141,23 @@ function SetShootingRow({
         <Text style={[styles.shootingSlash, { color: colors.textMuted }]}>/</Text>
         <View style={styles.shootingCol}>
           <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Attempts</Text>
-          <Text style={[styles.attemptsTarget, { color: colors.text }]}>{targetAttempts ?? "—"}</Text>
+          <RNTextInput
+            value={attempts}
+            onChangeText={readOnly ? undefined : onAttemptsChange}
+            editable={!readOnly}
+            keyboardType="number-pad"
+            placeholder={targetAttempts != null ? String(targetAttempts) : "0"}
+            placeholderTextColor={colors.textMuted}
+            style={[
+              styles.shootingInput,
+              { backgroundColor: colors.card, color: colors.text, borderColor: colors.border },
+            ]}
+          />
         </View>
       </View>
-      {targetMakes != null ? (
+      {targetMakes != null || targetAttempts != null ? (
         <Text style={[styles.setTargetHint, { color: colors.textMuted }]}>
-          Target {targetMakes} makes
+          Target {targetMakes ?? "—"} makes · {targetAttempts ?? "—"} attempts per set
         </Text>
       ) : null}
     </View>
@@ -179,6 +201,8 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
   }, [exercise.id, exercise.log, setPlan]);
 
   const clip = exercise.video_clip;
+  const descriptionText =
+    clip?.description ?? exercise.instructions ?? clip?.coaching_notes ?? null;
   const watchUrl = clip
     ? `https://www.youtube.com/watch?v=${clip.youtube_video_id}&t=${clip.start_seconds}s`
     : null;
@@ -283,7 +307,9 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
         <SetShootingRow
           key={row.set_number}
           setNumber={row.set_number}
+          sideLabel={setPlan.setSideLabels?.[row.set_number - 1] ?? null}
           makes={row.makes?.toString() ?? ""}
+          attempts={row.attempts?.toString() ?? ""}
           targetAttempts={setPlan.perSetAttempts}
           targetMakes={setPlan.perSetMakes}
           completed={row.completed}
@@ -291,10 +317,24 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
           colors={colors}
           onMakesChange={(text) => {
             const makesNum = text ? parseInt(text.replace(/[^0-9]/g, ""), 10) : 0;
+            const attemptsNum = row.attempts ?? setPlan.perSetAttempts ?? 0;
             updateSet(row.set_number, {
               makes: text ? makesNum : null,
               completed:
-                setPlan.perSetMakes != null ? makesNum >= setPlan.perSetMakes : Boolean(text),
+                setPlan.perSetMakes != null
+                  ? makesNum >= setPlan.perSetMakes
+                  : makesNum > 0 && makesNum >= attemptsNum,
+            });
+          }}
+          onAttemptsChange={(text) => {
+            const attemptsNum = text ? parseInt(text.replace(/[^0-9]/g, ""), 10) : 0;
+            const makesNum = row.makes ?? 0;
+            updateSet(row.set_number, {
+              attempts: text ? attemptsNum : setPlan.perSetAttempts,
+              completed:
+                setPlan.perSetMakes != null
+                  ? makesNum >= setPlan.perSetMakes
+                  : makesNum > 0 && makesNum >= attemptsNum,
             });
           }}
         />
@@ -303,10 +343,11 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
 
     if (logType === "minutes" || logType === "checkbox") {
       return normalizedSets.map((row) => {
+        const side = setPlan.setSideLabels?.[row.set_number - 1];
         const label =
           logType === "minutes" && setPlan.perSetMinutes
-            ? `Set ${row.set_number} · ${setPlan.perSetMinutes} min`
-            : `Set ${row.set_number}`;
+            ? `Set ${row.set_number}${side ? ` · ${side}` : ""} · ${setPlan.perSetMinutes} min`
+            : `Set ${row.set_number}${side ? ` · ${side}` : ""}`;
         return (
           <SetCheckboxRow
             key={row.set_number}
@@ -336,12 +377,12 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
             ) : null}
           </View>
 
-          {exercise.instructions ? (
+          {descriptionText ? (
             <Text
               style={[styles.instructions, { color: colors.textSecondary }]}
               numberOfLines={expanded ? undefined : 2}
             >
-              {exercise.instructions}
+              {descriptionText}
             </Text>
           ) : null}
         </Pressable>
@@ -683,6 +724,16 @@ const styles = StyleSheet.create({
   setNumber: {
     fontSize: 14,
     fontWeight: "800",
+  },
+  setHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  sideLabel: {
+    fontSize: 12,
+    fontWeight: "700",
   },
   setRowLabel: {
     flex: 1,
