@@ -1,6 +1,7 @@
 import { Card } from "@/components/Card";
 import { DaySelector } from "@/components/DaySelector";
 import { ExerciseCard } from "@/components/ExerciseCard";
+import { ProgressRing } from "@/components/ProgressRing";
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
@@ -13,9 +14,11 @@ import {
   saveExerciseLog,
 } from "@/lib/plan";
 import { WorkoutDayWithExercises } from "@/types/plan";
+import { Ionicons } from "@expo/vector-icons";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -23,13 +26,17 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+type DaysViewMode = "overview" | "workout";
+
 export default function DaysScreen() {
   const { colors } = useTheme();
   const { plan, days, loading: planLoading, refresh: refreshPlan } = usePlan();
 
   const [selectedDayNumber, setSelectedDayNumber] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<DaysViewMode>("overview");
   const [dayDetail, setDayDetail] = useState<WorkoutDayWithExercises | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [progressVersion, setProgressVersion] = useState(0);
   const logsRef = useRef<Map<string, ExerciseLogInput>>(new Map());
   const finishingRef = useRef(false);
 
@@ -82,8 +89,10 @@ export default function DaysScreen() {
     loadDetail();
   }, [loadDetail]);
 
-  // The AI voice coach can complete drills, save results, and finish the day.
-  // Refetch whenever it writes so the screen stays in sync.
+  useEffect(() => {
+    setViewMode("overview");
+  }, [selectedDayNumber]);
+
   useEffect(() => {
     return onWorkoutUpdated(() => {
       refreshPlan();
@@ -126,6 +135,7 @@ export default function DaysScreen() {
   const handleLogChange = useCallback(
     async (log: ExerciseLogInput) => {
       logsRef.current.set(log.exercise_id, log);
+      setProgressVersion((v) => v + 1);
       if (!dayDetail || dayDetail.completed) return;
 
       try {
@@ -137,6 +147,24 @@ export default function DaysScreen() {
     },
     [dayDetail, tryAutoFinishDay]
   );
+
+  const handleSelectDay = useCallback((dayNumber: number) => {
+    setSelectedDayNumber(dayNumber);
+  }, []);
+
+  const exerciseStats = useMemo(() => {
+    if (!dayDetail) return { completed: 0, total: 0, progress: 0 };
+    const total = dayDetail.exercises.length;
+    const completed = dayDetail.exercises.filter((ex) => {
+      const log = logsRef.current.get(ex.id);
+      return log?.completed ?? ex.log?.completed ?? false;
+    }).length;
+    return {
+      completed,
+      total,
+      progress: total > 0 ? completed / total : 0,
+    };
+  }, [dayDetail, progressVersion]);
 
   if (planLoading) {
     return (
@@ -163,7 +191,7 @@ export default function DaysScreen() {
       <DaySelector
         days={days}
         selectedDayNumber={selectedDayNumber ?? 1}
-        onSelect={setSelectedDayNumber}
+        onSelect={handleSelectDay}
       />
 
       <ScrollView
@@ -184,18 +212,79 @@ export default function DaysScreen() {
           </Card>
         ) : detailLoading || !dayDetail ? (
           <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
-        ) : (
+        ) : viewMode === "overview" ? (
           <View>
-            <View style={styles.focusBlock}>
-              {dayDetail.focus ? (
-                <Text style={[styles.focusText, { color: colors.text }]}>{dayDetail.focus}</Text>
-              ) : null}
+            <Card style={styles.daySummaryCard}>
+              <Text style={[styles.dayLabel, { color: colors.textSecondary }]}>Day {selectedDayNumber}</Text>
+              <View style={styles.daySummaryRow}>
+                <ProgressRing
+                  progress={exerciseStats.progress}
+                  completed={exerciseStats.completed}
+                  total={exerciseStats.total}
+                />
+                <View style={styles.daySummaryText}>
+                  <Text style={[styles.exerciseCount, { color: colors.text }]}>
+                    {exerciseStats.completed}/{exerciseStats.total}
+                  </Text>
+                  <Text style={[styles.exerciseCountLabel, { color: colors.textSecondary }]}>
+                    exercises completed
+                  </Text>
+                </View>
+              </View>
+            </Card>
+
+            <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Today&apos;s Goal</Text>
+            <Card style={styles.goalCard}>
+              <Text style={[styles.goalText, { color: colors.text }]}>
+                {dayDetail.focus || "Personalized basketball workout"}
+              </Text>
               {dayDetail.estimated_minutes ? (
-                <Text style={[styles.durationText, { color: colors.textSecondary }]}>
-                  {dayDetail.estimated_minutes} min
+                <Text style={[styles.goalMeta, { color: colors.textMuted }]}>
+                  ~{dayDetail.estimated_minutes} min
                 </Text>
               ) : null}
-            </View>
+            </Card>
+
+            <Pressable
+              onPress={() => setViewMode("workout")}
+              style={({ pressed }) => [
+                styles.startWorkoutCard,
+                {
+                  backgroundColor: colors.accent,
+                  opacity: pressed ? 0.92 : 1,
+                  shadowColor: colors.shadow,
+                },
+              ]}
+            >
+              <View style={styles.startWorkoutTextBlock}>
+                <Text style={styles.startWorkoutTitle}>Start workout</Text>
+                <Text style={styles.startWorkoutSubtitle}>
+                  Start your personalized workout
+                </Text>
+              </View>
+              <View style={styles.startWorkoutIcon}>
+                <Ionicons name="play-circle" size={40} color="#FFFFFF" />
+              </View>
+            </Pressable>
+
+            {dayDetail.completed && (
+              <View style={[styles.completedBanner, { backgroundColor: colors.accentMuted }]}>
+                <Text style={[styles.completedBannerText, { color: colors.accent }]}>
+                  ✓ Workout completed
+                </Text>
+              </View>
+            )}
+          </View>
+        ) : (
+          <View>
+            <Pressable
+              onPress={() => setViewMode("overview")}
+              style={styles.backRow}
+              hitSlop={8}
+            >
+              <Ionicons name="chevron-back" size={22} color={colors.accent} />
+              <Text style={[styles.backText, { color: colors.accent }]}>Back to day overview</Text>
+            </Pressable>
 
             {dayDetail.exercises
               .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
@@ -256,20 +345,100 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     textAlign: "center",
   },
-  focusBlock: {
+  daySummaryCard: {
     marginBottom: 20,
-    paddingHorizontal: 4,
   },
-  focusText: {
+  dayLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: 14,
+  },
+  daySummaryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 20,
+  },
+  daySummaryText: {
+    flex: 1,
+  },
+  exerciseCount: {
     fontSize: 28,
     fontWeight: "800",
     letterSpacing: -0.5,
-    lineHeight: 34,
   },
-  durationText: {
-    fontSize: 16,
+  exerciseCountLabel: {
+    fontSize: 15,
     fontWeight: "600",
-    marginTop: 6,
+    marginTop: 4,
+  },
+  sectionLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: 10,
+    paddingHorizontal: 4,
+  },
+  goalCard: {
+    marginBottom: 16,
+  },
+  goalText: {
+    fontSize: 22,
+    fontWeight: "800",
+    letterSpacing: -0.4,
+    lineHeight: 28,
+  },
+  goalMeta: {
+    fontSize: 14,
+    fontWeight: "600",
+    marginTop: 8,
+  },
+  startWorkoutCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderRadius: 20,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    marginTop: 4,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.22,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+  startWorkoutTextBlock: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  startWorkoutTitle: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+  },
+  startWorkoutSubtitle: {
+    color: "rgba(255,255,255,0.88)",
+    fontSize: 13,
+    fontWeight: "500",
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  startWorkoutIcon: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  backRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginBottom: 16,
+    paddingHorizontal: 2,
+  },
+  backText: {
+    fontSize: 15,
+    fontWeight: "700",
   },
   completedBanner: {
     marginTop: 12,

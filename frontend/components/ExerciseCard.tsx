@@ -169,13 +169,36 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
 
   const gradientColors =
     scheme === "dark"
-      ? (["rgba(52,199,89,0.45)", "rgba(28,28,30,0.95)", "rgba(11,11,12,1)"] as const)
-      : (["rgba(52,199,89,0.3)", "rgba(245,245,247,0.98)", "rgba(255,255,255,1)"] as const);
+      ? (["rgba(255,122,26,0.45)", "rgba(28,28,30,0.95)", "rgba(11,11,12,1)"] as const)
+      : (["rgba(255,122,26,0.28)", "rgba(255,255,255,0.98)", "rgba(255,255,255,1)"] as const);
+
+  const toggleCompleted = () => {
+    if (readOnly) return;
+    if (logType === "makes_attempts" && targetMakes != null) {
+      const makesNum = makes ? parseInt(makes, 10) : 0;
+      if (!completed && makesNum < targetMakes) {
+        setMakes(String(targetMakes));
+      }
+      setCompleted(!completed);
+      return;
+    }
+    if (logType === "minutes") {
+      const next = !completed;
+      setCompleted(next);
+      if (next) {
+        setMinutes(targetMinutes != null ? String(targetMinutes) : "");
+      } else {
+        setMinutes("");
+      }
+      return;
+    }
+    setCompleted(!completed);
+  };
 
   const cardInner = (
     <>
-      <Pressable onPress={() => setExpanded((v) => !v)} style={styles.headerPressable}>
-        <View style={styles.headerRow}>
+      <View style={styles.headerRow}>
+        <Pressable onPress={() => setExpanded((v) => !v)} style={styles.headerPressable}>
           <View style={styles.headerText}>
             <Text style={[styles.name, { color: colors.text }]}>{exercise.name}</Text>
             {exercise.category ? (
@@ -184,24 +207,47 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
               </Text>
             ) : null}
           </View>
-          <Ionicons
-            name={expanded ? "chevron-up" : "chevron-down"}
-            size={20}
-            color={colors.textMuted}
-          />
+
+          {exercise.instructions ? (
+            <Text
+              style={[styles.instructions, { color: colors.textSecondary }]}
+              numberOfLines={expanded ? undefined : 2}
+            >
+              {exercise.instructions}
+            </Text>
+          ) : null}
+
+          <BubbleRow labels={previewBubbles} scheme={scheme} colors={colors} />
+        </Pressable>
+
+        <View style={styles.headerActions}>
+          {!expanded && (completed || !readOnly) ? (
+            <Pressable
+              onPress={readOnly ? undefined : toggleCompleted}
+              disabled={readOnly}
+              hitSlop={8}
+              style={[
+                styles.headerCheck,
+                {
+                  backgroundColor: completed ? colors.accent : "transparent",
+                  borderColor: completed ? colors.accent : colors.border,
+                },
+              ]}
+            >
+              {completed ? (
+                <Ionicons name="checkmark" size={16} color="#FFFFFF" />
+              ) : null}
+            </Pressable>
+          ) : null}
+          <Pressable onPress={() => setExpanded((v) => !v)} hitSlop={8}>
+            <Ionicons
+              name={expanded ? "chevron-up" : "chevron-down"}
+              size={20}
+              color={colors.textMuted}
+            />
+          </Pressable>
         </View>
-
-        {exercise.instructions ? (
-          <Text
-            style={[styles.instructions, { color: colors.textSecondary }]}
-            numberOfLines={expanded ? undefined : 2}
-          >
-            {exercise.instructions}
-          </Text>
-        ) : null}
-
-        <BubbleRow labels={previewBubbles} scheme={scheme} colors={colors} />
-      </Pressable>
+      </View>
 
       {expanded && (
         <View style={styles.expandedContent}>
@@ -400,12 +446,12 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
 
   if (completed) {
     return (
-      <View style={[styles.card, styles.cardWrapper]}>
+      <View style={[styles.card, styles.cardWrapper, styles.cardShadow]}>
         <LinearGradient
           colors={gradientColors}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
-          style={[styles.gradientCard, { borderColor: colors.success }]}
+          style={[styles.gradientCard, { borderColor: colors.accent }]}
         >
           {cardInner}
         </LinearGradient>
@@ -428,22 +474,42 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     overflow: "hidden",
   },
+  cardShadow: {
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    elevation: 5,
+  },
   gradientCard: {
     borderRadius: 24,
     borderWidth: 1.5,
     padding: 18,
   },
   headerPressable: {
-    width: "100%",
+    flex: 1,
+    paddingRight: 8,
   },
   headerRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "flex-start",
   },
   headerText: {
     flex: 1,
     paddingRight: 8,
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingTop: 2,
+  },
+  headerCheck: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
   },
   name: {
     fontSize: 17,

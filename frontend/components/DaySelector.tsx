@@ -12,12 +12,20 @@ interface DaySelectorProps {
 }
 
 export function DaySelector({ days, selectedDayNumber, onSelect }: DaySelectorProps) {
-  const { colors } = useTheme();
+  const { colors, scheme } = useTheme();
 
   const sorted = [...days].sort((a, b) => (a.day_number ?? 0) - (b.day_number ?? 0));
 
   return (
     <View style={styles.wrapper}>
+      <Text
+        style={[
+          styles.brand,
+          { color: scheme === "light" ? colors.accent : colors.text },
+        ]}
+      >
+        HoopPlan
+      </Text>
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
@@ -66,6 +74,14 @@ const styles = StyleSheet.create({
   wrapper: {
     zIndex: 20,
     elevation: 20,
+  },
+  brand: {
+    fontSize: 28,
+    fontWeight: "800",
+    letterSpacing: -0.6,
+    paddingHorizontal: 20,
+    paddingTop: 4,
+    paddingBottom: 2,
   },
   scroll: {
     flexGrow: 0,
