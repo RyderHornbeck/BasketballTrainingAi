@@ -13,7 +13,7 @@ export interface CategoryStats {
   drillsTotal: number;
 }
 
-export type AnalyticsPeriod = "daily" | "weekly" | "monthly" | "alltime";
+export type AnalyticsPeriod = "weekly" | "monthly" | "alltime";
 
 export interface ShootingBucket {
   label: string;
@@ -51,10 +51,11 @@ export interface AnalyticsSummary {
     completedAt: string;
     totalMinutes: number | null;
   }[];
-  shootingByPeriod: Record<AnalyticsPeriod, ShootingBucket[]>;
-  completionTrend: CompletionTrendPoint[];
   workoutHeatmap: HeatmapPoint[];
   skillProfile: SkillProfile;
+  shootingLogs: { created_at: string; makes: number | null; attempts: number | null }[];
+  firstActivityDate: string | null;
+  completionTrend: CompletionTrendPoint[];
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -176,7 +177,21 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
   const weeklyProgress = computeWeeklyProgress(logs);
   const weeklyShooting = computeWeeklyShooting(exerciseLogs ?? []);
   const weeklyPctTrend = computeWeeklyPctTrend(exerciseLogs ?? []);
-  const shootingByPeriod = computeShootingByPeriod(exerciseLogs ?? []);
+  const shootingLogs = (exerciseLogs ?? [])
+    .filter((log) => log.makes != null || log.attempts != null)
+    .map((log) => ({
+      created_at: log.created_at as string,
+      makes: log.makes as number | null,
+      attempts: log.attempts as number | null,
+    }));
+
+  const firstActivityDate =
+    shootingLogs.length > 0
+      ? shootingLogs.reduce(
+          (min, log) => (log.created_at < min ? log.created_at : min),
+          shootingLogs[0].created_at
+        )
+      : (onboarding as { created_at?: string } | null)?.created_at ?? null;
   const completionTrend = computeCompletionTrend(allDays ?? [], logs);
   const workoutHeatmap = computeWorkoutHeatmap(logs);
 
@@ -207,7 +222,8 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     weeklyPctTrend,
     categoryStats,
     recentWorkouts,
-    shootingByPeriod,
+    shootingLogs,
+    firstActivityDate,
     completionTrend,
     workoutHeatmap,
     skillProfile,
@@ -363,99 +379,6 @@ function computeWeeklyShooting(
 
 function toDateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
-}
-
-function addShootingToBucket(
-  buckets: { label: string; makes: number; misses: number; start: Date; end: Date }[],
-  date: Date,
-  makes: number,
-  attempts: number
-) {
-  for (const bucket of buckets) {
-    if (date >= bucket.start && date <= bucket.end) {
-      bucket.makes += makes;
-      bucket.misses += Math.max(0, attempts - makes);
-      break;
-    }
-  }
-}
-
-function computeShootingByPeriod(exerciseLogs: any[]): Record<AnalyticsPeriod, ShootingBucket[]> {
-  const now = new Date();
-  const shootingLogs = exerciseLogs.filter((log) => log.makes != null || log.attempts != null);
-
-  const dailyBuckets: { label: string; makes: number; misses: number; start: Date; end: Date }[] = [];
-  for (let i = 6; i >= 0; i--) {
-    const start = new Date(now);
-    start.setDate(now.getDate() - i);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setHours(23, 59, 59, 999);
-    dailyBuckets.push({
-      label: start.toLocaleDateString(undefined, { weekday: "short" }),
-      makes: 0,
-      misses: 0,
-      start,
-      end,
-    });
-  }
-
-  const weeklyBuckets: { label: string; makes: number; misses: number; start: Date; end: Date }[] = [];
-  for (let i = 5; i >= 0; i--) {
-    const end = new Date(now);
-    end.setDate(now.getDate() - i * 7);
-    end.setHours(23, 59, 59, 999);
-    const start = new Date(end);
-    start.setDate(end.getDate() - 6);
-    start.setHours(0, 0, 0, 0);
-    weeklyBuckets.push({ label: `W${6 - i}`, makes: 0, misses: 0, start, end });
-  }
-
-  const monthlyBuckets: { label: string; makes: number; misses: number; start: Date; end: Date }[] = [];
-  for (let i = 5; i >= 0; i--) {
-    const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
-    monthlyBuckets.push({
-      label: start.toLocaleDateString(undefined, { month: "short" }),
-      makes: 0,
-      misses: 0,
-      start,
-      end,
-    });
-  }
-
-  const allTimeBuckets: { label: string; makes: number; misses: number; start: Date; end: Date }[] = [];
-  for (let i = 11; i >= 0; i--) {
-    const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
-    allTimeBuckets.push({
-      label: start.toLocaleDateString(undefined, { month: "short" }),
-      makes: 0,
-      misses: 0,
-      start,
-      end,
-    });
-  }
-
-  for (const log of shootingLogs) {
-    const date = new Date(log.created_at);
-    const makes = log.makes ?? 0;
-    const attempts = log.attempts ?? 0;
-    addShootingToBucket(dailyBuckets, date, makes, attempts);
-    addShootingToBucket(weeklyBuckets, date, makes, attempts);
-    addShootingToBucket(monthlyBuckets, date, makes, attempts);
-    addShootingToBucket(allTimeBuckets, date, makes, attempts);
-  }
-
-  const mapBuckets = (buckets: typeof dailyBuckets): ShootingBucket[] =>
-    buckets.map((b) => ({ label: b.label, makes: b.makes, misses: b.misses }));
-
-  return {
-    daily: mapBuckets(dailyBuckets),
-    weekly: mapBuckets(weeklyBuckets),
-    monthly: mapBuckets(monthlyBuckets),
-    alltime: mapBuckets(allTimeBuckets),
-  };
 }
 
 function computeCompletionTrend(

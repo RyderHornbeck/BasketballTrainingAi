@@ -8,6 +8,7 @@ import { Text } from "./Text";
 interface DaySelectorProps {
   days: WorkoutDay[];
   selectedDayNumber: number;
+  currentDayNumber: number;
   onSelect: (dayNumber: number) => void;
 }
 
@@ -35,7 +36,12 @@ function scrollOffsetForDay(dayNumber: number, viewportWidth: number): number {
   return Math.max(0, Math.min(maxScroll, cellLeft - anchorX));
 }
 
-export function DaySelector({ days, selectedDayNumber, onSelect }: DaySelectorProps) {
+export function DaySelector({
+  days,
+  selectedDayNumber,
+  currentDayNumber,
+  onSelect,
+}: DaySelectorProps) {
   const { colors, scheme } = useTheme();
   const scrollRef = useRef<ScrollView>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
@@ -85,43 +91,47 @@ export function DaySelector({ days, selectedDayNumber, onSelect }: DaySelectorPr
           const day = dayByNumber.get(dayNumber);
           const generated = day != null;
           const unlocked = generated && isDayUnlocked(day);
+          const selectable = generated && (unlocked || (day?.completed ?? false));
           const selected = dayNumber === selectedDayNumber;
+          const isCurrent = dayNumber === currentDayNumber;
           const completed = day?.completed ?? false;
+
+          let backgroundColor = colors.card;
+          let borderColor = colors.border;
+          let textColor = colors.text;
+
+          if (selected) {
+            backgroundColor = colors.accent;
+            borderColor = colors.accent;
+            textColor = "#FFFFFF";
+          } else if (isCurrent) {
+            backgroundColor = colors.accentMuted;
+            borderColor = colors.accent;
+            textColor = colors.accent;
+          } else if (completed) {
+            backgroundColor = colors.accentMuted;
+            borderColor = colors.border;
+            textColor = colors.accent;
+          }
 
           return (
             <Pressable
               key={dayNumber}
-              disabled={!unlocked}
+              disabled={!selectable}
               onPress={() => onSelect(dayNumber)}
               hitSlop={6}
               style={[
                 styles.circle,
                 {
-                  backgroundColor: selected
-                    ? colors.accent
-                    : completed
-                      ? colors.accentMuted
-                      : colors.card,
-                  borderColor: selected ? colors.accent : colors.border,
-                  opacity: unlocked ? 1 : generated ? 0.45 : 0.28,
+                  backgroundColor,
+                  borderColor,
+                  borderWidth: isCurrent && !selected ? 2 : 1.5,
+                  opacity: selectable ? 1 : generated ? 0.45 : 0.28,
                 },
                 selected && styles.circleSelectedShadow,
               ]}
             >
-              <Text
-                style={[
-                  styles.circleText,
-                  {
-                    color: selected
-                      ? "#FFFFFF"
-                      : completed
-                        ? colors.accent
-                        : colors.text,
-                  },
-                ]}
-              >
-                {dayNumber}
-              </Text>
+              <Text style={[styles.circleText, { color: textColor }]}>{dayNumber}</Text>
             </Pressable>
           );
         })}

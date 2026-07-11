@@ -1,8 +1,7 @@
 import { Card } from "@/components/Card";
 import {
   CompletionLineChart,
-  MakesMissesBarChart,
-  PeriodSelector,
+  MakesMissesChartPanel,
   ShootingTrendLineChart,
   SkillRadarChart,
   WorkoutActivityHeatmap,
@@ -10,7 +9,7 @@ import {
 import { StatCard } from "@/components/StatCard";
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
-import { AnalyticsPeriod, AnalyticsSummary, getAnalyticsSummary } from "@/lib/analytics";
+import { AnalyticsSummary, getAnalyticsSummary } from "@/lib/analytics";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
@@ -21,7 +20,6 @@ export default function AnalyticsScreen() {
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [shootingPeriod, setShootingPeriod] = useState<AnalyticsPeriod>("weekly");
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -87,8 +85,10 @@ export default function AnalyticsScreen() {
 
         <Card style={styles.chartCard}>
           <Text style={[styles.chartTitle, { color: colors.text }]}>Makes & Misses</Text>
-          <PeriodSelector value={shootingPeriod} onChange={setShootingPeriod} />
-          <MakesMissesBarChart buckets={summary.shootingByPeriod[shootingPeriod] ?? []} />
+          <MakesMissesChartPanel
+            logs={summary.shootingLogs}
+            firstActivityDate={summary.firstActivityDate}
+          />
         </Card>
 
         <Card style={styles.chartCard}>

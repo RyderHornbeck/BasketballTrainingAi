@@ -12,7 +12,7 @@ const TAB_BAR_HEIGHT = 72;
 const TAB_ICON_SIZE = 28;
 const COACH_ICON_SIZE = 34;
 const EDGE_INSET = 12;
-const COACH_BUTTON_SIZE = 64;
+const COACH_BUTTON_SIZE = TAB_BAR_HEIGHT;
 const COACH_GAP = 12;
 
 export default function TabsLayout() {
@@ -45,7 +45,7 @@ export default function TabsLayout() {
       overflow: "hidden" as const,
       backgroundColor: colors.card,
       borderWidth: 2,
-      borderColor: scheme === "dark" ? "#3A3A3C" : "#C7C7CC",
+      borderColor: colors.accent,
       shadowColor: colors.shadow,
       shadowOffset: { width: 0, height: 10 },
       shadowOpacity: scheme === "dark" ? 0.5 : 0.14,
@@ -148,7 +148,7 @@ export default function TabsLayout() {
             borderRadius: COACH_BUTTON_SIZE / 2,
             backgroundColor: colors.accent,
             borderWidth: 2,
-            borderColor: scheme === "dark" ? "#3A3A3C" : "#C7C7CC",
+            borderColor: colors.accent,
             shadowColor: colors.accent,
             transform: [{ scale: pressed ? 0.94 : 1 }],
           },

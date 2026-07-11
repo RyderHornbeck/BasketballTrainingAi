@@ -68,16 +68,17 @@ export default function DaysScreen() {
   useEffect(() => {
     if (selectedDayNumber == null) return;
     const selected = days.find((day) => day.day_number === selectedDayNumber);
+    const isCurrent = selectedDayNumber === defaultDayNumber;
     const next = days.find(
       (day) =>
         !day.completed &&
         isDayUnlocked(day) &&
         (day.day_number ?? 0) > selectedDayNumber
     );
-    if (selected?.completed && next?.day_number != null) {
+    if (isCurrent && selected?.completed && next?.day_number != null) {
       setSelectedDayNumber(next.day_number);
     }
-  }, [days, selectedDayNumber]);
+  }, [days, selectedDayNumber, defaultDayNumber]);
 
   const selectedDay = days.find((d) => d.day_number === selectedDayNumber) ?? null;
 
@@ -159,11 +160,13 @@ export default function DaysScreen() {
     async (log: ExerciseLogInput) => {
       logsRef.current.set(log.exercise_id, log);
       setProgressVersion((v) => v + 1);
-      if (!dayDetail || dayDetail.completed) return;
+      if (!dayDetail) return;
 
       try {
         await saveExerciseLog(dayDetail.id, log);
-        await tryAutoFinishDay(dayDetail);
+        if (!dayDetail.completed) {
+          await tryAutoFinishDay(dayDetail);
+        }
       } catch (err) {
         console.error("Failed to save exercise log:", err);
       }
@@ -223,6 +226,9 @@ export default function DaysScreen() {
   const canViewDay = selectedDay
     ? selectedDay.completed || isDayUnlocked(selectedDay)
     : false;
+  const isPastOrCompletedDay =
+    selectedDay?.completed === true ||
+    (defaultDayNumber != null && (selectedDayNumber ?? 0) < defaultDayNumber);
 
   if (planLoading) {
     return (
@@ -245,6 +251,7 @@ export default function DaysScreen() {
       <DaySelector
         days={days}
         selectedDayNumber={selectedDayNumber ?? 1}
+        currentDayNumber={defaultDayNumber ?? 1}
         onSelect={handleSelectDay}
       />
       {plan &&
@@ -302,7 +309,10 @@ export default function DaysScreen() {
           <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
         ) : viewMode === "overview" ? (
           <View>
-            <Text style={[styles.dayLabel, { color: colors.textSecondary }]}>Day {selectedDayNumber}</Text>
+            <Text style={[styles.dayLabel, { color: colors.textSecondary }]}>
+              Day {selectedDayNumber}
+              {isPastOrCompletedDay ? " · Past workout" : ""}
+            </Text>
             <View style={styles.statsSquareRow}>
               <Card style={styles.statSquare}>
                 <View style={styles.statSquareContent}>
@@ -362,9 +372,13 @@ export default function DaysScreen() {
               ]}
             >
               <View style={styles.startWorkoutTextBlock}>
-                <Text style={styles.startWorkoutTitle}>Start workout</Text>
+                <Text style={styles.startWorkoutTitle}>
+                  {isPastOrCompletedDay ? "View workout" : "Start workout"}
+                </Text>
                 <Text style={styles.startWorkoutSubtitle}>
-                  Start your personalized workout
+                  {isPastOrCompletedDay
+                    ? "Review or edit your logged drills"
+                    : "Start your personalized workout"}
                 </Text>
               </View>
               <View style={styles.startWorkoutIcon}>
@@ -411,7 +425,7 @@ export default function DaysScreen() {
                 <ExerciseCard
                   key={exercise.id}
                   exercise={exercise}
-                  readOnly={dayDetail.completed}
+                  readOnly={false}
                   onLogChange={handleLogChange}
                 />
               ))}

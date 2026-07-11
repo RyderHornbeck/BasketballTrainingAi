@@ -1,24 +1,33 @@
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import {
-  AnalyticsPeriod,
   CompletionTrendPoint,
   HeatmapPoint,
-  ShootingBucket,
 } from "@/lib/analytics";
+import {
+  ShootingBucket,
+  ShootingChartPeriod,
+  ShootingLogEntry,
+  buildAllTimeBuckets,
+  buildMonthlyBuckets,
+  buildWeeklyBuckets,
+  canGoNextMonth,
+  canGoNextWeek,
+  getMonthRange,
+  getWeekRange,
+  resolveFirstActivityDate,
+  roundChartMax,
+} from "@/lib/shootingAnalytics";
 import { SkillProfile } from "@/lib/skillRatings";
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { Dimensions, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import Svg, { Circle, Line, Polyline, Rect, Text as SvgText } from "react-native-svg";
 
-const SHOTS_PER_LINE = 5;
-const SEGMENT_GAP = 2;
 const CHART_HEIGHT = 180;
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const CHART_WIDTH = SCREEN_WIDTH - 76;
 
-const PERIOD_LABELS: Record<AnalyticsPeriod, string> = {
-  daily: "Daily",
+const PERIOD_LABELS: Record<ShootingChartPeriod, string> = {
   weekly: "Weekly",
   monthly: "Monthly",
   alltime: "All Time",
@@ -29,8 +38,8 @@ const SKILL_LABELS: Record<string, string> = {
   ball_handling: "Handle",
   finishing: "Finishing",
   defense: "Defense",
-  conditioning: "Cond",
-  basketball_iq: "IQ",
+  conditioning: "Conditioning",
+  basketball_iq: "Basketball IQ",
 };
 
 const COMPACT_SKILL_LABELS: Record<string, string> = {
@@ -66,6 +75,13 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function getSkillLabelLines(key: string, compact: boolean): string[] {
+  if (compact) return [COMPACT_SKILL_LABELS[key] ?? key];
+  if (key === "basketball_iq") return ["Basketball", "IQ"];
+  if (key === "ball_handling") return ["Ball", "Handling"];
+  return [SKILL_LABELS[key] ?? key];
+}
+
 export function SkillRadarChart({
   profile,
   compact = false,
@@ -74,12 +90,12 @@ export function SkillRadarChart({
   compact?: boolean;
 }) {
   const { colors, scheme } = useTheme();
-  const size = compact ? 196 : CHART_WIDTH;
-  const pad = compact ? 18 : 28;
+  const size = compact ? 196 : CHART_WIDTH + 16;
+  const pad = compact ? 20 : 52;
   const svgSize = size + pad * 2;
   const center = svgSize / 2;
-  const radius = size * (compact ? 0.3 : 0.28);
-  const labelRadius = radius + (compact ? 16 : 24);
+  const radius = size * (compact ? 0.3 : 0.27);
+  const labelRadius = radius + (compact ? 16 : 22);
   const skills = profile.skills;
   const axisCount = skills.length;
 
@@ -111,7 +127,13 @@ export function SkillRadarChart({
         </View>
       ) : null}
 
-      <Svg width={svgSize} height={svgSize} style={{ marginHorizontal: -pad }}>
+      <View style={[styles.radarSvgWrap, { width: size, height: size }]}>
+        <Svg
+          width={svgSize}
+          height={svgSize}
+          viewBox={`0 0 ${svgSize} ${svgSize}`}
+          style={{ position: "absolute", left: -pad, top: -pad }}
+        >
         {[0.25, 0.5, 0.75, 1].map((fraction) => {
           const ringPts = skills.map((_, index) =>
             polarPoint(center, center, radius * fraction, index, axisCount, 100)
@@ -191,24 +213,28 @@ export function SkillRadarChart({
           const y = center + labelRadius * Math.sin(angle);
           const anchor =
             Math.abs(Math.cos(angle)) < 0.25 ? "middle" : Math.cos(angle) > 0 ? "start" : "end";
-          const label = compact
-            ? (COMPACT_SKILL_LABELS[skill.key] ?? skill.label)
-            : (SKILL_LABELS[skill.key] ?? skill.label);
+          const lines = getSkillLabelLines(skill.key, compact);
+          const labelFontSize = compact ? 8 : 8;
+          const lineHeight = compact ? 9 : 10;
+          const scoreY = y - 2 + lines.length * lineHeight + (compact ? 8 : 9);
           return (
             <React.Fragment key={`${skill.key}-label`}>
+              {lines.map((line, lineIndex) => (
+                <SvgText
+                  key={`${skill.key}-line-${lineIndex}`}
+                  x={x}
+                  y={y - 2 + lineIndex * lineHeight}
+                  fill={colors.textSecondary}
+                  fontSize={labelFontSize}
+                  fontWeight="600"
+                  textAnchor={anchor}
+                >
+                  {line}
+                </SvgText>
+              ))}
               <SvgText
                 x={x}
-                y={y - 2}
-                fill={colors.textSecondary}
-                fontSize={compact ? 8 : 9}
-                fontWeight="600"
-                textAnchor={anchor}
-              >
-                {label}
-              </SvgText>
-              <SvgText
-                x={x}
-                y={y + (compact ? 9 : 10)}
+                y={scoreY}
                 fill={colors.text}
                 fontSize={compact ? 9 : 10}
                 fontWeight="700"
@@ -219,7 +245,8 @@ export function SkillRadarChart({
             </React.Fragment>
           );
         })}
-      </Svg>
+        </Svg>
+      </View>
     </View>
   );
 }
@@ -228,11 +255,11 @@ export function PeriodSelector({
   value,
   onChange,
 }: {
-  value: AnalyticsPeriod;
-  onChange: (period: AnalyticsPeriod) => void;
+  value: ShootingChartPeriod;
+  onChange: (period: ShootingChartPeriod) => void;
 }) {
   const { colors } = useTheme();
-  const periods: AnalyticsPeriod[] = ["daily", "weekly", "monthly", "alltime"];
+  const periods: ShootingChartPeriod[] = ["weekly", "monthly", "alltime"];
 
   return (
     <View style={styles.periodRow}>
@@ -265,123 +292,202 @@ export function PeriodSelector({
   );
 }
 
-function chunkShots(total: number): number[] {
-  const chunks: number[] = [];
-  let remaining = total;
-  while (remaining > 0) {
-    chunks.push(Math.min(SHOTS_PER_LINE, remaining));
-    remaining -= SHOTS_PER_LINE;
-  }
-  return chunks;
-}
-
-function maxStackTotal(buckets: ShootingBucket[]): number {
-  const peak = Math.max(...buckets.map((b) => b.makes + b.misses), SHOTS_PER_LINE);
-  const padded = Math.ceil(peak * 1.08);
-  return Math.ceil(padded / SHOTS_PER_LINE) * SHOTS_PER_LINE || SHOTS_PER_LINE;
-}
-
-export function MakesMissesBarChart({ buckets }: { buckets: ShootingBucket[] }) {
+function ShootingBarChart({
+  buckets,
+  chartMax,
+  width = CHART_WIDTH,
+}: {
+  buckets: ShootingBucket[];
+  chartMax: number;
+  width?: number;
+}) {
   const { colors, scheme } = useTheme();
   const missColor = scheme === "dark" ? MISS_GREY.dark : MISS_GREY.light;
-
-  const hasData = buckets.some((b) => b.makes > 0 || b.misses > 0);
-  if (!hasData) {
-    return (
-      <Text style={{ color: colors.textSecondary }}>
-        Log shooting drills to see makes and misses over time.
-      </Text>
-    );
-  }
-
-  const totalMakes = buckets.reduce((sum, b) => sum + b.makes, 0);
-  const totalMisses = buckets.reduce((sum, b) => sum + b.misses, 0);
-  const chartMax = maxStackTotal(buckets);
-  const barWidth = 18;
-  const barGap = 12;
-  const chartInnerWidth = Math.max(CHART_WIDTH, buckets.length * (barWidth + barGap) + 40);
   const plotHeight = CHART_HEIGHT - 36;
   const leftPad = 28;
-  const segmentUnit = plotHeight / chartMax;
+  const rightPad = 12;
+  const usableWidth = width - leftPad - rightPad;
+  const count = Math.max(buckets.length, 1);
+  const barGap = count > 1 ? Math.min(14, usableWidth / count / 4) : 0;
+  const barWidth = (usableWidth - barGap * (count - 1)) / count;
+  const unit = plotHeight / chartMax;
+
+  return (
+    <Svg width={width} height={CHART_HEIGHT}>
+      {[0, 0.5, 1].map((fraction) => {
+        const y = plotHeight - fraction * plotHeight + 8;
+        const value = Math.round(chartMax * fraction);
+        return (
+          <React.Fragment key={fraction}>
+            <Line
+              x1={leftPad}
+              y1={y}
+              x2={width - rightPad}
+              y2={y}
+              stroke={colors.border}
+              strokeWidth={1}
+            />
+            <SvgText x={4} y={y + 4} fill={colors.textMuted} fontSize={10}>
+              {value}
+            </SvgText>
+          </React.Fragment>
+        );
+      })}
+
+      {buckets.map((bucket, index) => {
+        const x = leftPad + index * (barWidth + barGap);
+        const makesHeight = bucket.makes * unit;
+        const missesHeight = bucket.misses * unit;
+        const baseY = plotHeight + 8;
+        const makesY = baseY - makesHeight;
+        const missesY = makesY - missesHeight;
+
+        return (
+          <React.Fragment key={`${bucket.label}-${index}`}>
+            {makesHeight > 0 ? (
+              <Rect
+                x={x}
+                y={makesY}
+                width={barWidth}
+                height={makesHeight}
+                rx={4}
+                fill={colors.accent}
+              />
+            ) : null}
+            {missesHeight > 0 ? (
+              <Rect
+                x={x}
+                y={missesY}
+                width={barWidth}
+                height={missesHeight}
+                rx={4}
+                fill={missColor}
+              />
+            ) : null}
+            <SvgText
+              x={x + barWidth / 2}
+              y={CHART_HEIGHT - 6}
+              fill={colors.textMuted}
+              fontSize={9}
+              textAnchor="middle"
+            >
+              {bucket.label}
+            </SvgText>
+          </React.Fragment>
+        );
+      })}
+    </Svg>
+  );
+}
+
+export function MakesMissesChartPanel({
+  logs,
+  firstActivityDate,
+}: {
+  logs: ShootingLogEntry[];
+  firstActivityDate: string | null;
+}) {
+  const { colors, scheme } = useTheme();
+  const missColor = scheme === "dark" ? MISS_GREY.dark : MISS_GREY.light;
+  const [period, setPeriod] = useState<ShootingChartPeriod>("weekly");
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [monthOffset, setMonthOffset] = useState(0);
+
+  const buckets = useMemo(() => {
+    if (period === "weekly") return buildWeeklyBuckets(logs, weekOffset);
+    if (period === "monthly") return buildMonthlyBuckets(logs, monthOffset);
+    const first = resolveFirstActivityDate(logs, firstActivityDate);
+    return buildAllTimeBuckets(logs, first);
+  }, [logs, firstActivityDate, period, weekOffset, monthOffset]);
+
+  const peak = Math.max(...buckets.map((b) => b.makes + b.misses), 0);
+  const chartMax = roundChartMax(peak);
+  const totalMakes = buckets.reduce((sum, b) => sum + b.makes, 0);
+  const totalMisses = buckets.reduce((sum, b) => sum + b.misses, 0);
+  const hasData = peak > 0;
+
+  const navLabel = useMemo(() => {
+    if (period === "weekly") return getWeekRange(weekOffset).label;
+    if (period === "monthly") return getMonthRange(monthOffset).label;
+    return "All months";
+  }, [period, weekOffset, monthOffset]);
 
   return (
     <View>
+      <PeriodSelector
+        value={period}
+        onChange={(next) => {
+          setPeriod(next);
+          setWeekOffset(0);
+          setMonthOffset(0);
+        }}
+      />
+
       <View style={styles.totalRow}>
         <Text style={[styles.totalLabel, { color: colors.textSecondary }]}>Total</Text>
         <Text style={[styles.totalMakes, { color: colors.accent }]}>{totalMakes}</Text>
         <Text style={[styles.totalMisses, { color: missColor }]}>{totalMisses}</Text>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        <Svg width={chartInnerWidth} height={CHART_HEIGHT}>
-          {[0, 0.5, 1].map((fraction) => {
-            const y = plotHeight - fraction * plotHeight + 8;
-            const value = Math.round(chartMax * fraction);
-            return (
-              <React.Fragment key={fraction}>
-                <Line
-                  x1={leftPad}
-                  y1={y}
-                  x2={chartInnerWidth - 8}
-                  y2={y}
-                  stroke={colors.border}
-                  strokeWidth={1}
-                />
-                <SvgText x={4} y={y + 4} fill={colors.textMuted} fontSize={10}>
-                  {value}
-                </SvgText>
-              </React.Fragment>
-            );
-          })}
+      {!hasData ? (
+        <Text style={{ color: colors.textSecondary }}>
+          Log shooting drills to see makes and misses over time.
+        </Text>
+      ) : period === "alltime" && buckets.length > 6 ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <ShootingBarChart
+            buckets={buckets}
+            chartMax={chartMax}
+            width={Math.max(CHART_WIDTH, buckets.length * 42 + 40)}
+          />
+        </ScrollView>
+      ) : (
+        <ShootingBarChart buckets={buckets} chartMax={chartMax} />
+      )}
 
-          {buckets.map((bucket, bucketIndex) => {
-            const x = leftPad + bucketIndex * (barWidth + barGap) + 8;
-            let stackTop = plotHeight + 8;
-            const makeSegments = chunkShots(bucket.makes).map((value) => ({
-              value,
-              color: colors.accent,
-            }));
-            const missSegments = chunkShots(bucket.misses).map((value) => ({
-              value,
-              color: missColor,
-            }));
-            const segments = [...makeSegments, ...missSegments];
-
-            return (
-              <React.Fragment key={bucket.label}>
-                {segments.map((segment, segmentIndex) => {
-                  const extraGap =
-                    segmentIndex === makeSegments.length && missSegments.length > 0
-                      ? SEGMENT_GAP * 2
-                      : 0;
-                  const height = Math.max(2, segment.value * segmentUnit - SEGMENT_GAP);
-                  stackTop -= extraGap + height + SEGMENT_GAP;
-                  return (
-                    <Rect
-                      key={`${bucket.label}-${segmentIndex}`}
-                      x={x}
-                      y={stackTop}
-                      width={barWidth}
-                      height={height}
-                      rx={2}
-                      fill={segment.color}
-                    />
-                  );
-                })}
-                <SvgText
-                  x={x + barWidth / 2}
-                  y={CHART_HEIGHT - 6}
-                  fill={colors.textMuted}
-                  fontSize={9}
-                  textAnchor="middle"
-                >
-                  {bucket.label}
-                </SvgText>
-              </React.Fragment>
-            );
-          })}
-        </Svg>
-      </ScrollView>
+      {period !== "alltime" ? (
+        <View style={styles.periodNavRow}>
+          <Pressable
+            onPress={() =>
+              period === "weekly"
+                ? setWeekOffset((v) => v + 1)
+                : setMonthOffset((v) => v + 1)
+            }
+            hitSlop={8}
+            style={[styles.periodNavButton, { borderColor: colors.border }]}
+          >
+            <Text style={[styles.periodNavArrow, { color: colors.text }]}>‹</Text>
+          </Pressable>
+          <Text style={[styles.periodNavLabel, { color: colors.textSecondary }]}>{navLabel}</Text>
+          <Pressable
+            onPress={() =>
+              period === "weekly"
+                ? setWeekOffset((v) => Math.max(0, v - 1))
+                : setMonthOffset((v) => Math.max(0, v - 1))
+            }
+            disabled={
+              period === "weekly" ? !canGoNextWeek(weekOffset) : !canGoNextMonth(monthOffset)
+            }
+            hitSlop={8}
+            style={[
+              styles.periodNavButton,
+              {
+                borderColor: colors.border,
+                opacity:
+                  period === "weekly"
+                    ? canGoNextWeek(weekOffset)
+                      ? 1
+                      : 0.35
+                    : canGoNextMonth(monthOffset)
+                      ? 1
+                      : 0.35,
+              },
+            ]}
+          >
+            <Text style={[styles.periodNavArrow, { color: colors.text }]}>›</Text>
+          </Pressable>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -705,6 +811,13 @@ const styles = StyleSheet.create({
   },
   radarWrap: {
     alignItems: "center",
+    overflow: "visible",
+  },
+  radarSvgWrap: {
+    overflow: "visible",
+    alignItems: "center",
+    justifyContent: "center",
+    marginVertical: 4,
   },
   radarWrapCompact: {
     alignItems: "flex-end",
@@ -769,5 +882,31 @@ const styles = StyleSheet.create({
   legendText: {
     fontSize: 12,
     fontWeight: "600",
+  },
+  periodNavRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    marginTop: 10,
+  },
+  periodNavButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  periodNavArrow: {
+    fontSize: 18,
+    fontWeight: "700",
+    lineHeight: 20,
+  },
+  periodNavLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    minWidth: 140,
+    textAlign: "center",
   },
 });

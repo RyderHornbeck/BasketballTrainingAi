@@ -324,10 +324,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
           return {
             ...row,
             attempts,
-            completed:
-              resetPlan.perSetMakes != null
-                ? makesNum >= resetPlan.perSetMakes
-                : makesNum > 0 && makesNum >= (attempts ?? 0),
+            completed: row.makes != null && (attempts ?? 0) > 0,
           };
         })
       );
@@ -343,9 +340,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
           ...row,
           attempts: attemptsNum,
           completed:
-            scaledPlan.perSetMakes != null
-              ? makesNum >= scaledPlan.perSetMakes
-              : makesNum > 0 && makesNum >= attemptsNum,
+            row.makes != null && attemptsNum > 0,
         };
       })
     );
@@ -391,10 +386,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
             const attemptsNum = row.attempts ?? setPlan.perSetAttempts ?? 0;
             updateSet(row.set_number, {
               makes: text ? makesNum : null,
-              completed:
-                setPlan.perSetMakes != null
-                  ? makesNum >= setPlan.perSetMakes
-                  : makesNum > 0 && makesNum >= attemptsNum,
+              completed: Boolean(text) && attemptsNum > 0,
             });
           }}
           onAttemptsChange={syncAttemptsAcrossSets}

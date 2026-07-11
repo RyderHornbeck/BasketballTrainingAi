@@ -175,8 +175,9 @@ export function hydrateSetLogs(
 
 export function isSetComplete(entry: SetLogEntry, plan: ExerciseSetPlan): boolean {
   if (entry.completed) return true;
-  if (plan.logType === "makes_attempts" && plan.perSetMakes != null) {
-    return (entry.makes ?? 0) >= plan.perSetMakes;
+  if (plan.logType === "makes_attempts") {
+    const attempts = entry.attempts ?? plan.perSetAttempts ?? 0;
+    return entry.makes != null && attempts > 0;
   }
   return false;
 }
