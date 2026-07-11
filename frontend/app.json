@@ -14,7 +14,8 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSSpeechRecognitionUsageDescription": "HoopPlan uses on-device speech recognition to detect \"Hey Coach\" during workouts.",
-        "NSMicrophoneUsageDescription": "HoopPlan uses the microphone for wake-word listening and live coach conversations during workouts."
+        "NSMicrophoneUsageDescription": "HoopPlan uses the microphone for wake-word listening and live coach conversations during workouts.",
+        "NSPhotoLibraryUsageDescription": "HoopPlan does not access your photo library. This notice is required by third-party audio libraries included in the app."
       }
     },
     "android": {

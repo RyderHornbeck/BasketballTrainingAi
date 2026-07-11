@@ -8,7 +8,6 @@ import {
   createUsageTracker,
   logCoachUsage,
 } from "@/lib/coachUsage";
-import { speakLocalConfirmation, stopLocalConfirmation } from "@/lib/localCoachFeedback";
 import {
   COACH_DUPLICATE_SPEECH_MS,
   COACH_FOLLOW_UP_MS,
@@ -58,7 +57,6 @@ export interface RealtimeCoachCallbacks {
   onStatus: (status: RealtimeCoachStatus) => void;
   onError: (message: string) => void;
   onTimerAction: (action: ClientTimerAction) => void;
-  onLocalConfirmation?: (message: string) => void;
   onConversationSummary?: (summary: string) => void;
   onUsage?: (totals: ReturnType<ReturnType<typeof createUsageTracker>["snapshot"]>) => void;
 }
@@ -269,7 +267,6 @@ export class RealtimeCoachSession {
     this.speaking = false;
     this.toolBusy = false;
     this.pendingResponseCreate = false;
-    stopLocalConfirmation();
 
     if (this.usageTracker && this.sessionKey) {
       const totals = this.usageTracker.snapshot();
@@ -558,27 +555,16 @@ export class RealtimeCoachSession {
         },
       });
 
-      const localConfirmation = data.local_confirmation ?? undefined;
-      if (data.skip_model_response) {
-        if (localConfirmation) {
-          this.callbacks?.onLocalConfirmation?.(localConfirmation);
-          await speakLocalConfirmation(localConfirmation);
-          this.conversationSummary = appendConversationSummary(
-            this.conversationSummary,
-            localConfirmation
-          );
-          this.callbacks?.onConversationSummary?.(this.conversationSummary);
-        }
-        this.armFollowUpTimeout();
-        return;
+      if (data.result) {
+        this.conversationSummary = appendConversationSummary(
+          this.conversationSummary,
+          data.result
+        );
+        this.callbacks?.onConversationSummary?.(this.conversationSummary);
       }
 
-      if (!this.pendingResponseCreate) {
-        this.pendingResponseCreate = true;
-        await new Promise((r) => setTimeout(r, 120));
-        this.sendEvent({ type: "response.create" });
-        this.pendingResponseCreate = false;
-      }
+      // Tool runs after the model's initial spoken response — no follow-up audio.
+      this.armFollowUpTimeout();
     } catch (err) {
       console.error(`Tool ${call.name} failed:`, err);
       this.sendEvent({

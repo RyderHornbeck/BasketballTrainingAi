@@ -1,7 +1,6 @@
 // Activation-gated voice coach hook with wake-word listening and cost controls.
 
 import {
-  appendConversationSummary,
   type CoachUsageTotals,
 } from "@/lib/coachUsage";
 import {
@@ -10,7 +9,6 @@ import {
   isRealtimeActive,
   isWakeWordAllowed,
 } from "@/lib/coachStateMachine";
-import { stopLocalConfirmation } from "@/lib/localCoachFeedback";
 import {
   RealtimeCoachSession,
   type ClientTimerAction,
@@ -167,7 +165,6 @@ export function useCoach(dayId: string | null): UseCoachResult {
     activatingRef.current = true;
     setError(null);
     await stopWakeWord();
-    stopLocalConfirmation();
 
     const session = ensureSession();
     try {
@@ -185,12 +182,6 @@ export function useCoach(dayId: string | null): UseCoachResult {
           setStatus("error");
         },
         onTimerAction: applyTimerAction,
-        onLocalConfirmation: (message) => {
-          conversationSummaryRef.current = appendConversationSummary(
-            conversationSummaryRef.current,
-            message
-          );
-        },
         onConversationSummary: (summary) => {
           conversationSummaryRef.current = summary;
         },
@@ -222,7 +213,6 @@ export function useCoach(dayId: string | null): UseCoachResult {
     sessionRef.current = null;
     await stopWakeWord();
     wakeRef.current = null;
-    stopLocalConfirmation();
     if (mountedRef.current) {
       setStatus("idle");
       setError(null);

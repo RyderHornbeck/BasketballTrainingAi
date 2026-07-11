@@ -9,7 +9,7 @@ export type CoachMachineState =
   | "disconnecting"
   | "error";
 
-export const COACH_FOLLOW_UP_MS = 25_000;
+export const COACH_FOLLOW_UP_MS = 15_000;
 export const COACH_MAX_SESSION_MS = 3 * 60 * 1000;
 export const COACH_MAX_RESPONSES_PER_SESSION = 15;
 export const COACH_MIN_SPEECH_MS = 600;

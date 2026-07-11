@@ -171,7 +171,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
             {status === "wake_word_listening"
               ? 'Say "Hey Coach" when you need help, or tap the circle'
               : status === "follow_up"
-                ? "You have about 25 seconds for a follow-up"
+                ? "You have about 15 seconds for a follow-up"
                 : status === "error"
                   ? "Tap the circle to try again"
                   : "Short answers only — coach disconnects when idle"}
