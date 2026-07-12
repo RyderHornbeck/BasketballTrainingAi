@@ -68,9 +68,13 @@ export type RealtimeCoachStatus =
 export interface TimerState {
   running: boolean;
   elapsed_seconds: number;
+  duration_seconds?: number | null;
 }
 
-export type ClientTimerAction = "start_timer" | "pause_timer" | "resume_timer" | "stop_timer";
+export interface ClientTimerAction {
+  type: "start_timer" | "pause_timer" | "resume_timer" | "stop_timer";
+  duration_seconds?: number | null;
+}
 
 export interface RealtimeCoachCallbacks {
   onStatus: (status: RealtimeCoachStatus) => void;
@@ -134,7 +138,7 @@ export class RealtimeCoachSession {
   private remoteStream: RnMediaStream | null = null;
   private callbacks: RealtimeCoachCallbacks | null = null;
   private dayId: string | null = null;
-  private timer: TimerState = { running: false, elapsed_seconds: 0 };
+  private timer: TimerState = { running: false, elapsed_seconds: 0, duration_seconds: null };
   private conversationSummary = "";
   private sessionKey: string | null = null;
   private model = "gpt-realtime-2.1-mini";
@@ -153,6 +157,7 @@ export class RealtimeCoachSession {
   private workoutBudgetUsd = COACH_WORKOUT_BUDGET_USD;
   private usageTracker: ReturnType<typeof createUsageTracker> | null = null;
   private handledToolCalls = new Set<string>();
+  private loggedUsageSessionKeys = new Set<string>();
   private cancelledShortSpeech = false;
 
   getSessionKey(): string | null {
@@ -351,7 +356,12 @@ export class RealtimeCoachSession {
     this.toolBusy = false;
     this.pendingResponseCreate = false;
 
-    if (this.usageTracker && this.sessionKey) {
+    if (
+      this.usageTracker &&
+      this.sessionKey &&
+      !this.loggedUsageSessionKeys.has(this.sessionKey)
+    ) {
+      this.loggedUsageSessionKeys.add(this.sessionKey);
       const totals = this.usageTracker.snapshot();
       this.callbacks?.onUsage?.(totals);
       await logCoachUsage({
@@ -479,6 +489,7 @@ export class RealtimeCoachSession {
         if (Date.now() - this.lastSpeechEndedAt < COACH_DUPLICATE_SPEECH_MS) return;
         this.speechStartedAt = Date.now();
         this.cancelledShortSpeech = false;
+        this.sendTimerContext();
         this.callbacks?.onStatus("listening");
         break;
       }
@@ -519,6 +530,27 @@ export class RealtimeCoachSession {
         console.error("Realtime API error:", event);
         break;
     }
+  }
+
+  private sendTimerContext(): void {
+    if (!this.timer.running || !this.timer.duration_seconds) return;
+    const remainingSeconds = Math.max(
+      0,
+      Math.ceil(this.timer.duration_seconds - this.timer.elapsed_seconds)
+    );
+    this.sendEvent({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: `Timer context: ${remainingSeconds} seconds remain on the active workout timer.`,
+          },
+        ],
+      },
+    });
   }
 
   private async handleResponseDone(event: {

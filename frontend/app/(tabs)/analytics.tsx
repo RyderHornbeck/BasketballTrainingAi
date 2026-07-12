@@ -11,6 +11,7 @@ import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { AnalyticsSummary, getAnalyticsSummary } from "@/lib/analytics";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
+import { useFocusEffect } from "expo-router";
 import { BarbellIcon, FlameIcon } from "phosphor-react-native";
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
@@ -47,6 +48,12 @@ export default function AnalyticsScreen() {
       load(true);
     });
   }, [load]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void load(true);
+    }, [load])
+  );
 
   if (loading && !summary) {
     return (

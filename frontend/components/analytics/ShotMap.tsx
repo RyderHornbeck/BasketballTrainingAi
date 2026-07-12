@@ -6,7 +6,6 @@ import {
   COURT,
   COURT_VIEWBOX,
   SHOT_ZONE_LAYOUTS,
-  THREE_SHOULDER,
 } from "@/lib/shotMapCourt";
 import { getWeekRange } from "@/lib/shootingAnalytics";
 import { CaretLeftIcon, CaretRightIcon } from "phosphor-react-native";
@@ -14,9 +13,8 @@ import React, { useMemo, useState } from "react";
 import { Dimensions, Pressable, StyleSheet, View } from "react-native";
 import Svg, { Circle, G, Line, Path, Rect, Text as SvgText } from "react-native-svg";
 
-const DIVIDER_COLOR = "#F7B379";
-const COURT_LINE_COLOR = "#F7B379";
-const SECTOR_BORDER_WIDTH = 2.2;
+const DIVIDER_COLOR = "#F2721D";
+const COURT_LINE_COLOR = "#F2721D";
 
 interface ShotMapProps {
   logs: ShotMapLogEntry[];
@@ -125,22 +123,22 @@ export function ShotMap({ logs, width }: ShotMapProps) {
             d={zone.path}
             fill="none"
             stroke={DIVIDER_COLOR}
-            strokeWidth={SECTOR_BORDER_WIDTH}
+            strokeWidth={2}
           />
         ))}
 
         {/* Unique center dividers. The shared three-point curve itself is
             rendered once below as a court marking, avoiding a doubled arc. */}
-        <G stroke={DIVIDER_COLOR} strokeWidth={SECTOR_BORDER_WIDTH} fill="none">
+        <G stroke={DIVIDER_COLOR} strokeWidth={2.3} fill="none">
           <Line x1={200} y1={COURT.topY} x2={400} y2={COURT.topY} />
-          <Line x1={200} y1={COURT.topY} x2={THREE_SHOULDER.leftX} y2={THREE_SHOULDER.y} />
-          <Line x1={400} y1={COURT.topY} x2={THREE_SHOULDER.rightX} y2={THREE_SHOULDER.y} />
-          <Line x1={240} y1={COURT.ftY} x2={THREE_SHOULDER.leftX} y2={THREE_SHOULDER.y} />
-          <Line x1={360} y1={COURT.ftY} x2={THREE_SHOULDER.rightX} y2={THREE_SHOULDER.y} />
+          <Line x1={200} y1={COURT.topY} x2={185} y2={231} />
+          <Line x1={400} y1={COURT.topY} x2={415} y2={231} />
+          <Line x1={240} y1={COURT.ftY} x2={185} y2={231} />
+          <Line x1={360} y1={COURT.ftY} x2={415} y2={231} />
         </G>
 
         {/* 2) Court markings — always above fills */}
-        <G stroke={COURT_LINE_COLOR} strokeWidth={SECTOR_BORDER_WIDTH} fill="none">
+        <G stroke={COURT_LINE_COLOR} strokeWidth={2.3} fill="none">
           <Path d={courtLines.baseline} />
           <Path d={courtLines.sidelines} />
           <Path d={courtLines.paint} />
@@ -153,7 +151,7 @@ export function ShotMap({ logs, width }: ShotMapProps) {
             x2={COURT.basketX + 18}
             y2={COURT.basketY + 8}
             stroke={COURT_LINE_COLOR}
-            strokeWidth={SECTOR_BORDER_WIDTH}
+            strokeWidth={2.3}
           />
           <Path d={courtLines.threePoint} />
         </G>
@@ -165,7 +163,7 @@ export function ShotMap({ logs, width }: ShotMapProps) {
           r={6}
           fill="none"
           stroke={COURT_LINE_COLOR}
-          strokeWidth={SECTOR_BORDER_WIDTH}
+            strokeWidth={2}
         />
 
         {/* 3) Zone labels */}

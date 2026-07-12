@@ -40,6 +40,19 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+const CATEGORY_DISPLAY_ORDER: Record<string, number> = {
+  warmup: 0,
+  mobility: 1,
+  shooting: 2,
+  ball_handling: 3,
+  finishing: 4,
+  footwork: 5,
+  defense: 6,
+  conditioning: 7,
+  strength: 8,
+  basketball_iq: 9,
+};
+
 type DaysViewMode = "overview" | "workout";
 
 export default function DaysScreen() {
@@ -99,12 +112,13 @@ export default function DaysScreen() {
   }, [days, selectedDayNumber, defaultDayNumber]);
 
   const selectedDay = days.find((d) => d.day_number === selectedDayNumber) ?? null;
+  const selectedDayId = selectedDay?.id ?? null;
 
   const loadDetail = useCallback(async () => {
-    if (!selectedDay) return;
+    if (!selectedDayId) return;
     setDetailLoading(true);
     try {
-      const detail = await getWorkoutDayWithExercises(selectedDay.id);
+      const detail = await getWorkoutDayWithExercises(selectedDayId);
       setDayDetail(detail);
       logsRef.current = new Map();
       detail?.exercises.forEach((ex) => {
@@ -125,7 +139,7 @@ export default function DaysScreen() {
     } finally {
       setDetailLoading(false);
     }
-  }, [selectedDay]);
+  }, [selectedDayId]);
 
   useEffect(() => {
     loadDetail();
@@ -161,12 +175,11 @@ export default function DaysScreen() {
 
   useEffect(() => {
     return onWorkoutUpdated(() => {
-      refreshPlan();
-      loadDetail();
-      loadWeeklyStats();
-      loadCurrentStreak();
+      void refreshPlan();
+      void loadWeeklyStats();
+      void loadCurrentStreak();
     });
-  }, [refreshPlan, loadDetail, loadWeeklyStats, loadCurrentStreak]);
+  }, [refreshPlan, loadWeeklyStats, loadCurrentStreak]);
 
   const tryAutoFinishDay = useCallback(
     async (detail: WorkoutDayWithExercises) => {
@@ -190,7 +203,6 @@ export default function DaysScreen() {
         );
         await finishWorkoutDay(detail, logs);
         await refreshPlan();
-        await loadDetail();
       } catch (err) {
         console.error("Auto-finish day failed:", err);
       } finally {
@@ -500,7 +512,12 @@ export default function DaysScreen() {
             <Text style={[styles.drillsLabel, { color: colors.textMuted }]}>Drills</Text>
 
             {dayDetail.exercises
-              .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
+              .sort((a, b) => {
+                const categoryOrder =
+                  (CATEGORY_DISPLAY_ORDER[a.category ?? ""] ?? Number.MAX_SAFE_INTEGER) -
+                  (CATEGORY_DISPLAY_ORDER[b.category ?? ""] ?? Number.MAX_SAFE_INTEGER);
+                return categoryOrder || (a.order_index ?? 0) - (b.order_index ?? 0);
+              })
               .map((exercise) => (
                 <ExerciseCard
                   key={exercise.id}

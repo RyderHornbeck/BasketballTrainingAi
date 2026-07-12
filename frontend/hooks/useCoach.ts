@@ -14,6 +14,7 @@ import {
   type ClientTimerAction,
   type TimerState,
 } from "@/lib/realtimeCoach";
+import { useTimerAudioCues } from "@/hooks/useTimerAudioCues";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 
@@ -24,6 +25,7 @@ export interface UseCoachResult {
   error: string | null;
   timerRunning: boolean;
   elapsedSeconds: number;
+  timerDurationSeconds: number | null;
   lastUsage: CoachUsageTotals | null;
   workoutBudget: CoachWorkoutBudget | null;
   startSession: () => Promise<void>;
@@ -34,7 +36,13 @@ export interface UseCoachResult {
 
 export function useCoach(dayId: string | null): UseCoachResult {
   const sessionRef = useRef<RealtimeCoachSession | null>(null);
-  const timerRef = useRef({ running: false, accumulated: 0, startedAt: 0 });
+  const timerRef = useRef({
+    running: false,
+    accumulated: 0,
+    startedAt: 0,
+    durationSeconds: null as number | null,
+  });
+  const timerRunIdRef = useRef(0);
   const conversationSummaryRef = useRef("");
   const connectingRef = useRef(false);
   const overlayOpenRef = useRef(true);
@@ -47,9 +55,11 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const [error, setError] = useState<string | null>(null);
   const [timerRunning, setTimerRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [timerDurationSeconds, setTimerDurationSeconds] = useState<number | null>(null);
   const [lastUsage, setLastUsage] = useState<CoachUsageTotals | null>(null);
   const [workoutBudget, setWorkoutBudget] = useState<CoachWorkoutBudget | null>(null);
   const [muted, setMuted] = useState(false);
+  const timerAudio = useTimerAudioCues();
 
   const markLimitReached = useCallback((msg: string) => {
     limitBlockedRef.current = true;
@@ -81,17 +91,6 @@ export function useCoach(dayId: string | null): UseCoachResult {
     };
   }, []);
 
-  useEffect(() => {
-    if (!timerRunning) return;
-    const interval = setInterval(() => {
-      const t = timerRef.current;
-      setElapsedSeconds(
-        Math.round(t.accumulated + (t.running ? (Date.now() - t.startedAt) / 1000 : 0))
-      );
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [timerRunning]);
-
   const currentElapsed = useCallback(() => {
     const t = timerRef.current;
     return Math.round(t.accumulated + (t.running ? (Date.now() - t.startedAt) / 1000 : 0));
@@ -101,32 +100,81 @@ export function useCoach(dayId: string | null): UseCoachResult {
     (): TimerState => ({
       running: timerRef.current.running,
       elapsed_seconds: currentElapsed(),
+      duration_seconds: timerRef.current.durationSeconds,
     }),
     [currentElapsed]
   );
 
+  useEffect(() => {
+    if (!timerRunning) return;
+    const interval = setInterval(() => {
+      const t = timerRef.current;
+      const elapsed = currentElapsed();
+      const remaining = t.durationSeconds == null ? null : Math.max(0, t.durationSeconds - elapsed);
+
+      if (remaining != null) {
+        timerAudio.sync(
+          timerRunIdRef.current,
+          t.durationSeconds,
+          remaining,
+          t.running
+        );
+      }
+      if (remaining === 0 && t.running) {
+        t.running = false;
+        t.accumulated = t.durationSeconds ?? elapsed;
+        setTimerRunning(false);
+      }
+
+      setElapsedSeconds(t.running ? elapsed : t.accumulated);
+      sessionRef.current?.updateTimer(getTimerState());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [timerRunning, currentElapsed, getTimerState, timerAudio]);
+
   const applyTimerAction = useCallback((action: ClientTimerAction) => {
     const t = timerRef.current;
-    if (action === "pause_timer") {
+    if (action.type === "pause_timer") {
       if (t.running) {
         t.accumulated += (Date.now() - t.startedAt) / 1000;
         t.running = false;
       }
-    } else if (action === "stop_timer") {
+      timerAudio.pause();
+    } else if (action.type === "stop_timer") {
       t.running = false;
       t.accumulated = 0;
       t.startedAt = 0;
+      t.durationSeconds = null;
+      timerRunIdRef.current += 1;
+      timerAudio.stopAll();
+    } else if (action.type === "start_timer") {
+      timerRunIdRef.current += 1;
+      t.accumulated = 0;
+      t.startedAt = Date.now();
+      t.running = true;
+      t.durationSeconds = action.duration_seconds ?? null;
+      if (t.durationSeconds) {
+        timerAudio.beginRun(timerRunIdRef.current, t.durationSeconds);
+      }
     } else if (!t.running) {
       t.startedAt = Date.now();
       t.running = true;
     }
     setTimerRunning(t.running);
     setElapsedSeconds(Math.round(t.accumulated));
+    setTimerDurationSeconds(t.durationSeconds);
     sessionRef.current?.updateTimer(getTimerState());
-  }, [getTimerState]);
+  }, [getTimerState, timerAudio]);
 
   const toggleTimer = useCallback(() => {
-    applyTimerAction(timerRef.current.running ? "pause_timer" : "start_timer");
+    applyTimerAction({
+      type: timerRef.current.running
+        ? "pause_timer"
+        : timerRef.current.accumulated > 0
+          ? "resume_timer"
+          : "start_timer",
+      duration_seconds: timerRef.current.durationSeconds,
+    });
   }, [applyTimerAction]);
 
   const ensureSession = useCallback(() => {
@@ -282,6 +330,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
     error,
     timerRunning,
     elapsedSeconds,
+    timerDurationSeconds,
     lastUsage,
     workoutBudget,
     startSession,

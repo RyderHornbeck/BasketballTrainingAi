@@ -4,11 +4,12 @@ import { ThemeMode } from "@/components/ThemeProvider";
 import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
+import { regeneratePlan } from "@/lib/plan";
 import { supabase } from "@/lib/supabase";
 import { OnboardingAnswers } from "@/types/database";
 import { router } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
@@ -22,6 +23,7 @@ export default function ProfileScreen() {
   const { user, profile, signOut } = useAuth();
   const [answers, setAnswers] = useState<OnboardingAnswers | null>(null);
   const [loading, setLoading] = useState(true);
+  const [regenerating, setRegenerating] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -41,6 +43,33 @@ export default function ProfileScreen() {
   const handleSignOut = async () => {
     await signOut();
     router.replace("/auth/login");
+  };
+
+  const handleRegenerate = () => {
+    Alert.alert(
+      "Generate a new plan?",
+      "This is intended for testing. Your current plan remains available until the new plan is ready.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Generate",
+          onPress: async () => {
+            setRegenerating(true);
+            try {
+              await regeneratePlan();
+              router.replace("/generating");
+            } catch (err) {
+              Alert.alert(
+                "Generation failed",
+                err instanceof Error ? err.message : "Unable to generate a new plan."
+              );
+            } finally {
+              setRegenerating(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -107,6 +136,15 @@ export default function ProfileScreen() {
             })}
           </View>
         </Card>
+
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Testing</Text>
+        <Button
+          title="Generate New Plan"
+          variant="secondary"
+          onPress={handleRegenerate}
+          loading={regenerating}
+          style={styles.actionButton}
+        />
 
         <Button
           title="Sign Out"

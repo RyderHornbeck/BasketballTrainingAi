@@ -15,7 +15,7 @@ import { Stack, ThemeProvider as NavigationThemeProvider } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import * as SystemUI from "expo-system-ui";
 import { StatusBar } from "expo-status-bar";
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
@@ -58,6 +58,7 @@ function RootNavigator() {
           <Stack.Screen name="auth/forgot-password" />
           <Stack.Screen name="onboarding/index" />
           <Stack.Screen name="generating" />
+          <Stack.Screen name="drill-timer" />
           <Stack.Screen
             name="(tabs)"
             options={{
@@ -90,12 +91,18 @@ export default function RootLayout() {
     Poppins_700Bold,
     Poppins_800ExtraBold,
   });
+  const [fontLoadTimedOut, setFontLoadTimedOut] = useState(false);
 
   useEffect(() => {
-    if (fontsLoaded) SplashScreen.hideAsync().catch(() => {});
-  }, [fontsLoaded]);
+    if (fontsLoaded || fontLoadTimedOut) {
+      SplashScreen.hideAsync().catch(() => {});
+      return;
+    }
+    const timeout = setTimeout(() => setFontLoadTimedOut(true), 8_000);
+    return () => clearTimeout(timeout);
+  }, [fontsLoaded, fontLoadTimedOut]);
 
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded && !fontLoadTimedOut) return null;
 
   return (
     <SafeAreaProvider>

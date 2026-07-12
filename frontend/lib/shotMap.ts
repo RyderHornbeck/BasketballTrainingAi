@@ -265,7 +265,7 @@ export function classifyShotZonesForSet(
   if (category === "finishing" && zones.some((zone) => zone.endsWith("_short_range"))) {
     return [`${side}_short_range`];
   }
-  if (isThree && /relocat|drive[\s-]?(and[\s-]?)?kick|crackback/i.test(text)) {
+  if (isThree && /drive[\s-]?(and[\s-]?)?kick|crackback/i.test(text)) {
     return [`${side}_wing_three`];
   }
 

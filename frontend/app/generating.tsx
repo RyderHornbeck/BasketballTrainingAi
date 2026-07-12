@@ -8,7 +8,7 @@ import { requestPlanGeneration } from "@/lib/plan";
 import { Redirect } from "expo-router";
 import { CheckCircleIcon, CircleIcon, SmileySadIcon } from "phosphor-react-native";
 import React, { useEffect, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
 
 const GENERATION_STEPS = [
   "Reviewing your player profile",
@@ -26,7 +26,7 @@ export default function GeneratingScreen() {
   const [completedSteps, setCompletedSteps] = useState(0);
   const isFailed = appState === "plan_failed";
   const hasNoRequestYet = !loading && appState === "no_plan" && !generationRequest;
-  const isBuilding = loading || (!isFailed && !hasNoRequestYet && appState !== "plan_ready");
+  const isBuilding = appState === "plan_generating";
 
   // Belt-and-suspenders: make sure we have a push token while they wait.
   useEffect(() => {
@@ -42,8 +42,22 @@ export default function GeneratingScreen() {
     return () => clearInterval(interval);
   }, [generationRequest?.id, isBuilding]);
 
+  if (loading) {
+    return (
+      <View style={[styles.container, { backgroundColor: "transparent" }]}>
+        <ActivityIndicator size="large" color={colors.accent} />
+      </View>
+    );
+  }
+
   if (appState === "plan_ready") {
     return <Redirect href="/(tabs)/days" />;
+  }
+  if (appState === "onboarding_incomplete") {
+    return <Redirect href="/onboarding" />;
+  }
+  if (appState === "logged_out") {
+    return <Redirect href="/welcome" />;
   }
 
   const handleRetry = async () => {

@@ -9,7 +9,14 @@ import {
   WorkoutDayWithExercises,
   WorkoutExerciseWithClip,
 } from "@/types/plan";
+import { emitWorkoutUpdated } from "./coachEvents";
 import { calculateDayPerformance } from "./dayPerformance";
+import {
+  buildSetPlan,
+  decodeExerciseLogMeta,
+  hydrateSetLogs,
+  normalizeSetLogs,
+} from "./exerciseSetLogs";
 import { supabase } from "./supabase";
 import { registerForPushNotificationsAsync } from "./notifications";
 
@@ -44,35 +51,46 @@ export async function getCurrentWorkoutStreak(): Promise<number> {
 
 function startOfCurrentWeek(): string {
   const now = new Date();
-  const sunday = new Date(now);
-  sunday.setDate(now.getDate() - now.getDay());
-  sunday.setHours(0, 0, 0, 0);
-  return sunday.toISOString();
+  const monday = new Date(now);
+  const daysSinceMonday = (now.getDay() + 6) % 7;
+  monday.setDate(now.getDate() - daysSinceMonday);
+  monday.setHours(0, 0, 0, 0);
+  return monday.toISOString();
 }
 
-/** Aggregates only workouts completed in the current Sunday–Saturday week. */
+/** Aggregates the current week's logged exercise activity, including an in-progress workout. */
 export async function getWeeklyWorkoutStats(): Promise<WeeklyWorkoutStats> {
-  const { data: weekDayLogs, error } = await supabase
-    .from("workout_day_logs")
-    .select("day_id")
-    .gte("completed_at", startOfCurrentWeek());
+  const { data: weekExerciseLogs, error } = await supabase
+    .from("exercise_logs")
+    .select("day_id, makes, attempts")
+    .gte("created_at", startOfCurrentWeek());
 
   if (error) throw new Error(error.message);
 
-  const dayIds = [...new Set((weekDayLogs ?? []).map((log) => log.day_id))];
+  const dayIds = [...new Set((weekExerciseLogs ?? []).map((log) => log.day_id))];
   if (dayIds.length === 0) {
     return { shots: 0, accuracy: null, averagePerformance: null };
   }
 
-  const completedDays = await Promise.all(dayIds.map((dayId) => getWorkoutDayWithExercises(dayId)));
-  const workouts = completedDays.filter((day): day is WorkoutDayWithExercises => day != null);
+  const workouts = (
+    await Promise.all(dayIds.map((dayId) => getWorkoutDayWithExercises(dayId)))
+  ).filter((day): day is WorkoutDayWithExercises => day != null);
   let makes = 0;
   let attempts = 0;
   const performances = workouts
     .map((day) => {
       for (const exercise of day.exercises) {
-        makes += exercise.log?.makes ?? 0;
-        attempts += exercise.log?.attempts ?? 0;
+        if (exercise.log_type !== "makes_attempts" || !exercise.log) continue;
+        const plan = buildSetPlan(exercise);
+        const setLogs = normalizeSetLogs(
+          hydrateSetLogs(plan, decodeExerciseLogMeta(exercise.log.notes), exercise.log),
+          plan
+        );
+        for (const set of setLogs) {
+          if (!set.completed) continue;
+          makes += set.makes ?? 0;
+          attempts += set.attempts ?? plan.perSetAttempts ?? 0;
+        }
       }
       return calculateDayPerformance(day.exercises);
     })
@@ -347,6 +365,7 @@ export async function saveExerciseLog(
     { onConflict: "exercise_id" }
   );
   if (error) throw new Error(`Failed to save log: ${error.message}`);
+  emitWorkoutUpdated();
 }
 
 /**
@@ -411,6 +430,7 @@ export async function finishWorkoutDay(
       }
     }
   }
+  emitWorkoutUpdated();
 }
 
 /** Builds a fresh adaptive five-workout plan while preserving history. */

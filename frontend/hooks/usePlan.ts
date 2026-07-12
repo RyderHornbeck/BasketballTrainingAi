@@ -15,10 +15,31 @@ interface UsePlanResult {
   days: WorkoutDay[];
   generationRequest: PlanGenerationRequest | null;
   loading: boolean;
+  loadError: string | null;
   refresh: () => Promise<void>;
 }
 
 const POLL_INTERVAL_MS = 3000;
+const PLAN_LOAD_TIMEOUT_MS = 10_000;
+
+function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error(`${label} timed out. Check your connection and try again.`)),
+      PLAN_LOAD_TIMEOUT_MS
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    );
+  });
+}
 
 /**
  * Central hook that figures out where the user is in the app lifecycle:
@@ -26,11 +47,12 @@ const POLL_INTERVAL_MS = 3000;
  * Polls the generation request while a plan is being built.
  */
 export function usePlan(): UsePlanResult {
-  const { user, profile, loading: authLoading } = useAuth();
+  const { user, profile, loading: authLoading, startupError } = useAuth();
   const [plan, setPlan] = useState<WorkoutPlan | null>(null);
   const [days, setDays] = useState<WorkoutDay[]>([]);
   const [generationRequest, setGenerationRequest] = useState<PlanGenerationRequest | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const rolloverAttemptRef = useRef<string | null>(null);
 
@@ -39,27 +61,30 @@ export function usePlan(): UsePlanResult {
       setPlan(null);
       setDays([]);
       setGenerationRequest(null);
+      setLoadError(null);
       setLoading(false);
       return;
     }
 
     try {
+      setLoadError(null);
       const [activePlan, latestRequest] = await Promise.all([
-        getActivePlan(),
-        getLatestGenerationRequest(),
+        withTimeout(getActivePlan(), "Plan loading"),
+        withTimeout(getLatestGenerationRequest(), "Plan status loading"),
       ]);
 
       setPlan(activePlan);
       setGenerationRequest(latestRequest);
 
       if (activePlan) {
-        const planDays = await getWorkoutDays(activePlan.id);
+        const planDays = await withTimeout(getWorkoutDays(activePlan.id), "Workout loading");
         setDays(planDays);
       } else {
         setDays([]);
       }
     } catch (err) {
       console.error("usePlan load error:", err);
+      setLoadError(err instanceof Error ? err.message : "Unable to load your workouts.");
     } finally {
       setLoading(false);
     }
@@ -103,7 +128,7 @@ export function usePlan(): UsePlanResult {
   }, [isGenerating, load]);
 
   let appState: AppState = "logged_out";
-  const profilePending = !!user && !profile;
+  const profilePending = !!user && !profile && !startupError;
 
   if (authLoading || loading || profilePending) {
     appState = "logged_out";
@@ -127,6 +152,7 @@ export function usePlan(): UsePlanResult {
     days,
     generationRequest,
     loading: authLoading || loading || profilePending,
+    loadError,
     refresh: load,
   };
 }

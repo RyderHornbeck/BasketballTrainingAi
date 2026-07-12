@@ -8,51 +8,109 @@ interface AuthContextValue {
   user: User | null;
   profile: Profile | null;
   loading: boolean;
+  startupError: string | null;
   signUp: (email: string, password: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   refreshProfile: () => Promise<void>;
+  retryStartup: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+const STARTUP_TIMEOUT_MS = 10_000;
+
+function withTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error(`${label} timed out. Check your connection and try again.`)),
+      STARTUP_TIMEOUT_MS
+    );
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    );
+  });
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [startupError, setStartupError] = useState<string | null>(null);
+  const [startupAttempt, setStartupAttempt] = useState(0);
 
   const loadProfile = useCallback(async (userId: string) => {
-    const { data, error } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
+    const { data, error } = await withTimeout(
+      supabase.from("profiles").select("*").eq("id", userId).maybeSingle(),
+      "Profile loading"
+    );
     if (error) {
-      console.error("Failed to load profile:", error.message);
-      return;
+      throw error;
     }
-    if (data) setProfile(data as Profile);
+    return data as Profile | null;
   }, []);
 
   useEffect(() => {
     let mounted = true;
 
     const init = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!mounted) return;
+      setLoading(true);
+      setStartupError(null);
+      try {
+        const { data, error } = await withTimeout(supabase.auth.getSession(), "Session loading");
+        if (error) throw error;
+        if (!mounted) return;
 
-      setSession(data.session);
-      if (data.session?.user) {
-        await loadProfile(data.session.user.id);
+        setSession(data.session);
+        if (data.session?.user) {
+          const nextProfile = await loadProfile(data.session.user.id);
+          if (!mounted) return;
+          setProfile(nextProfile);
+        } else {
+          setProfile(null);
+        }
+      } catch (error) {
+        if (!mounted) return;
+        console.warn("App startup failed:", error);
+        setProfile(null);
+        setStartupError(
+          error instanceof Error ? error.message : "App startup failed. Please try again."
+        );
+      } finally {
+        if (mounted) setLoading(false);
       }
-      if (mounted) setLoading(false);
     };
 
-    init();
+    void init();
 
     const { data: listener } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+      if (!mounted) return;
       setSession(newSession);
       if (newSession?.user) {
-        await loadProfile(newSession.user.id);
+        try {
+          const nextProfile = await loadProfile(newSession.user.id);
+          if (mounted) {
+            setProfile(nextProfile);
+            setStartupError(null);
+          }
+        } catch (error) {
+          if (mounted) {
+            setProfile(null);
+            setStartupError(
+              error instanceof Error ? error.message : "Unable to refresh your profile."
+            );
+          }
+        }
       } else {
         setProfile(null);
+        setStartupError(null);
       }
     });
 
@@ -60,7 +118,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       mounted = false;
       listener.subscription.unsubscribe();
     };
-  }, [loadProfile]);
+  }, [loadProfile, startupAttempt]);
+
+  const retryStartup = useCallback(() => {
+    setStartupError(null);
+    setLoading(true);
+    setStartupAttempt((attempt) => attempt + 1);
+  }, []);
 
   const signUp = useCallback(async (email: string, password: string) => {
     const { error } = await supabase.auth.signUp({ email, password });
@@ -92,13 +156,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user: session?.user ?? null,
       profile,
       loading,
+      startupError,
       signUp,
       signIn,
       signOut,
       resetPassword,
       refreshProfile,
+      retryStartup,
     }),
-    [session, profile, loading, signUp, signIn, signOut, resetPassword, refreshProfile]
+    [
+      session,
+      profile,
+      loading,
+      startupError,
+      signUp,
+      signIn,
+      signOut,
+      resetPassword,
+      refreshProfile,
+      retryStartup,
+    ]
   );
 
   return React.createElement(AuthContext.Provider, { value }, children);

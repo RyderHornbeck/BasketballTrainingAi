@@ -62,7 +62,9 @@
           "microphonePermission": "HoopPlan uses the microphone so you can talk to your AI basketball coach during workouts."
         }
       ],
-      "expo-config-plugin-incall-manager"
+      "expo-config-plugin-incall-manager",
+      "expo-audio",
+      "expo-asset"
     ],
     "extra": {
       "eas": {

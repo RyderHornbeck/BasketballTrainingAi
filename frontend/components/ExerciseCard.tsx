@@ -17,7 +17,9 @@ import { parseDrillDescription } from "@/lib/drillDescription";
 import { WorkoutExerciseWithClip } from "@/types/plan";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useEffect, useMemo, useState } from "react";
+import { TimerIcon } from "phosphor-react-native";
+import { useRouter } from "expo-router";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Linking, Pressable, StyleSheet, TextInput as RNTextInput, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { Card } from "./Card";
@@ -207,6 +209,7 @@ function DrillDescriptionView({
 
 export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardProps) {
   const { colors, scheme } = useTheme();
+  const router = useRouter();
   const [expanded, setExpanded] = useState(false);
   const [videoError, setVideoError] = useState(false);
   const [videoStarted, setVideoStarted] = useState(false);
@@ -223,18 +226,6 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
   );
   const logType = setPlan.logType;
 
-  const displayPrescription = useMemo(() => {
-    const { setCount, perSetAttempts, setSideLabels } = setPlan;
-    if (logType === "makes_attempts" && perSetAttempts != null) {
-      const shotLabel = perSetAttempts === 1 ? "1 shot" : `${perSetAttempts} shots`;
-      let label =
-        setCount === 1 ? `1 set · ${shotLabel}` : `${setCount} sets · ${shotLabel} each`;
-      if (setSideLabels?.length) label += " · alternate sides";
-      return label;
-    }
-    return setPlan.prescriptionLabel;
-  }, [setPlan, logType]);
-
   const [setLogs, setSetLogs] = useState<SetLogEntry[]>(() =>
     hydrateSetLogs(setPlan, decodeExerciseLogMeta(exercise.log?.notes ?? null), exercise.log ?? undefined)
   );
@@ -242,6 +233,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
   const [userNotes, setUserNotes] = useState(
     () => decodeExerciseLogMeta(exercise.log?.notes ?? null).user_notes ?? ""
   );
+  const hasUserEditsRef = useRef(false);
 
   const normalizedSets = useMemo(() => normalizeSetLogs(setLogs, setPlan), [setLogs, setPlan]);
   const aggregated = useMemo(
@@ -257,6 +249,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
     setSetLogs(hydrated);
     setDifficulty(exercise.log?.difficulty ?? 0);
     setUserNotes(meta.user_notes ?? "");
+    hasUserEditsRef.current = false;
     setExpanded(false);
     setVideoStarted(false);
     setVideoError(false);
@@ -266,6 +259,9 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
   const showVideo = hasVideoDemo(clip);
   const descriptionText =
     clip?.description ?? exercise.instructions ?? clip?.coaching_notes ?? null;
+  const hasDrillTimer =
+    (exercise.category === "ball_handling" || exercise.category === "conditioning") &&
+    setPlan.perSetMinutes != null;
   const watchUrl = clip
     ? `https://www.youtube.com/watch?v=${clip.youtube_video_id}&t=${clip.start_seconds}s`
     : null;
@@ -304,17 +300,20 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
   };
 
   const updateSet = (setNumber: number, patch: Partial<SetLogEntry>) => {
+    hasUserEditsRef.current = true;
     setSetLogs((prev) =>
       prev.map((row) => (row.set_number === setNumber ? { ...row, ...patch } : row))
     );
   };
 
   useEffect(() => {
+    if (!hasUserEditsRef.current) return;
     emitLog(setLogs, difficulty, userNotes, attemptsOverride);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setLogs, difficulty, userNotes, attemptsOverride, setPlan]);
 
   const syncAttemptsAcrossSets = (text: string) => {
+    hasUserEditsRef.current = true;
     const attemptsNum = text ? parseInt(text.replace(/[^0-9]/g, ""), 10) : 0;
     if (!attemptsNum || attemptsNum <= 0) {
       setAttemptsOverride(null);
@@ -362,6 +361,20 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
 
   const openInYouTube = () => {
     if (watchUrl) Linking.openURL(watchUrl);
+  };
+
+  const openDrillTimer = () => {
+    const currentSet = normalizedSets.find((set) => !set.completed) ?? normalizedSets[0];
+    if (!currentSet || !setPlan.perSetMinutes) return;
+    router.push({
+      pathname: "/drill-timer",
+      params: {
+        name: exercise.name ?? "Drill",
+        instructions: descriptionText ?? "",
+        durationSeconds: String(setPlan.perSetMinutes * 60),
+        setNumber: String(currentSet.set_number),
+      },
+    });
   };
 
   const gradientColors =
@@ -514,22 +527,6 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
             <DrillDescriptionView description={descriptionText} colors={colors} compact={!showVideo} />
           ) : null}
 
-          {displayPrescription ? (
-            <View
-              style={[
-                styles.prescriptionPill,
-                {
-                  backgroundColor: scheme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
-                  borderColor: colors.border,
-                },
-              ]}
-            >
-              <Text style={[styles.prescriptionText, { color: colors.textSecondary }]}>
-                {displayPrescription}
-              </Text>
-            </View>
-          ) : null}
-
           {!readOnly && (
             <View
               style={[
@@ -538,6 +535,18 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
                 !showVideo && styles.loggingSectionNoVideo,
               ]}
             >
+              {hasDrillTimer ? (
+                <Pressable
+                  onPress={openDrillTimer}
+                  style={[
+                    styles.drillTimerButton,
+                    { backgroundColor: colors.accentMuted, borderColor: colors.accent },
+                  ]}
+                >
+                  <TimerIcon size={18} color={colors.accent} weight="bold" />
+                  <Text style={[styles.drillTimerButtonText, { color: colors.accent }]}>Timer</Text>
+                </Pressable>
+              ) : null}
               <View style={styles.setRows}>{renderSetRows()}</View>
 
               {logType === "difficulty_rating" && (
@@ -547,7 +556,10 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
                     {[1, 2, 3, 4, 5].map((d) => (
                       <Pressable
                         key={d}
-                        onPress={() => setDifficulty(d)}
+                          onPress={() => {
+                            hasUserEditsRef.current = true;
+                            setDifficulty(d);
+                          }}
                         style={[
                           styles.difficultyPill,
                           {
@@ -574,7 +586,10 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
                 <Text style={[styles.smallLabel, { color: colors.textSecondary }]}>Notes (optional)</Text>
                 <RNTextInput
                   value={userNotes}
-                  onChangeText={setUserNotes}
+                  onChangeText={(text) => {
+                    hasUserEditsRef.current = true;
+                    setUserNotes(text);
+                  }}
                   placeholder="How did it feel?"
                   placeholderTextColor={colors.textMuted}
                   multiline
@@ -792,6 +807,21 @@ const styles = StyleSheet.create({
     marginTop: 4,
     paddingTop: 16,
     borderTopWidth: 1,
+  },
+  drillTimerButton: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    marginBottom: 12,
+  },
+  drillTimerButtonText: {
+    fontSize: 14,
+    fontWeight: "800",
   },
   setRows: {
     gap: 10,

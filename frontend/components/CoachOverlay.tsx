@@ -32,6 +32,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     error,
     timerRunning,
     elapsedSeconds,
+    timerDurationSeconds,
     workoutBudget,
     startSession,
     stopSession,
@@ -40,6 +41,10 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
   } = useCoach(dayId);
 
   const budgetExhausted = status === "budget_exhausted";
+  const timerDisplaySeconds =
+    timerDurationSeconds == null
+      ? elapsedSeconds
+      : Math.max(0, timerDurationSeconds - elapsedSeconds);
   const budgetProgress =
     workoutBudget && workoutBudget.budgetUsd > 0
       ? Math.min(1, workoutBudget.spentUsd / workoutBudget.budgetUsd)
@@ -145,7 +150,9 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
               color={colors.accent}
               style={{ marginRight: 6 }}
             />
-            <Text style={[styles.timerText, { color: colors.text }]}>{formatTimer(elapsedSeconds)}</Text>
+            <Text style={[styles.timerText, { color: colors.text }]}>
+              {formatTimer(timerDisplaySeconds)}
+            </Text>
           </Pressable>
 
           <Pressable
