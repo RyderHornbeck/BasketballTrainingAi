@@ -1,6 +1,5 @@
 import { Card } from "@/components/Card";
 import {
-  CompletionLineChart,
   MakesMissesChartPanel,
   ShootingTrendLineChart,
   SkillRadarChart,
@@ -11,9 +10,12 @@ import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { AnalyticsSummary, getAnalyticsSummary } from "@/lib/analytics";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
+import { BarbellIcon, FlameIcon } from "phosphor-react-native";
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+const ANALYTICS_ORANGE = "#F7B379";
 
 export default function AnalyticsScreen() {
   const { colors } = useTheme();
@@ -75,8 +77,18 @@ export default function AnalyticsScreen() {
         </Text>
 
         <View style={styles.statsGrid}>
-          <StatCard label="Workouts" value={String(summary.totalWorkoutsCompleted)} />
-          <StatCard label="day streak" value={String(summary.currentStreak)} />
+          <StatCard
+            label="Workouts"
+            value={String(summary.totalWorkoutsCompleted)}
+            valueColor={ANALYTICS_ORANGE}
+            icon={<BarbellIcon size={22} color={ANALYTICS_ORANGE} weight="duotone" />}
+          />
+          <StatCard
+            label="day streak"
+            value={String(summary.currentStreak)}
+            valueColor={ANALYTICS_ORANGE}
+            icon={<FlameIcon size={22} color={ANALYTICS_ORANGE} weight="duotone" />}
+          />
         </View>
 
         <Card style={styles.chartCard}>
@@ -92,18 +104,16 @@ export default function AnalyticsScreen() {
         </Card>
 
         <Card style={styles.chartCard}>
-          <Text style={[styles.chartTitle, { color: colors.text }]}>Shooting % Trend</Text>
+          <Text style={[styles.chartTitle, { color: colors.text }]}>Shooting Percentage</Text>
           <ShootingTrendLineChart buckets={summary.weeklyPctTrend} />
         </Card>
 
         <Card style={styles.chartCard}>
-          <Text style={[styles.chartTitle, { color: colors.text }]}>Workout Completion Rate</Text>
-          <CompletionLineChart points={summary.completionTrend} />
-        </Card>
-
-        <Card style={styles.chartCard}>
           <Text style={[styles.chartTitle, { color: colors.text }]}>Training Activity</Text>
-          <WorkoutActivityHeatmap data={summary.workoutHeatmap} />
+          <WorkoutActivityHeatmap
+            data={summary.workoutHeatmap}
+            totalWorkouts={summary.totalWorkoutsCompleted}
+          />
         </Card>
       </ScrollView>
     </SafeAreaView>

@@ -2,6 +2,7 @@ import { Button } from "@/components/Button";
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { Link, router } from "expo-router";
+import { BasketballIcon } from "phosphor-react-native";
 import React from "react";
 import { StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -13,7 +14,7 @@ export default function WelcomeScreen() {
     <SafeAreaView style={[styles.flex, { backgroundColor: "transparent" }]}>
       <View style={styles.content}>
         <View style={styles.brand}>
-          <Text style={styles.logo}>🏀</Text>
+          <BasketballIcon size={72} color={colors.accent} weight="duotone" />
           <Text style={[styles.appName, { color: colors.text }]}>HoopPlan</Text>
           <Text style={[styles.tagline, { color: colors.textSecondary }]}>
             Personalized basketball training plans, built for your game.

@@ -4,6 +4,7 @@ import { TextInput } from "@/components/TextInput";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { Link, router } from "expo-router";
+import { BasketballIcon } from "phosphor-react-native";
 import React, { useState } from "react";
 import {
   KeyboardAvoidingView,
@@ -45,7 +46,7 @@ export default function LoginScreen() {
     >
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.brand}>
-          <Text style={[styles.logo, { color: colors.accent }]}>🏀</Text>
+          <BasketballIcon size={56} color={colors.accent} weight="duotone" />
           <Text style={[styles.appName, { color: colors.text }]}>HoopPlan</Text>
           <Text style={[styles.tagline, { color: colors.textSecondary }]}>
             Your personalized basketball training coach.

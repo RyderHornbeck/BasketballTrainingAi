@@ -11,14 +11,18 @@ import {
   buildAllTimeBuckets,
   buildMonthlyBuckets,
   buildWeeklyBuckets,
+  canGoNextAllTimeBatch,
   canGoNextMonth,
   canGoNextWeek,
+  canGoPrevAllTimeBatch,
+  getAllTimeBatchRange,
   getMonthRange,
   getWeekRange,
   resolveFirstActivityDate,
   roundChartMax,
 } from "@/lib/shootingAnalytics";
 import { SkillProfile } from "@/lib/skillRatings";
+import { CaretLeftIcon, CaretRightIcon } from "phosphor-react-native";
 import React, { useMemo, useState } from "react";
 import { Dimensions, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import Svg, { Circle, Line, Polyline, Rect, Text as SvgText } from "react-native-svg";
@@ -26,6 +30,9 @@ import Svg, { Circle, Line, Polyline, Rect, Text as SvgText } from "react-native
 const CHART_HEIGHT = 180;
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const CHART_WIDTH = SCREEN_WIDTH - 76;
+const TICK_HEIGHT = 3;
+const TICK_GAP = 1;
+const WORKOUTS_PER_BATCH = 100;
 
 const PERIOD_LABELS: Record<ShootingChartPeriod, string> = {
   weekly: "Weekly",
@@ -52,7 +59,7 @@ const COMPACT_SKILL_LABELS: Record<string, string> = {
 };
 
 const FINISHING_BLUE = { dark: "#5AC8FA", light: "#007AFF" };
-
+const ANALYTICS_ORANGE = "#F7B379";
 const MISS_GREY = { dark: "#636366", light: "#AEAEB2" };
 
 function polarPoint(
@@ -272,8 +279,8 @@ export function PeriodSelector({
             style={[
               styles.periodPill,
               {
-                backgroundColor: selected ? colors.accent : colors.cardAlt,
-                borderColor: selected ? colors.accent : colors.border,
+                backgroundColor: selected ? ANALYTICS_ORANGE : colors.cardAlt,
+                borderColor: selected ? ANALYTICS_ORANGE : colors.border,
               },
             ]}
           >
@@ -288,6 +295,50 @@ export function PeriodSelector({
           </Pressable>
         );
       })}
+    </View>
+  );
+}
+
+function ChartNavRow({
+  label,
+  onPrev,
+  onNext,
+  canPrev,
+  canNext,
+}: {
+  label: string;
+  onPrev: () => void;
+  onNext: () => void;
+  canPrev: boolean;
+  canNext: boolean;
+}) {
+  const { colors } = useTheme();
+
+  return (
+    <View style={styles.periodNavRow}>
+      <Pressable
+        onPress={onPrev}
+        disabled={!canPrev}
+        hitSlop={8}
+        style={[
+          styles.periodNavButton,
+          { borderColor: colors.border, opacity: canPrev ? 1 : 0.35 },
+        ]}
+      >
+        <CaretLeftIcon size={18} color={colors.text} weight="bold" />
+      </Pressable>
+      <Text style={[styles.periodNavLabel, { color: colors.textSecondary }]}>{label}</Text>
+      <Pressable
+        onPress={onNext}
+        disabled={!canNext}
+        hitSlop={8}
+        style={[
+          styles.periodNavButton,
+          { borderColor: colors.border, opacity: canNext ? 1 : 0.35 },
+        ]}
+      >
+        <CaretRightIcon size={18} color={colors.text} weight="bold" />
+      </Pressable>
     </View>
   );
 }
@@ -310,7 +361,7 @@ function ShootingBarChart({
   const count = Math.max(buckets.length, 1);
   const barGap = count > 1 ? Math.min(14, usableWidth / count / 4) : 0;
   const barWidth = (usableWidth - barGap * (count - 1)) / count;
-  const unit = plotHeight / chartMax;
+  const tickUnit = TICK_HEIGHT + TICK_GAP;
 
   return (
     <Svg width={width} height={CHART_HEIGHT}>
@@ -336,34 +387,42 @@ function ShootingBarChart({
 
       {buckets.map((bucket, index) => {
         const x = leftPad + index * (barWidth + barGap);
-        const makesHeight = bucket.makes * unit;
-        const missesHeight = bucket.misses * unit;
         const baseY = plotHeight + 8;
-        const makesY = baseY - makesHeight;
-        const missesY = makesY - missesHeight;
+        const ticks: React.ReactNode[] = [];
+
+        for (let i = 0; i < bucket.makes; i++) {
+          const y = baseY - (i + 1) * tickUnit;
+          ticks.push(
+            <Rect
+              key={`make-${i}`}
+              x={x}
+              y={y}
+              width={barWidth}
+              height={TICK_HEIGHT}
+              rx={1}
+              fill={ANALYTICS_ORANGE}
+            />
+          );
+        }
+
+        for (let i = 0; i < bucket.misses; i++) {
+          const y = baseY - (bucket.makes + i + 1) * tickUnit;
+          ticks.push(
+            <Rect
+              key={`miss-${i}`}
+              x={x}
+              y={y}
+              width={barWidth}
+              height={TICK_HEIGHT}
+              rx={1}
+              fill={missColor}
+            />
+          );
+        }
 
         return (
           <React.Fragment key={`${bucket.label}-${index}`}>
-            {makesHeight > 0 ? (
-              <Rect
-                x={x}
-                y={makesY}
-                width={barWidth}
-                height={makesHeight}
-                rx={4}
-                fill={colors.accent}
-              />
-            ) : null}
-            {missesHeight > 0 ? (
-              <Rect
-                x={x}
-                y={missesY}
-                width={barWidth}
-                height={missesHeight}
-                rx={4}
-                fill={missColor}
-              />
-            ) : null}
+            {ticks}
             <SvgText
               x={x + barWidth / 2}
               y={CHART_HEIGHT - 6}
@@ -392,25 +451,29 @@ export function MakesMissesChartPanel({
   const [period, setPeriod] = useState<ShootingChartPeriod>("weekly");
   const [weekOffset, setWeekOffset] = useState(0);
   const [monthOffset, setMonthOffset] = useState(0);
+  const [allTimeBatchIndex, setAllTimeBatchIndex] = useState(0);
+
+  const firstActivity = useMemo(
+    () => resolveFirstActivityDate(logs, firstActivityDate),
+    [logs, firstActivityDate]
+  );
 
   const buckets = useMemo(() => {
     if (period === "weekly") return buildWeeklyBuckets(logs, weekOffset);
     if (period === "monthly") return buildMonthlyBuckets(logs, monthOffset);
-    const first = resolveFirstActivityDate(logs, firstActivityDate);
-    return buildAllTimeBuckets(logs, first);
-  }, [logs, firstActivityDate, period, weekOffset, monthOffset]);
+    return buildAllTimeBuckets(logs, firstActivity, allTimeBatchIndex);
+  }, [logs, firstActivity, period, weekOffset, monthOffset, allTimeBatchIndex]);
 
   const peak = Math.max(...buckets.map((b) => b.makes + b.misses), 0);
   const chartMax = roundChartMax(peak);
   const totalMakes = buckets.reduce((sum, b) => sum + b.makes, 0);
   const totalMisses = buckets.reduce((sum, b) => sum + b.misses, 0);
-  const hasData = peak > 0;
 
   const navLabel = useMemo(() => {
     if (period === "weekly") return getWeekRange(weekOffset).label;
     if (period === "monthly") return getMonthRange(monthOffset).label;
-    return "All months";
-  }, [period, weekOffset, monthOffset]);
+    return getAllTimeBatchRange(firstActivity, allTimeBatchIndex).label;
+  }, [period, weekOffset, monthOffset, firstActivity, allTimeBatchIndex]);
 
   return (
     <View>
@@ -420,73 +483,52 @@ export function MakesMissesChartPanel({
           setPeriod(next);
           setWeekOffset(0);
           setMonthOffset(0);
+          setAllTimeBatchIndex(0);
         }}
       />
 
       <View style={styles.totalRow}>
         <Text style={[styles.totalLabel, { color: colors.textSecondary }]}>Total</Text>
-        <Text style={[styles.totalMakes, { color: colors.accent }]}>{totalMakes}</Text>
-        <Text style={[styles.totalMisses, { color: missColor }]}>{totalMisses}</Text>
+        <View style={styles.totalMetric}>
+          <Text style={[styles.totalMakes, { color: ANALYTICS_ORANGE }]}>{totalMakes}</Text>
+          <Text style={[styles.totalMetricLabel, { color: ANALYTICS_ORANGE }]}>Makes</Text>
+        </View>
+        <View style={styles.totalMetric}>
+          <Text style={[styles.totalMisses, { color: missColor }]}>{totalMisses}</Text>
+          <Text style={[styles.totalMetricLabel, { color: missColor }]}>Misses</Text>
+        </View>
       </View>
 
-      {!hasData ? (
-        <Text style={{ color: colors.textSecondary }}>
-          Log shooting drills to see makes and misses over time.
-        </Text>
-      ) : period === "alltime" && buckets.length > 6 ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <ShootingBarChart
-            buckets={buckets}
-            chartMax={chartMax}
-            width={Math.max(CHART_WIDTH, buckets.length * 42 + 40)}
-          />
-        </ScrollView>
-      ) : (
-        <ShootingBarChart buckets={buckets} chartMax={chartMax} />
-      )}
+      <ShootingBarChart buckets={buckets} chartMax={chartMax} />
 
-      {period !== "alltime" ? (
-        <View style={styles.periodNavRow}>
-          <Pressable
-            onPress={() =>
-              period === "weekly"
-                ? setWeekOffset((v) => v + 1)
-                : setMonthOffset((v) => v + 1)
-            }
-            hitSlop={8}
-            style={[styles.periodNavButton, { borderColor: colors.border }]}
-          >
-            <Text style={[styles.periodNavArrow, { color: colors.text }]}>‹</Text>
-          </Pressable>
-          <Text style={[styles.periodNavLabel, { color: colors.textSecondary }]}>{navLabel}</Text>
-          <Pressable
-            onPress={() =>
-              period === "weekly"
-                ? setWeekOffset((v) => Math.max(0, v - 1))
-                : setMonthOffset((v) => Math.max(0, v - 1))
-            }
-            disabled={
-              period === "weekly" ? !canGoNextWeek(weekOffset) : !canGoNextMonth(monthOffset)
-            }
-            hitSlop={8}
-            style={[
-              styles.periodNavButton,
-              {
-                borderColor: colors.border,
-                opacity:
-                  period === "weekly"
-                    ? canGoNextWeek(weekOffset)
-                      ? 1
-                      : 0.35
-                    : canGoNextMonth(monthOffset)
-                      ? 1
-                      : 0.35,
-              },
-            ]}
-          >
-            <Text style={[styles.periodNavArrow, { color: colors.text }]}>›</Text>
-          </Pressable>
-        </View>
+      {period === "weekly" ? (
+        <ChartNavRow
+          label={navLabel}
+          onPrev={() => setWeekOffset((v) => v + 1)}
+          onNext={() => setWeekOffset((v) => Math.max(0, v - 1))}
+          canPrev
+          canNext={canGoNextWeek(weekOffset)}
+        />
+      ) : null}
+
+      {period === "monthly" ? (
+        <ChartNavRow
+          label={navLabel}
+          onPrev={() => setMonthOffset((v) => v + 1)}
+          onNext={() => setMonthOffset((v) => Math.max(0, v - 1))}
+          canPrev
+          canNext={canGoNextMonth(monthOffset)}
+        />
+      ) : null}
+
+      {period === "alltime" ? (
+        <ChartNavRow
+          label={navLabel}
+          onPrev={() => setAllTimeBatchIndex((v) => Math.max(0, v - 1))}
+          onNext={() => setAllTimeBatchIndex((v) => v + 1)}
+          canPrev={canGoPrevAllTimeBatch(allTimeBatchIndex)}
+          canNext={canGoNextAllTimeBatch(firstActivity, allTimeBatchIndex)}
+        />
       ) : null}
     </View>
   );
@@ -645,7 +687,7 @@ export function ShootingTrendLineChart({
     <View>
       <View style={styles.legendRow}>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: colors.accent }]} />
+          <View style={[styles.legendDot, { backgroundColor: ANALYTICS_ORANGE }]} />
           <Text style={[styles.legendText, { color: colors.textSecondary }]}>Shooting</Text>
         </View>
         <View style={styles.legendItem}>
@@ -687,7 +729,7 @@ export function ShootingTrendLineChart({
           <Polyline
             points={shootingLine}
             fill="none"
-            stroke={colors.accent}
+            stroke={ANALYTICS_ORANGE}
             strokeWidth={2.5}
             strokeLinejoin="round"
             strokeLinecap="round"
@@ -696,7 +738,7 @@ export function ShootingTrendLineChart({
         {shootingPoints
           .filter((p) => p.value != null)
           .map((point) => (
-            <Circle key={`shoot-${point.label}`} cx={point.x} cy={point.y} r={3.5} fill={colors.accent} />
+            <Circle key={`shoot-${point.label}`} cx={point.x} cy={point.y} r={3.5} fill={ANALYTICS_ORANGE} />
           ))}
         {finishingPoints
           .filter((p) => p.value != null)
@@ -727,51 +769,77 @@ function heatColor(value: number, scheme: "light" | "dark", accent: string): str
   return accent;
 }
 
-export function WorkoutActivityHeatmap({ data }: { data: HeatmapPoint[] }) {
+export function WorkoutActivityHeatmap({
+  data,
+  totalWorkouts,
+}: {
+  data: HeatmapPoint[];
+  totalWorkouts: number;
+}) {
   const { colors, scheme } = useTheme();
+  const [batchIndex, setBatchIndex] = useState(0);
+  const cellSize = 10;
+  const cellGap = 2;
+  const cols = 25;
+  const rows = Math.ceil(WORKOUTS_PER_BATCH / cols);
 
-  if (data.length === 0) {
-    return (
-      <Text style={{ color: colors.textSecondary }}>
-        Your training activity will light up here after you complete workouts.
-      </Text>
-    );
-  }
+  const sorted = useMemo(
+    () => [...data].sort((a, b) => a.date.localeCompare(b.date)),
+    [data]
+  );
 
-  const cellSize = 12;
-  const cellGap = 3;
-  const weeks = 12;
-  const daysPerWeek = 7;
-  const recent = [...data]
-    .sort((a, b) => a.date.localeCompare(b.date))
-    .slice(-weeks * daysPerWeek);
-  const padded = Array.from({ length: weeks * daysPerWeek }, (_, index) => {
-    const point = recent[index];
-    return { date: point?.date ?? "", value: point?.value ?? 0 };
-  });
+  const batchCount = Math.max(1, Math.ceil(Math.max(totalWorkouts, sorted.length) / WORKOUTS_PER_BATCH));
+  const rangeStart = batchIndex * WORKOUTS_PER_BATCH;
+  const rangeEnd = rangeStart + WORKOUTS_PER_BATCH;
+  const batchLabel = `${rangeStart}–${rangeEnd} workouts`;
+
+  const batchPoints = useMemo(() => {
+    const slice = sorted.slice(rangeStart, rangeEnd);
+    const padded = Array.from({ length: WORKOUTS_PER_BATCH }, (_, index) => {
+      const point = slice[index];
+      return { date: point?.date ?? "", value: point?.value ?? 0 };
+    });
+    return padded;
+  }, [sorted, rangeStart]);
+
+  const gridWidth = cols * (cellSize + cellGap);
 
   return (
     <View style={styles.heatmapWrap}>
-      <View style={styles.heatmapGrid}>
-        {padded.map((point, index) => (
-          <View
-            key={`${point.date}-${index}`}
-            style={[
-              styles.heatmapCell,
-              {
-                width: cellSize,
-                height: cellSize,
-                marginRight: (index + 1) % daysPerWeek === 0 ? 0 : cellGap,
-                marginBottom: cellGap,
-                backgroundColor: heatColor(point.value, scheme, colors.accent),
-              },
-            ]}
-          />
-        ))}
-      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+        <View style={[styles.heatmapHorizontalGrid, { width: gridWidth, height: rows * (cellSize + cellGap) }]}>
+          {batchPoints.map((point, index) => {
+            const row = Math.floor(index / cols);
+            const col = index % cols;
+            return (
+              <View
+                key={`${point.date}-${index}`}
+                style={[
+                  styles.heatmapCell,
+                  {
+                    width: cellSize,
+                    height: cellSize,
+                    position: "absolute",
+                    left: col * (cellSize + cellGap),
+                    top: row * (cellSize + cellGap),
+                    backgroundColor: heatColor(point.value, scheme, colors.accent),
+                  },
+                ]}
+              />
+            );
+          })}
+        </View>
+      </ScrollView>
       <Text style={[styles.caption, { color: colors.textMuted }]}>
-        Darker orange = more training minutes that day
+        Darker orange = more training minutes per workout
       </Text>
+      <ChartNavRow
+        label={batchLabel}
+        onPrev={() => setBatchIndex((v) => Math.max(0, v - 1))}
+        onNext={() => setBatchIndex((v) => Math.min(batchCount - 1, v + 1))}
+        canPrev={batchIndex > 0}
+        canNext={batchIndex < batchCount - 1}
+      />
     </View>
   );
 }
@@ -801,10 +869,9 @@ const styles = StyleSheet.create({
   heatmapWrap: {
     marginHorizontal: -4,
   },
-  heatmapGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    width: 7 * 15,
+  heatmapHorizontalGrid: {
+    position: "relative",
+    marginBottom: 4,
   },
   heatmapCell: {
     borderRadius: 2,
@@ -863,6 +930,15 @@ const styles = StyleSheet.create({
   totalMisses: {
     fontSize: 22,
     fontWeight: "800",
+  },
+  totalMetric: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 4,
+  },
+  totalMetricLabel: {
+    fontSize: 12,
+    fontWeight: "700",
   },
   legendRow: {
     flexDirection: "row",

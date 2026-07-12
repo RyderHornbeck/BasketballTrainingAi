@@ -115,17 +115,17 @@ function scoreSetEntry(entry: SetLogEntry, plan: ExerciseSetPlan): number {
         ? clamp((actualAccuracy / targetAccuracy) * 100)
         : attainment;
     const completion = entry.completed ? 100 : clamp(attainment * 0.6);
-    return Math.round(0.5 * attainment + 0.3 * accuracy + 0.2 * completion);
+    return Math.round(0.55 * attainment + 0.35 * accuracy + 0.1 * completion);
   }
 
   if (plan.logType === "minutes") {
     const minutes = entry.minutes ?? (entry.completed ? plan.perSetMinutes ?? 0 : 0);
     const target = plan.perSetMinutes ?? 1;
     const timeRatio = clamp((minutes / target) * 100);
-    return Math.round(entry.completed ? 0.75 * timeRatio + 25 : timeRatio * 0.55);
+    return Math.round(entry.completed ? 0.75 * timeRatio + 12.5 : timeRatio * 0.55);
   }
 
-  return entry.completed ? 88 : 42;
+  return entry.completed ? 65 : 42;
 }
 
 function scoreExerciseFallback(
@@ -151,7 +151,7 @@ function scoreExerciseFallback(
       targetAccuracy && actualAccuracy != null
         ? clamp((actualAccuracy / targetAccuracy) * 100)
         : attainment;
-    return Math.round(0.55 * attainment + 0.25 * accuracy + 0.2 * (log.completed ? 100 : 50));
+    return Math.round(0.6 * attainment + 0.3 * accuracy + 0.1 * (log.completed ? 100 : 50));
   }
 
   const prescribedMinutes = plan.perSetMinutes ?? parseMinutes(log.workout_exercises?.duration);
@@ -163,7 +163,7 @@ function scoreExerciseFallback(
         : 45;
   const comfort =
     log.difficulty != null ? clamp(100 - (log.difficulty - 1) * 18) : log.completed ? 80 : 50;
-  return Math.round(0.65 * (log.completed ? 100 : 55) + 0.25 * timeRatio + 0.1 * comfort);
+  return Math.round(0.725 * (log.completed ? 100 : 55) + 0.25 * timeRatio + 0.025 * comfort);
 }
 
 function parseMinutes(value: string | null | undefined): number | null {
@@ -210,8 +210,8 @@ function expandExerciseLogToEvents(log: ExerciseLogRow): PerformanceEvent[] {
 }
 
 function learningAlpha(sampleCount: number): number {
-  const base = 0.055;
-  const floor = 0.012;
+  const base = 0.0275;
+  const floor = 0.006;
   return Math.max(floor, base / (1 + sampleCount * 0.14));
 }
 
@@ -229,7 +229,7 @@ function applyTrendNudge(
     const priorAvg = prior.reduce((sum, value) => sum + value, 0) / prior.length;
     const delta = recentAvg - priorAvg;
     if (Math.abs(delta) < 4) continue;
-    const nudge = clamp(delta * 0.08, -2.5, 2.5);
+    const nudge = clamp(delta * 0.04, -1.25, 1.25);
     ratings[skill.key] = clamp(ratings[skill.key] + nudge);
   }
 }

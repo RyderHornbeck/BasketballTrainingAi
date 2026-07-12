@@ -9,8 +9,62 @@ import {
   WorkoutDayWithExercises,
   WorkoutExerciseWithClip,
 } from "@/types/plan";
+import { calculateDayPerformance } from "./dayPerformance";
 import { supabase } from "./supabase";
 import { registerForPushNotificationsAsync } from "./notifications";
+
+export interface WeeklyWorkoutStats {
+  shots: number;
+  accuracy: number | null;
+  averagePerformance: number | null;
+}
+
+function startOfCurrentWeek(): string {
+  const now = new Date();
+  const sunday = new Date(now);
+  sunday.setDate(now.getDate() - now.getDay());
+  sunday.setHours(0, 0, 0, 0);
+  return sunday.toISOString();
+}
+
+/** Aggregates only workouts completed in the current Sunday–Saturday week. */
+export async function getWeeklyWorkoutStats(): Promise<WeeklyWorkoutStats> {
+  const { data: weekDayLogs, error } = await supabase
+    .from("workout_day_logs")
+    .select("day_id")
+    .gte("completed_at", startOfCurrentWeek());
+
+  if (error) throw new Error(error.message);
+
+  const dayIds = [...new Set((weekDayLogs ?? []).map((log) => log.day_id))];
+  if (dayIds.length === 0) {
+    return { shots: 0, accuracy: null, averagePerformance: null };
+  }
+
+  const completedDays = await Promise.all(dayIds.map((dayId) => getWorkoutDayWithExercises(dayId)));
+  const workouts = completedDays.filter((day): day is WorkoutDayWithExercises => day != null);
+  let makes = 0;
+  let attempts = 0;
+  const performances = workouts
+    .map((day) => {
+      for (const exercise of day.exercises) {
+        makes += exercise.log?.makes ?? 0;
+        attempts += exercise.log?.attempts ?? 0;
+      }
+      return calculateDayPerformance(day.exercises);
+    })
+    .filter((result) => result.hasData)
+    .map((result) => result.score);
+
+  return {
+    shots: attempts,
+    accuracy: attempts > 0 ? Math.round((makes / attempts) * 100) : null,
+    averagePerformance:
+      performances.length > 0
+        ? Math.round(performances.reduce((sum, score) => sum + score, 0) / performances.length)
+        : null,
+  };
+}
 
 /** Saves the onboarding answers for a (just-created) user and flips their profile flag. */
 export async function submitOnboardingAnswers(

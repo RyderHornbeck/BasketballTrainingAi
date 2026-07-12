@@ -47,7 +47,7 @@ const darkColors: ThemeColors = {
 };
 
 const lightColors: ThemeColors = {
-  background: "#EBEBF0",
+  background: "#F5EDE4",
   card: "#FFFFFF",
   cardAlt: "#F5F5F7",
   border: "#E1E1E4",

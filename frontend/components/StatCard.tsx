@@ -8,15 +8,18 @@ interface StatCardProps {
   label: string;
   value: string;
   sublabel?: string;
+  icon?: React.ReactNode;
+  valueColor?: string;
   style?: StyleProp<ViewStyle>;
 }
 
-export function StatCard({ label, value, sublabel, style }: StatCardProps) {
+export function StatCard({ label, value, sublabel, icon, valueColor, style }: StatCardProps) {
   const { colors } = useTheme();
 
   return (
     <Card style={[styles.card, style]}>
-      <Text style={[styles.value, { color: colors.accent }]}>{value}</Text>
+      {icon ? <View style={styles.iconWrap}>{icon}</View> : null}
+      <Text style={[styles.value, { color: valueColor ?? colors.accent }]}>{value}</Text>
       <Text style={[styles.label, { color: colors.text }]}>{label}</Text>
       {sublabel ? (
         <Text style={[styles.sublabel, { color: colors.textMuted }]}>{sublabel}</Text>
@@ -29,6 +32,9 @@ const styles = StyleSheet.create({
   card: {
     flex: 1,
     minWidth: 140,
+  },
+  iconWrap: {
+    marginBottom: 6,
   },
   value: {
     fontSize: 26,

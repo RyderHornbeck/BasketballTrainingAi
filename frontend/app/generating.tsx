@@ -6,6 +6,7 @@ import { usePlan } from "@/hooks/usePlan";
 import { registerForPushNotificationsAsync } from "@/lib/notifications";
 import { requestPlanGeneration } from "@/lib/plan";
 import { Redirect } from "expo-router";
+import { BasketballIcon, SmileySadIcon } from "phosphor-react-native";
 import React, { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 
@@ -48,7 +49,11 @@ export default function GeneratingScreen() {
   return (
     <View style={[styles.container, { backgroundColor: "transparent" }]}>
       <View style={styles.content}>
-        <Text style={styles.emoji}>{isFailed ? "😕" : "🏀"}</Text>
+        {isFailed ? (
+          <SmileySadIcon size={64} color={colors.textSecondary} weight="duotone" />
+        ) : (
+          <BasketballIcon size={64} color={colors.accent} weight="duotone" />
+        )}
 
         {!isFailed && !hasNoRequestYet && (
           <>

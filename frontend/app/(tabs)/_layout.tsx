@@ -1,7 +1,12 @@
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
 import { isDayUnlocked } from "@/lib/plan";
-import { Ionicons } from "@expo/vector-icons";
+import {
+  BasketballIcon,
+  ChartLineUpIcon,
+  CourtBasketballIcon,
+  UserCircleIcon,
+} from "phosphor-react-native";
 import { Tabs } from "expo-router";
 import { BottomTabBar } from "expo-router/build/react-navigation/bottom-tabs";
 import React, { useMemo, useState } from "react";
@@ -10,7 +15,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const TAB_BAR_HEIGHT = 72;
 const TAB_ICON_SIZE = 28;
-const COACH_ICON_SIZE = 34;
+const COACH_ICON_SIZE = 56;
+const NAV_BORDER_COLOR = "#F7B379";
 const EDGE_INSET = 12;
 const COACH_BUTTON_SIZE = TAB_BAR_HEIGHT;
 const COACH_GAP = 12;
@@ -45,7 +51,7 @@ export default function TabsLayout() {
       overflow: "hidden" as const,
       backgroundColor: colors.card,
       borderWidth: 2,
-      borderColor: colors.accent,
+      borderColor: NAV_BORDER_COLOR,
       shadowColor: colors.shadow,
       shadowOffset: { width: 0, height: 10 },
       shadowOpacity: scheme === "dark" ? 0.5 : 0.14,
@@ -99,12 +105,12 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="days"
           options={{
-            title: "Days",
+            title: "Workouts",
             tabBarIcon: ({ color, focused }) => (
-              <Ionicons
-                name={focused ? "basketball" : "basketball-outline"}
+              <CourtBasketballIcon
                 size={TAB_ICON_SIZE}
-                color={color}
+                color={String(color)}
+                weight={focused ? "fill" : "regular"}
               />
             ),
           }}
@@ -114,10 +120,10 @@ export default function TabsLayout() {
           options={{
             title: "Analytics",
             tabBarIcon: ({ color, focused }) => (
-              <Ionicons
-                name={focused ? "stats-chart" : "stats-chart-outline"}
+              <ChartLineUpIcon
                 size={TAB_ICON_SIZE}
-                color={color}
+                color={String(color)}
+                weight={focused ? "fill" : "regular"}
               />
             ),
           }}
@@ -127,10 +133,10 @@ export default function TabsLayout() {
           options={{
             title: "Profile",
             tabBarIcon: ({ color, focused }) => (
-              <Ionicons
-                name={focused ? "person-circle" : "person-circle-outline"}
+              <UserCircleIcon
                 size={TAB_ICON_SIZE}
-                color={color}
+                color={String(color)}
+                weight={focused ? "fill" : "regular"}
               />
             ),
           }}
@@ -148,13 +154,13 @@ export default function TabsLayout() {
             borderRadius: COACH_BUTTON_SIZE / 2,
             backgroundColor: colors.accent,
             borderWidth: 2,
-            borderColor: colors.accent,
+            borderColor: NAV_BORDER_COLOR,
             shadowColor: colors.accent,
             transform: [{ scale: pressed ? 0.94 : 1 }],
           },
         ]}
       >
-        <Ionicons name="basketball" size={COACH_ICON_SIZE} color="#FFFFFF" />
+        <BasketballIcon size={COACH_ICON_SIZE} color="#FFFFFF" weight="fill" />
       </Pressable>
 
       {coachOpen ? (

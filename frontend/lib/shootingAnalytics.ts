@@ -134,30 +134,49 @@ export function resolveFirstActivityDate(
   return new Date(first.getFullYear(), first.getMonth(), 1);
 }
 
+export const ALL_TIME_BATCH_SIZE = 6;
+
+export function getAllTimeBatchCount(firstActivity: Date): number {
+  const now = new Date();
+  const start = new Date(firstActivity.getFullYear(), firstActivity.getMonth(), 1);
+  const months =
+    (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth()) + 1;
+  return Math.max(1, Math.ceil(months / ALL_TIME_BATCH_SIZE));
+}
+
+export function getAllTimeBatchRange(
+  firstActivity: Date,
+  batchIndex: number
+): { start: Date; end: Date; label: string } {
+  const batchStart = new Date(
+    firstActivity.getFullYear(),
+    firstActivity.getMonth() + batchIndex * ALL_TIME_BATCH_SIZE,
+    1
+  );
+  const batchEnd = new Date(
+    batchStart.getFullYear(),
+    batchStart.getMonth() + ALL_TIME_BATCH_SIZE,
+    0,
+    23,
+    59,
+    59,
+    999
+  );
+  const fmt = (d: Date) => d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+  return { start: batchStart, end: batchEnd, label: `${fmt(batchStart)} – ${fmt(batchEnd)}` };
+}
+
 export function buildAllTimeBuckets(
   logs: ShootingLogEntry[],
-  firstActivity: Date
+  firstActivity: Date,
+  batchIndex = 0
 ): ShootingBucket[] {
-  const now = new Date();
+  const { start: batchStart } = getAllTimeBatchRange(firstActivity, batchIndex);
   const buckets: { label: string; makes: number; misses: number; start: Date; end: Date }[] = [];
-  const cursor = new Date(firstActivity.getFullYear(), firstActivity.getMonth(), 1);
 
-  while (cursor <= now) {
-    const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
-    const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0, 23, 59, 59, 999);
-    buckets.push({
-      label: monthStart.toLocaleDateString(undefined, { month: "short" }),
-      makes: 0,
-      misses: 0,
-      start: monthStart,
-      end: monthEnd,
-    });
-    cursor.setMonth(cursor.getMonth() + 1);
-  }
-
-  if (buckets.length === 0) {
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+  for (let i = 0; i < ALL_TIME_BATCH_SIZE; i++) {
+    const monthStart = new Date(batchStart.getFullYear(), batchStart.getMonth() + i, 1);
+    const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0, 23, 59, 59, 999);
     buckets.push({
       label: monthStart.toLocaleDateString(undefined, { month: "short" }),
       makes: 0,
@@ -168,6 +187,14 @@ export function buildAllTimeBuckets(
   }
 
   return aggregateLogs(buckets, logs);
+}
+
+export function canGoNextAllTimeBatch(firstActivity: Date, batchIndex: number): boolean {
+  return batchIndex < getAllTimeBatchCount(firstActivity) - 1;
+}
+
+export function canGoPrevAllTimeBatch(batchIndex: number): boolean {
+  return batchIndex > 0;
 }
 
 export function canGoNextWeek(weekOffset: number): boolean {

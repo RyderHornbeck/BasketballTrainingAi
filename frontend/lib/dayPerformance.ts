@@ -5,7 +5,7 @@ import {
   hydrateSetLogs,
   normalizeSetLogs,
 } from "@/lib/exerciseSetLogs";
-import { ExerciseLogInput } from "@/lib/plan";
+import type { ExerciseLogInput } from "@/lib/plan";
 import { WorkoutExerciseWithClip } from "@/types/plan";
 
 export interface DayPerformanceResult {

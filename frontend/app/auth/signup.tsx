@@ -7,6 +7,7 @@ import { clearOnboardingDraft, loadOnboardingDraft } from "@/lib/onboardingDraft
 import { requestPlanGeneration, submitOnboardingAnswers } from "@/lib/plan";
 import { supabase } from "@/lib/supabase";
 import { Link, router } from "expo-router";
+import { BasketballIcon } from "phosphor-react-native";
 import React, { useState } from "react";
 import {
   KeyboardAvoidingView,
@@ -84,7 +85,7 @@ export default function SignupScreen() {
     >
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.brand}>
-          <Text style={[styles.logo, { color: colors.accent }]}>🏀</Text>
+          <BasketballIcon size={56} color={colors.accent} weight="duotone" />
           <Text style={[styles.appName, { color: colors.text }]}>Create your account</Text>
           <Text style={[styles.tagline, { color: colors.textSecondary }]}>
             Let&apos;s build your personalized training plan.

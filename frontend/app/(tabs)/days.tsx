@@ -11,12 +11,22 @@ import {
   ExerciseLogInput,
   finishWorkoutDay,
   getWorkoutDayWithExercises,
+  getWeeklyWorkoutStats,
   isDayUnlocked,
   requestNextBlockGeneration,
   saveExerciseLog,
+  WeeklyWorkoutStats,
 } from "@/lib/plan";
 import { WorkoutDayWithExercises } from "@/types/plan";
-import { Ionicons } from "@expo/vector-icons";
+import {
+  CaretLeftIcon,
+  ChartLineUpIcon,
+  CheckCircleIcon,
+  BasketballIcon,
+  PercentIcon,
+  PlayCircleIcon,
+  TimerIcon,
+} from "phosphor-react-native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -45,6 +55,11 @@ export default function DaysScreen() {
   const [dayDetail, setDayDetail] = useState<WorkoutDayWithExercises | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [progressVersion, setProgressVersion] = useState(0);
+  const [weeklyStats, setWeeklyStats] = useState<WeeklyWorkoutStats>({
+    shots: 0,
+    accuracy: null,
+    averagePerformance: null,
+  });
   const logsRef = useRef<Map<string, ExerciseLogInput>>(new Map());
   const finishingRef = useRef(false);
   const [retryingBlock, setRetryingBlock] = useState(false);
@@ -113,6 +128,18 @@ export default function DaysScreen() {
     loadDetail();
   }, [loadDetail]);
 
+  const loadWeeklyStats = useCallback(async () => {
+    try {
+      setWeeklyStats(await getWeeklyWorkoutStats());
+    } catch (err) {
+      console.error("Failed to load weekly workout stats:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadWeeklyStats();
+  }, [loadWeeklyStats]);
+
   useEffect(() => {
     setViewMode("overview");
   }, [selectedDayNumber]);
@@ -121,8 +148,9 @@ export default function DaysScreen() {
     return onWorkoutUpdated(() => {
       refreshPlan();
       loadDetail();
+      loadWeeklyStats();
     });
-  }, [refreshPlan, loadDetail]);
+  }, [refreshPlan, loadDetail, loadWeeklyStats]);
 
   const tryAutoFinishDay = useCallback(
     async (detail: WorkoutDayWithExercises) => {
@@ -348,16 +376,35 @@ export default function DaysScreen() {
               </Card>
             </View>
 
-            <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Today&apos;s Goal</Text>
-            <Card style={styles.goalCard}>
-              <Text style={[styles.goalText, { color: colors.text }]}>
-                {dayDetail.focus || "Personalized basketball workout"}
-              </Text>
-              {dayDetail.estimated_minutes ? (
-                <Text style={[styles.goalMeta, { color: colors.textMuted }]}>
-                  ~{dayDetail.estimated_minutes} min
+            <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>This Week</Text>
+            <Card style={styles.weekStatsCard}>
+              <View style={styles.weekStat}>
+                <BasketballIcon size={26} color={colors.accent} weight="duotone" />
+                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Shots</Text>
+                <Text style={[styles.weekStatValue, { color: colors.text }]}>
+                  {weeklyStats.shots}
                 </Text>
-              ) : null}
+              </View>
+              <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
+              <View style={styles.weekStat}>
+                <PercentIcon size={26} color={colors.accent} weight="duotone" />
+                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Accuracy</Text>
+                <Text style={[styles.weekStatValue, { color: colors.text }]}>
+                  {weeklyStats.accuracy != null ? `${weeklyStats.accuracy}%` : "--"}
+                </Text>
+              </View>
+              <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
+              <View style={styles.weekStat}>
+                <ChartLineUpIcon size={26} color={colors.accent} weight="duotone" />
+                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>
+                  Avg. performance
+                </Text>
+                <Text style={[styles.weekStatValue, { color: colors.text }]}>
+                  {weeklyStats.averagePerformance != null
+                    ? `${weeklyStats.averagePerformance}%`
+                    : "--"}
+                </Text>
+              </View>
             </Card>
 
             <Pressable
@@ -382,14 +429,15 @@ export default function DaysScreen() {
                 </Text>
               </View>
               <View style={styles.startWorkoutIcon}>
-                <Ionicons name="play-circle" size={40} color="#FFFFFF" />
+                <PlayCircleIcon size={40} color="#FFFFFF" weight="fill" />
               </View>
             </Pressable>
 
             {dayDetail.completed && (
               <View style={[styles.completedBanner, { backgroundColor: colors.accentMuted }]}>
+                <CheckCircleIcon size={16} color={colors.accent} weight="fill" />
                 <Text style={[styles.completedBannerText, { color: colors.accent }]}>
-                  ✓ Workout completed
+                  Workout completed
                 </Text>
               </View>
             )}
@@ -401,7 +449,7 @@ export default function DaysScreen() {
               style={styles.backRow}
               hitSlop={8}
             >
-              <Ionicons name="chevron-back" size={22} color={colors.accent} />
+              <CaretLeftIcon size={22} color={colors.accent} weight="bold" />
               <Text style={[styles.backText, { color: colors.accent }]}>Back to day overview</Text>
             </Pressable>
 
@@ -411,9 +459,12 @@ export default function DaysScreen() {
                 {dayDetail.exercises.length === 1 ? "exercise" : "exercises"}
               </Text>
               {dayDetail.estimated_minutes ? (
-                <Text style={[styles.workoutHeaderMeta, { color: colors.textSecondary }]}>
-                  ~{dayDetail.estimated_minutes} min workout
-                </Text>
+                <View style={styles.workoutHeaderMetaRow}>
+                  <TimerIcon size={14} color={colors.textSecondary} weight="duotone" />
+                  <Text style={[styles.workoutHeaderMeta, { color: colors.textSecondary }]}>
+                    ~{dayDetail.estimated_minutes} min workout
+                  </Text>
+                </View>
               ) : null}
             </View>
 
@@ -432,8 +483,9 @@ export default function DaysScreen() {
 
             {dayDetail.completed && (
               <View style={[styles.completedBanner, { backgroundColor: colors.accentMuted }]}>
+                <CheckCircleIcon size={16} color={colors.accent} weight="fill" />
                 <Text style={[styles.completedBannerText, { color: colors.accent }]}>
-                  ✓ Workout completed
+                  Workout completed
                 </Text>
               </View>
             )}
@@ -545,19 +597,30 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     paddingHorizontal: 4,
   },
-  goalCard: {
+  weekStatsCard: {
+    flexDirection: "row",
+    alignItems: "stretch",
     marginBottom: 16,
   },
-  goalText: {
-    fontSize: 22,
-    fontWeight: "800",
-    letterSpacing: -0.4,
-    lineHeight: 28,
+  weekStat: {
+    flex: 1,
+    alignItems: "center",
+    gap: 5,
   },
-  goalMeta: {
-    fontSize: 14,
-    fontWeight: "600",
-    marginTop: 8,
+  weekStatDivider: {
+    width: 1,
+    marginVertical: 4,
+  },
+  weekStatLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    textAlign: "center",
+    lineHeight: 14,
+  },
+  weekStatValue: {
+    fontSize: 21,
+    fontWeight: "800",
+    letterSpacing: -0.5,
   },
   startWorkoutCard: {
     flexDirection: "row",
@@ -616,6 +679,11 @@ const styles = StyleSheet.create({
   workoutHeaderMeta: {
     fontSize: 14,
     fontWeight: "600",
+  },
+  workoutHeaderMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
     marginTop: 4,
   },
   drillsLabel: {
@@ -631,7 +699,11 @@ const styles = StyleSheet.create({
     marginTop: 12,
     borderRadius: 14,
     paddingVertical: 16,
+    paddingHorizontal: 16,
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
   },
   completedBannerText: {
     fontWeight: "800",
