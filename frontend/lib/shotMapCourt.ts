@@ -37,6 +37,16 @@ export const THREE_APEX = {
   y: COURT.basketY - COURT.threeR,
 } as const;
 
+const THREE_SHOULDER_Y = 231;
+const THREE_SHOULDER_OFFSET = Math.sqrt(
+  COURT.threeR ** 2 - (THREE_SHOULDER_Y - COURT.basketY) ** 2
+);
+export const THREE_SHOULDER = {
+  y: THREE_SHOULDER_Y,
+  leftX: COURT.basketX - THREE_SHOULDER_OFFSET,
+  rightX: COURT.basketX + THREE_SHOULDER_OFFSET,
+} as const;
+
 export type ShotZoneId =
   | "left_corner_three"
   | "right_corner_three"
@@ -95,7 +105,7 @@ export const SHOT_ZONE_LAYOUTS: ShotZoneLayout[] = [
   {
     id: "left_wing_three",
     name: "Left Wing 3",
-    path: `M ${COURT.sidelineL} ${COURT.topY} L 200 ${COURT.topY} L 185 231 A ${COURT.threeR} ${COURT.threeR} 0 0 0 ${COURT.threeCornerLX} ${COURT.threeCornerY} L ${COURT.sidelineL} ${COURT.threeCornerY} Z`,
+    path: `M ${COURT.sidelineL} ${COURT.topY} L 200 ${COURT.topY} L ${THREE_SHOULDER.leftX} ${THREE_SHOULDER.y} A ${COURT.threeR} ${COURT.threeR} 0 0 0 ${COURT.threeCornerLX} ${COURT.threeCornerY} L ${COURT.sidelineL} ${COURT.threeCornerY} Z`,
     labelX: 105,
     labelY: 205,
     labelSize: 11,
@@ -105,7 +115,7 @@ export const SHOT_ZONE_LAYOUTS: ShotZoneLayout[] = [
   {
     id: "right_wing_three",
     name: "Right Wing 3",
-    path: `M 400 ${COURT.topY} L ${COURT.sidelineR} ${COURT.topY} L ${COURT.sidelineR} ${COURT.threeCornerY} L ${COURT.threeCornerRX} ${COURT.threeCornerY} A ${COURT.threeR} ${COURT.threeR} 0 0 0 415 231 Z`,
+    path: `M 400 ${COURT.topY} L ${COURT.sidelineR} ${COURT.topY} L ${COURT.sidelineR} ${COURT.threeCornerY} L ${COURT.threeCornerRX} ${COURT.threeCornerY} A ${COURT.threeR} ${COURT.threeR} 0 0 0 ${THREE_SHOULDER.rightX} ${THREE_SHOULDER.y} Z`,
     labelX: 495,
     labelY: 205,
     labelSize: 11,
@@ -115,9 +125,9 @@ export const SHOT_ZONE_LAYOUTS: ShotZoneLayout[] = [
   {
     id: "top_of_key_three",
     name: "Top of Key 3",
-    // Outside the shared three-point curve. The reverse cubic exactly matches
-    // the outer edge of center_midrange below.
-    path: `M 200 ${COURT.topY} L 400 ${COURT.topY} L 415 231 C 375 190 225 190 185 231 Z`,
+    // Outside the exact shared three-point arc. Using the same circular arc as
+    // center_midrange keeps both fills clipped to the visible court line.
+    path: `M 200 ${COURT.topY} L 400 ${COURT.topY} L ${THREE_SHOULDER.rightX} ${THREE_SHOULDER.y} A ${COURT.threeR} ${COURT.threeR} 0 0 0 ${THREE_SHOULDER.leftX} ${THREE_SHOULDER.y} Z`,
     labelX: 300,
     labelY: 120,
     labelSize: 12,
@@ -127,7 +137,7 @@ export const SHOT_ZONE_LAYOUTS: ShotZoneLayout[] = [
   {
     id: "left_midrange",
     name: "Left Mid",
-    path: `M ${COURT.threeCornerLX} ${COURT.threeCornerY} A ${COURT.threeR} ${COURT.threeR} 0 0 1 185 231 L 240 ${COURT.ftY} L ${COURT.paintL} ${COURT.ftY} L ${COURT.paintL} 350 Z`,
+    path: `M ${COURT.threeCornerLX} ${COURT.threeCornerY} A ${COURT.threeR} ${COURT.threeR} 0 0 1 ${THREE_SHOULDER.leftX} ${THREE_SHOULDER.y} L 240 ${COURT.ftY} L ${COURT.paintL} ${COURT.ftY} L ${COURT.paintL} 350 Z`,
     labelX: 172,
     labelY: 290,
     labelSize: 11,
@@ -137,7 +147,7 @@ export const SHOT_ZONE_LAYOUTS: ShotZoneLayout[] = [
   {
     id: "right_midrange",
     name: "Right Mid",
-    path: `M 415 231 A ${COURT.threeR} ${COURT.threeR} 0 0 1 ${COURT.threeCornerRX} ${COURT.threeCornerY} L ${COURT.paintR} 350 L ${COURT.paintR} ${COURT.ftY} L 360 ${COURT.ftY} Z`,
+    path: `M ${THREE_SHOULDER.rightX} ${THREE_SHOULDER.y} A ${COURT.threeR} ${COURT.threeR} 0 0 1 ${COURT.threeCornerRX} ${COURT.threeCornerY} L ${COURT.paintR} 350 L ${COURT.paintR} ${COURT.ftY} L 360 ${COURT.ftY} Z`,
     labelX: 428,
     labelY: 290,
     labelSize: 11,
@@ -147,9 +157,9 @@ export const SHOT_ZONE_LAYOUTS: ShotZoneLayout[] = [
   {
     id: "center_midrange",
     name: "Center Mid",
-    // One closed center-midrange section from the three-point arc through the
-    // entire upper free-throw-circle area down to the free-throw line.
-    path: `M 185 231 C 225 190 375 190 415 231 L 360 ${COURT.ftY} L 240 ${COURT.ftY} Z`,
+    // The upper edge is the exact same circular segment used by the visible
+    // three-point line, so the fill cannot spill into the top-of-key zone.
+    path: `M ${THREE_SHOULDER.leftX} ${THREE_SHOULDER.y} A ${COURT.threeR} ${COURT.threeR} 0 0 1 ${THREE_SHOULDER.rightX} ${THREE_SHOULDER.y} L 360 ${COURT.ftY} L 240 ${COURT.ftY} Z`,
     labelX: 300,
     labelY: 254,
     labelSize: 10,
