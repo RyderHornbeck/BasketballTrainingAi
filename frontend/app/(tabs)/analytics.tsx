@@ -25,17 +25,17 @@ export default function AnalyticsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
+  const load = useCallback(async (mode: "initial" | "refresh" | "silent" = "initial") => {
+    if (mode === "refresh") setRefreshing(true);
+    if (mode === "initial") setLoading(true);
     try {
       const data = await getAnalyticsSummary();
       setSummary(data);
     } catch (err) {
       console.error("Failed to load analytics:", err);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (mode === "initial") setLoading(false);
+      if (mode === "refresh") setRefreshing(false);
     }
   }, []);
 
@@ -45,13 +45,13 @@ export default function AnalyticsScreen() {
 
   useEffect(() => {
     return onWorkoutUpdated(() => {
-      load(true);
+      void load("silent");
     });
   }, [load]);
 
   useFocusEffect(
     useCallback(() => {
-      void load(true);
+      void load("refresh");
     }, [load])
   );
 
@@ -76,7 +76,11 @@ export default function AnalyticsScreen() {
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.accent} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => void load("refresh")}
+            tintColor={colors.accent}
+          />
         }
       >
         <Text style={[styles.header, { color: colors.text }]}>Analytics</Text>

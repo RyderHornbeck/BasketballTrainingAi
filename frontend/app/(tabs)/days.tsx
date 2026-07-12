@@ -114,9 +114,9 @@ export default function DaysScreen() {
   const selectedDay = days.find((d) => d.day_number === selectedDayNumber) ?? null;
   const selectedDayId = selectedDay?.id ?? null;
 
-  const loadDetail = useCallback(async () => {
+  const loadDetail = useCallback(async (showLoading = true) => {
     if (!selectedDayId) return;
-    setDetailLoading(true);
+    if (showLoading) setDetailLoading(true);
     try {
       const detail = await getWorkoutDayWithExercises(selectedDayId);
       setDayDetail(detail);
@@ -137,7 +137,7 @@ export default function DaysScreen() {
     } catch (err) {
       console.error("Failed to load day detail:", err);
     } finally {
-      setDetailLoading(false);
+      if (showLoading) setDetailLoading(false);
     }
   }, [selectedDayId]);
 
@@ -176,10 +176,11 @@ export default function DaysScreen() {
   useEffect(() => {
     return onWorkoutUpdated(() => {
       void refreshPlan();
+      void loadDetail(false);
       void loadWeeklyStats();
       void loadCurrentStreak();
     });
-  }, [refreshPlan, loadWeeklyStats, loadCurrentStreak]);
+  }, [refreshPlan, loadDetail, loadWeeklyStats, loadCurrentStreak]);
 
   const tryAutoFinishDay = useCallback(
     async (detail: WorkoutDayWithExercises) => {
