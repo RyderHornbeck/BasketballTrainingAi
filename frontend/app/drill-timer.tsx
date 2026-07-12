@@ -78,8 +78,6 @@ export default function DrillTimerScreen() {
     return () => clearInterval(interval);
   }, [durationSeconds, running, timerAudio]);
 
-  useEffect(() => () => timerAudio.stopAll(), [timerAudio]);
-
   const hasStarted = remainingSeconds < durationSeconds;
   const primaryLabel = running ? "Pause" : remainingSeconds === 0 ? "Start Again" : hasStarted ? "Resume" : "Start";
 

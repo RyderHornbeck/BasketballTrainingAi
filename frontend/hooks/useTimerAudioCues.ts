@@ -1,5 +1,5 @@
 import { useAudioPlayer } from "expo-audio";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 type TimerCue = "halfway" | "tenSeconds" | "complete";
 
@@ -24,6 +24,7 @@ export function useTimerAudioCues() {
     fired: new Set(),
     playbackVersion: 0,
   });
+  const disposedRef = useRef(false);
 
   const players = useMemo(
     () => [halfwayPlayer, tenSecondsPlayer, completePlayer],
@@ -33,10 +34,22 @@ export function useTimerAudioCues() {
   const stopAll = useCallback(() => {
     stateRef.current.playbackVersion += 1;
     for (const player of players) {
-      player.pause();
-      void player.seekTo(0).catch(() => {});
+      try {
+        player.pause();
+        void player.seekTo(0).catch(() => {});
+      } catch {
+        // The player may already have been released during screen teardown.
+      }
     }
   }, [players]);
+
+  useEffect(() => {
+    disposedRef.current = false;
+    return () => {
+      disposedRef.current = true;
+      stopAll();
+    };
+  }, [stopAll]);
 
   const beginRun = useCallback(
     (runId: number, durationSeconds: number) => {
@@ -57,13 +70,19 @@ export function useTimerAudioCues() {
       const player =
         cue === "halfway" ? halfwayPlayer : cue === "tenSeconds" ? tenSecondsPlayer : completePlayer;
       const playbackVersion = stateRef.current.playbackVersion;
-      player.pause();
-      void player
-        .seekTo(0)
-        .then(() => {
-          if (stateRef.current.playbackVersion === playbackVersion) player.play();
-        })
-        .catch(() => {});
+      try {
+        player.pause();
+        void player
+          .seekTo(0)
+          .then(() => {
+            if (!disposedRef.current && stateRef.current.playbackVersion === playbackVersion) {
+              player.play();
+            }
+          })
+          .catch(() => {});
+      } catch {
+        // Ignore a cue request after the player has been released.
+      }
     },
     [completePlayer, halfwayPlayer, tenSecondsPlayer]
   );

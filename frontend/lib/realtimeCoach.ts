@@ -74,6 +74,8 @@ export interface TimerState {
 export interface ClientTimerAction {
   type: "start_timer" | "pause_timer" | "resume_timer" | "stop_timer";
   duration_seconds?: number | null;
+  timer_exercise_id?: string | null;
+  timer_set_number?: number | null;
 }
 
 export interface RealtimeCoachCallbacks {
@@ -324,6 +326,23 @@ export class RealtimeCoachSession {
 
   updateTimer(timer: TimerState): void {
     this.timer = timer;
+  }
+
+  markTimerSetComplete(exerciseId: string, setNumber: number): void {
+    this.sendEvent({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: `The timer just ended. The athlete finished set ${setNumber} of exercise_id ${exerciseId}. Call set_set_completion with completed true for that exact set, then briefly confirm it aloud.`,
+          },
+        ],
+      },
+    });
+    this.sendEvent({ type: "response.create" });
   }
 
   mute(): void {

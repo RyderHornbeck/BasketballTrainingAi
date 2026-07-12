@@ -2,12 +2,14 @@ import { useTheme } from "@/hooks/useTheme";
 import {
   aggregateSetLogs,
   applyAttemptsOverride,
+  applyMinutesOverride,
   buildSetPlan,
   decodeExerciseLogMeta,
   encodeExerciseLogMeta,
   hydrateSetLogs,
   normalizeSetLogs,
   resolveAttemptsOverride,
+  resolveMinutesOverride,
   SetLogEntry,
 } from "@/lib/exerciseSetLogs";
 import { ExerciseLogInput } from "@/lib/plan";
@@ -17,7 +19,7 @@ import { parseDrillDescription } from "@/lib/drillDescription";
 import { WorkoutExerciseWithClip } from "@/types/plan";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { TimerIcon } from "phosphor-react-native";
+import { CaretLeftIcon, CaretRightIcon, TimerIcon } from "phosphor-react-native";
 import { useRouter } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Linking, Pressable, StyleSheet, TextInput as RNTextInput, View } from "react-native";
@@ -220,9 +222,12 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
     const logs = hydrateSetLogs(baseSetPlan, meta, exercise.log ?? undefined);
     return resolveAttemptsOverride(meta, logs);
   });
+  const [minutesOverride, setMinutesOverride] = useState<number | null>(() =>
+    resolveMinutesOverride(decodeExerciseLogMeta(exercise.log?.notes ?? null))
+  );
   const setPlan = useMemo(
-    () => applyAttemptsOverride(baseSetPlan, attemptsOverride),
-    [baseSetPlan, attemptsOverride]
+    () => applyMinutesOverride(applyAttemptsOverride(baseSetPlan, attemptsOverride), minutesOverride),
+    [baseSetPlan, attemptsOverride, minutesOverride]
   );
   const logType = setPlan.logType;
 
@@ -246,6 +251,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
     const meta = decodeExerciseLogMeta(exercise.log?.notes ?? null);
     const hydrated = hydrateSetLogs(baseSetPlan, meta, exercise.log ?? undefined);
     setAttemptsOverride(resolveAttemptsOverride(meta, hydrated));
+    setMinutesOverride(resolveMinutesOverride(meta));
     setSetLogs(hydrated);
     setDifficulty(exercise.log?.difficulty ?? 0);
     setUserNotes(meta.user_notes ?? "");
@@ -277,7 +283,8 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
     nextSets: SetLogEntry[],
     nextDifficulty = difficulty,
     nextNotes = userNotes,
-    nextAttemptsOverride = attemptsOverride
+    nextAttemptsOverride = attemptsOverride,
+    nextMinutesOverride = minutesOverride
   ) => {
     const normalized = normalizeSetLogs(nextSets, setPlan);
     const totals = aggregateSetLogs(normalized, setPlan);
@@ -295,6 +302,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
         set_logs: normalized,
         user_notes: nextNotes.trim() || null,
         per_set_attempts_override: nextAttemptsOverride,
+        per_set_minutes_override: nextMinutesOverride,
       }),
     });
   };
@@ -308,9 +316,9 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
 
   useEffect(() => {
     if (!hasUserEditsRef.current) return;
-    emitLog(setLogs, difficulty, userNotes, attemptsOverride);
+    emitLog(setLogs, difficulty, userNotes, attemptsOverride, minutesOverride);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setLogs, difficulty, userNotes, attemptsOverride, setPlan]);
+  }, [setLogs, difficulty, userNotes, attemptsOverride, minutesOverride, setPlan]);
 
   const syncAttemptsAcrossSets = (text: string) => {
     hasUserEditsRef.current = true;
@@ -376,6 +384,17 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
       },
     });
   };
+
+  const adjustSetTimer = (secondsDelta: number) => {
+    if (!setPlan.perSetMinutes) return;
+    hasUserEditsRef.current = true;
+    const nextMinutes = Math.max(0.5, setPlan.perSetMinutes + secondsDelta / 60);
+    setMinutesOverride(nextMinutes);
+  };
+
+  const setTimerLabel = setPlan.perSetMinutes
+    ? `${Math.round(setPlan.perSetMinutes * 60)}s`
+    : null;
 
   const gradientColors =
     scheme === "dark"
@@ -536,16 +555,27 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
               ]}
             >
               {hasDrillTimer ? (
-                <Pressable
-                  onPress={openDrillTimer}
-                  style={[
-                    styles.drillTimerButton,
-                    { backgroundColor: colors.accentMuted, borderColor: colors.accent },
-                  ]}
-                >
-                  <TimerIcon size={18} color={colors.accent} weight="bold" />
-                  <Text style={[styles.drillTimerButtonText, { color: colors.accent }]}>Timer</Text>
-                </Pressable>
+                <View style={styles.timerControls}>
+                  <Pressable
+                    onPress={openDrillTimer}
+                    style={[
+                      styles.drillTimerButton,
+                      { backgroundColor: colors.accentMuted, borderColor: colors.accent },
+                    ]}
+                  >
+                    <TimerIcon size={18} color={colors.accent} weight="bold" />
+                    <Text style={[styles.drillTimerButtonText, { color: colors.accent }]}>Timer</Text>
+                  </Pressable>
+                  <View style={[styles.timerAdjuster, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}>
+                    <Pressable onPress={() => adjustSetTimer(-30)} hitSlop={6} style={styles.timerAdjustButton}>
+                      <CaretLeftIcon size={17} color={colors.text} weight="bold" />
+                    </Pressable>
+                    <Text style={[styles.timerAdjustText, { color: colors.text }]}>{setTimerLabel}</Text>
+                    <Pressable onPress={() => adjustSetTimer(30)} hitSlop={6} style={styles.timerAdjustButton}>
+                      <CaretRightIcon size={17} color={colors.text} weight="bold" />
+                    </Pressable>
+                  </View>
+                </View>
               ) : null}
               <View style={styles.setRows}>{renderSetRows()}</View>
 
@@ -809,7 +839,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
   },
   drillTimerButton: {
-    alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
@@ -817,11 +846,35 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 13,
     paddingVertical: 9,
-    marginBottom: 12,
   },
   drillTimerButtonText: {
     fontSize: 14,
     fontWeight: "800",
+  },
+  timerControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 12,
+  },
+  timerAdjuster: {
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 14,
+  },
+  timerAdjustButton: {
+    width: 30,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  timerAdjustText: {
+    minWidth: 35,
+    fontSize: 13,
+    fontWeight: "800",
+    textAlign: "center",
   },
   setRows: {
     gap: 10,

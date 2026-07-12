@@ -41,6 +41,8 @@ export function useCoach(dayId: string | null): UseCoachResult {
     accumulated: 0,
     startedAt: 0,
     durationSeconds: null as number | null,
+    exerciseId: null as string | null,
+    setNumber: null as number | null,
   });
   const timerRunIdRef = useRef(0);
   const conversationSummaryRef = useRef("");
@@ -124,6 +126,9 @@ export function useCoach(dayId: string | null): UseCoachResult {
         t.running = false;
         t.accumulated = t.durationSeconds ?? elapsed;
         setTimerRunning(false);
+        if (t.exerciseId && t.setNumber) {
+          sessionRef.current?.markTimerSetComplete(t.exerciseId, t.setNumber);
+        }
       }
 
       setElapsedSeconds(t.running ? elapsed : t.accumulated);
@@ -145,6 +150,8 @@ export function useCoach(dayId: string | null): UseCoachResult {
       t.accumulated = 0;
       t.startedAt = 0;
       t.durationSeconds = null;
+      t.exerciseId = null;
+      t.setNumber = null;
       timerRunIdRef.current += 1;
       timerAudio.stopAll();
     } else if (action.type === "start_timer") {
@@ -153,6 +160,8 @@ export function useCoach(dayId: string | null): UseCoachResult {
       t.startedAt = Date.now();
       t.running = true;
       t.durationSeconds = action.duration_seconds ?? null;
+      t.exerciseId = action.timer_exercise_id ?? null;
+      t.setNumber = action.timer_set_number ?? null;
       if (t.durationSeconds) {
         timerAudio.beginRun(timerRunIdRef.current, t.durationSeconds);
       }

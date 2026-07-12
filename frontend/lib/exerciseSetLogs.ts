@@ -15,6 +15,7 @@ export interface ExerciseLogMeta {
   set_logs?: SetLogEntry[];
   user_notes?: string | null;
   per_set_attempts_override?: number | null;
+  per_set_minutes_override?: number | null;
 }
 
 export interface ExerciseSetPlan {
@@ -90,7 +91,8 @@ export function encodeExerciseLogMeta(meta: ExerciseLogMeta): string | null {
   const hasSets = (meta.set_logs?.length ?? 0) > 0;
   const hasNotes = Boolean(meta.user_notes?.trim());
   const hasAttemptsOverride = meta.per_set_attempts_override != null;
-  if (!hasSets && !hasNotes && !hasAttemptsOverride) return null;
+  const hasMinutesOverride = meta.per_set_minutes_override != null;
+  if (!hasSets && !hasNotes && !hasAttemptsOverride && !hasMinutesOverride) return null;
   return SET_LOG_META_PREFIX + JSON.stringify(meta);
 }
 
@@ -116,6 +118,22 @@ export function applyAttemptsOverride(
     perSetAttempts: attemptsOverride,
     perSetMakes: scaleTargetMakes(plan.perSetMakes, plan.perSetAttempts, attemptsOverride),
   };
+}
+
+export function applyMinutesOverride(
+  plan: ExerciseSetPlan,
+  minutesOverride: number | null | undefined
+): ExerciseSetPlan {
+  if (plan.perSetMinutes == null || minutesOverride == null || minutesOverride <= 0) {
+    return plan;
+  }
+  return { ...plan, perSetMinutes: minutesOverride };
+}
+
+export function resolveMinutesOverride(meta: ExerciseLogMeta): number | null {
+  return meta.per_set_minutes_override != null && meta.per_set_minutes_override > 0
+    ? meta.per_set_minutes_override
+    : null;
 }
 
 export function resolveAttemptsOverride(
