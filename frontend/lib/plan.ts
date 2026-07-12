@@ -19,6 +19,29 @@ export interface WeeklyWorkoutStats {
   averagePerformance: number | null;
 }
 
+export async function getCurrentWorkoutStreak(): Promise<number> {
+  const { data: logs, error } = await supabase
+    .from("workout_day_logs")
+    .select("completed_at")
+    .order("completed_at", { ascending: false });
+
+  if (error) throw new Error(error.message);
+  const completedDays = new Set(
+    (logs ?? []).map((log) => new Date(log.completed_at).toISOString().slice(0, 10))
+  );
+  const cursor = new Date();
+  if (!completedDays.has(cursor.toISOString().slice(0, 10))) {
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  let streak = 0;
+  while (completedDays.has(cursor.toISOString().slice(0, 10))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
 function startOfCurrentWeek(): string {
   const now = new Date();
   const sunday = new Date(now);

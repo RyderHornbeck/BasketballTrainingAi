@@ -60,6 +60,7 @@ const COMPACT_SKILL_LABELS: Record<string, string> = {
 
 const FINISHING_BLUE = { dark: "#5AC8FA", light: "#007AFF" };
 const ANALYTICS_ORANGE = "#F7B379";
+const MID_RANGE_ORANGE = "#F06E02";
 const MISS_GREY = { dark: "#636366", light: "#AEAEB2" };
 
 function polarPoint(
@@ -362,6 +363,10 @@ function ShootingBarChart({
   const barGap = count > 1 ? Math.min(14, usableWidth / count / 4) : 0;
   const barWidth = (usableWidth - barGap * (count - 1)) / count;
   const tickUnit = TICK_HEIGHT + TICK_GAP;
+  const maxTicks = Math.floor(plotHeight / tickUnit);
+  // All bars share this whole-shot value. It is recalculated whenever the
+  // active period changes and therefore gets a different Y-axis maximum.
+  const tickShotValue = Math.max(1, Math.ceil(chartMax / maxTicks));
 
   return (
     <Svg width={width} height={CHART_HEIGHT}>
@@ -390,7 +395,10 @@ function ShootingBarChart({
         const baseY = plotHeight + 8;
         const ticks: React.ReactNode[] = [];
 
-        for (let i = 0; i < bucket.makes; i++) {
+        const makeTicks = Math.round(bucket.makes / tickShotValue);
+        const missTicks = Math.round(bucket.misses / tickShotValue);
+
+        for (let i = 0; i < makeTicks; i++) {
           const y = baseY - (i + 1) * tickUnit;
           ticks.push(
             <Rect
@@ -405,8 +413,8 @@ function ShootingBarChart({
           );
         }
 
-        for (let i = 0; i < bucket.misses; i++) {
-          const y = baseY - (bucket.makes + i + 1) * tickUnit;
+        for (let i = 0; i < missTicks; i++) {
+          const y = baseY - (makeTicks + i + 1) * tickUnit;
           ticks.push(
             <Rect
               key={`miss-${i}`}
@@ -642,18 +650,24 @@ export function CompletionLineChart({ points }: { points: CompletionTrendPoint[]
 export function ShootingTrendLineChart({
   buckets,
 }: {
-  buckets: { label: string; shootingPct: number | null; finishingPct: number | null }[];
+  buckets: {
+    label: string;
+    threePointPct: number | null;
+    midrangePct: number | null;
+    finishingPct: number | null;
+  }[];
 }) {
   const { colors, scheme } = useTheme();
   const finishingColor = scheme === "dark" ? FINISHING_BLUE.dark : FINISHING_BLUE.light;
+  const hasThreePoint = buckets.some((b) => b.threePointPct != null);
+  const hasMidrange = buckets.some((b) => b.midrangePct != null);
 
-  const hasShooting = buckets.some((b) => b.shootingPct != null);
   const hasFinishing = buckets.some((b) => b.finishingPct != null);
 
-  if (!hasShooting && !hasFinishing) {
+  if (!hasThreePoint && !hasMidrange && !hasFinishing) {
     return (
       <Text style={{ color: colors.textSecondary }}>
-        Log shooting and finishing drills to see your percentage trends.
+        Log shots and finishing drills to see your percentage trends.
       </Text>
     );
   }
@@ -666,11 +680,18 @@ export function ShootingTrendLineChart({
   const step = buckets.length > 1 ? usableWidth / (buckets.length - 1) : 0;
   const maxValue = 100;
 
-  const shootingPoints = buckets.map((point, index) => {
+  const threePointPoints = buckets.map((point, index) => {
     const x = leftPad + index * step;
-    const value = point.shootingPct ?? 0;
+    const value = point.threePointPct ?? 0;
     const y = topPad + plotHeight - (value / maxValue) * plotHeight;
-    return { x, y, label: point.label, value: point.shootingPct };
+    return { x, y, label: point.label, value: point.threePointPct };
+  });
+
+  const midrangePoints = buckets.map((point, index) => {
+    const x = leftPad + index * step;
+    const value = point.midrangePct ?? 0;
+    const y = topPad + plotHeight - (value / maxValue) * plotHeight;
+    return { x, y, label: point.label, value: point.midrangePct };
   });
 
   const finishingPoints = buckets.map((point, index) => {
@@ -680,7 +701,8 @@ export function ShootingTrendLineChart({
     return { x, y, label: point.label, value: point.finishingPct };
   });
 
-  const shootingLine = shootingPoints.map((p) => `${p.x},${p.y}`).join(" ");
+  const threePointLine = threePointPoints.map((p) => `${p.x},${p.y}`).join(" ");
+  const midrangeLine = midrangePoints.map((p) => `${p.x},${p.y}`).join(" ");
   const finishingLine = finishingPoints.map((p) => `${p.x},${p.y}`).join(" ");
 
   return (
@@ -688,7 +710,11 @@ export function ShootingTrendLineChart({
       <View style={styles.legendRow}>
         <View style={styles.legendItem}>
           <View style={[styles.legendDot, { backgroundColor: ANALYTICS_ORANGE }]} />
-          <Text style={[styles.legendText, { color: colors.textSecondary }]}>Shooting</Text>
+          <Text style={[styles.legendText, { color: colors.textSecondary }]}>3-Pointers</Text>
+        </View>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendDot, { backgroundColor: MID_RANGE_ORANGE }]} />
+          <Text style={[styles.legendText, { color: colors.textSecondary }]}>Mid-range</Text>
         </View>
         <View style={styles.legendItem}>
           <View style={[styles.legendDot, { backgroundColor: finishingColor }]} />
@@ -725,9 +751,19 @@ export function ShootingTrendLineChart({
             strokeLinecap="round"
           />
         ) : null}
-        {hasShooting ? (
+        {hasMidrange ? (
           <Polyline
-            points={shootingLine}
+            points={midrangeLine}
+            fill="none"
+            stroke={MID_RANGE_ORANGE}
+            strokeWidth={2.5}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        ) : null}
+        {hasThreePoint ? (
+          <Polyline
+            points={threePointLine}
             fill="none"
             stroke={ANALYTICS_ORANGE}
             strokeWidth={2.5}
@@ -735,10 +771,15 @@ export function ShootingTrendLineChart({
             strokeLinecap="round"
           />
         ) : null}
-        {shootingPoints
+        {threePointPoints
           .filter((p) => p.value != null)
           .map((point) => (
-            <Circle key={`shoot-${point.label}`} cx={point.x} cy={point.y} r={3.5} fill={ANALYTICS_ORANGE} />
+            <Circle key={`three-${point.label}`} cx={point.x} cy={point.y} r={3.5} fill={ANALYTICS_ORANGE} />
+          ))}
+        {midrangePoints
+          .filter((p) => p.value != null)
+          .map((point) => (
+            <Circle key={`mid-${point.label}`} cx={point.x} cy={point.y} r={3.5} fill={MID_RANGE_ORANGE} />
           ))}
         {finishingPoints
           .filter((p) => p.value != null)

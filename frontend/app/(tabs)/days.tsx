@@ -10,6 +10,7 @@ import { calculateDayPerformance, getPerformanceColor } from "@/lib/dayPerforman
 import {
   ExerciseLogInput,
   finishWorkoutDay,
+  getCurrentWorkoutStreak,
   getWorkoutDayWithExercises,
   getWeeklyWorkoutStats,
   isDayUnlocked,
@@ -23,6 +24,7 @@ import {
   ChartLineUpIcon,
   CheckCircleIcon,
   BasketballIcon,
+  FlameIcon,
   PercentIcon,
   PlayCircleIcon,
   TimerIcon,
@@ -60,6 +62,7 @@ export default function DaysScreen() {
     accuracy: null,
     averagePerformance: null,
   });
+  const [currentStreak, setCurrentStreak] = useState(0);
   const logsRef = useRef<Map<string, ExerciseLogInput>>(new Map());
   const finishingRef = useRef(false);
   const [retryingBlock, setRetryingBlock] = useState(false);
@@ -140,6 +143,18 @@ export default function DaysScreen() {
     loadWeeklyStats();
   }, [loadWeeklyStats]);
 
+  const loadCurrentStreak = useCallback(async () => {
+    try {
+      setCurrentStreak(await getCurrentWorkoutStreak());
+    } catch (err) {
+      console.error("Failed to load workout streak:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCurrentStreak();
+  }, [loadCurrentStreak]);
+
   useEffect(() => {
     setViewMode("overview");
   }, [selectedDayNumber]);
@@ -149,8 +164,9 @@ export default function DaysScreen() {
       refreshPlan();
       loadDetail();
       loadWeeklyStats();
+      loadCurrentStreak();
     });
-  }, [refreshPlan, loadDetail, loadWeeklyStats]);
+  }, [refreshPlan, loadDetail, loadWeeklyStats, loadCurrentStreak]);
 
   const tryAutoFinishDay = useCallback(
     async (detail: WorkoutDayWithExercises) => {
@@ -276,6 +292,20 @@ export default function DaysScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: "transparent" }]} edges={["top"]}>
+      <View style={styles.pageHeader}>
+        <Text style={[styles.pageTitle, { color: colors.text }]}>Workouts</Text>
+        <View style={styles.streakBadge}>
+          <FlameIcon size={23} color="#C65A08" weight="fill" />
+          <Text
+            style={[
+              styles.streakValue,
+              { color: currentStreak > 0 ? colors.text : colors.textMuted },
+            ]}
+          >
+            {currentStreak}
+          </Text>
+        </View>
+      </View>
       <DaySelector
         days={days}
         selectedDayNumber={selectedDayNumber ?? 1}
@@ -499,6 +529,27 @@ export default function DaysScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  pageHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingTop: 4,
+    paddingBottom: 6,
+  },
+  pageTitle: {
+    fontSize: 28,
+    fontWeight: "800",
+  },
+  streakBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  streakValue: {
+    fontSize: 18,
+    fontWeight: "800",
   },
   center: {
     flex: 1,

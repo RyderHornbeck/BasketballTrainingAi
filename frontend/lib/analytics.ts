@@ -43,7 +43,12 @@ export interface AnalyticsSummary {
   weakestSkill: string | null;
   weeklyProgress: { label: string; minutes: number }[];
   weeklyShooting: { label: string; pct: number | null; makes: number; attempts: number }[];
-  weeklyPctTrend: { label: string; shootingPct: number | null; finishingPct: number | null }[];
+  weeklyPctTrend: {
+    label: string;
+    threePointPct: number | null;
+    midrangePct: number | null;
+    finishingPct: number | null;
+  }[];
   categoryStats: CategoryStats[];
   recentWorkouts: {
     id: string;
@@ -274,12 +279,19 @@ function computeWeeklyProgress(logs: any[]): { label: string; minutes: number }[
 
 function computeWeeklyPctTrend(
   exerciseLogs: any[]
-): { label: string; shootingPct: number | null; finishingPct: number | null }[] {
+): {
+  label: string;
+  threePointPct: number | null;
+  midrangePct: number | null;
+  finishingPct: number | null;
+}[] {
   const now = new Date();
   const buckets: {
     label: string;
-    shootingMakes: number;
-    shootingAttempts: number;
+    threePointMakes: number;
+    threePointAttempts: number;
+    midrangeMakes: number;
+    midrangeAttempts: number;
     finishingMakes: number;
     finishingAttempts: number;
     start: Date;
@@ -295,8 +307,10 @@ function computeWeeklyPctTrend(
     start.setHours(0, 0, 0, 0);
     buckets.push({
       label: `W${6 - i}`,
-      shootingMakes: 0,
-      shootingAttempts: 0,
+      threePointMakes: 0,
+      threePointAttempts: 0,
+      midrangeMakes: 0,
+      midrangeAttempts: 0,
       finishingMakes: 0,
       finishingAttempts: 0,
       start,
@@ -316,8 +330,15 @@ function computeWeeklyPctTrend(
           bucket.finishingMakes += makes;
           bucket.finishingAttempts += attempts;
         } else if (category === "shooting" || attempts > 0) {
-          bucket.shootingMakes += makes;
-          bucket.shootingAttempts += attempts;
+          const name = log.workout_exercises?.name ?? "";
+          const isThreePoint = /(?:3[\s-]?(?:point|pt)|three[\s-]?point)/i.test(name);
+          if (isThreePoint) {
+            bucket.threePointMakes += makes;
+            bucket.threePointAttempts += attempts;
+          } else {
+            bucket.midrangeMakes += makes;
+            bucket.midrangeAttempts += attempts;
+          }
         }
         break;
       }
@@ -326,8 +347,14 @@ function computeWeeklyPctTrend(
 
   return buckets.map((b) => ({
     label: b.label,
-    shootingPct:
-      b.shootingAttempts > 0 ? Math.round((b.shootingMakes / b.shootingAttempts) * 100) : null,
+    threePointPct:
+      b.threePointAttempts > 0
+        ? Math.round((b.threePointMakes / b.threePointAttempts) * 100)
+        : null,
+    midrangePct:
+      b.midrangeAttempts > 0
+        ? Math.round((b.midrangeMakes / b.midrangeAttempts) * 100)
+        : null,
     finishingPct:
       b.finishingAttempts > 0
         ? Math.round((b.finishingMakes / b.finishingAttempts) * 100)
