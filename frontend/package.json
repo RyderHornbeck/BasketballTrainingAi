@@ -5,8 +5,11 @@
   "private": true,
   "scripts": {
     "start": "expo start",
+    "start:dev-client": "expo start --dev-client",
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "build:dev:android": "npx eas-cli build --profile development --platform android",
+    "build:dev:ios": "npx eas-cli build --profile development --platform ios",
     "web": "expo start --web",
     "lint": "expo lint"
   },
@@ -54,5 +57,15 @@
     "eslint": "^9.0.0",
     "eslint-config-expo": "~57.0.0",
     "typescript": "~6.0.3"
+  },
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "react-native-incall-manager",
+          "react-native-webrtc"
+        ]
+      }
+    }
   }
 }

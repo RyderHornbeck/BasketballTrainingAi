@@ -35,7 +35,7 @@ export function OnboardingStep({
   nextDisabled,
   nextLoading,
 }: OnboardingStepProps) {
-  const { colors, scheme } = useTheme();
+  const { colors } = useTheme();
   const insets = useSafeAreaInsets();
 
   const progress = useSharedValue(step / totalSteps);
@@ -81,19 +81,7 @@ export function OnboardingStep({
           <Text style={[styles.subtitle, { color: colors.textSecondary }]}>{subtitle}</Text>
         ) : null}
 
-        <View
-          style={[
-            styles.card,
-            {
-              backgroundColor: colors.card,
-              borderColor: colors.border,
-              shadowColor: colors.shadow,
-            },
-            scheme === "dark" ? styles.cardShadowDark : styles.cardShadowLight,
-          ]}
-        >
-          {children}
-        </View>
+        <View style={styles.questions}>{children}</View>
       </ScrollView>
 
       <View
@@ -164,23 +152,8 @@ const styles = StyleSheet.create({
     marginTop: 8,
     lineHeight: 21,
   },
-  card: {
+  questions: {
     marginTop: 24,
-    borderRadius: 26,
-    borderWidth: 1,
-    padding: 20,
-  },
-  cardShadowDark: {
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.45,
-    shadowRadius: 16,
-    elevation: 6,
-  },
-  cardShadowLight: {
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
-    shadowRadius: 14,
-    elevation: 4,
   },
   footer: {
     flexDirection: "row",

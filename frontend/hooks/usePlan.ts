@@ -72,28 +72,26 @@ export function usePlan(): UsePlanResult {
   const isGenerating = generationRequest?.status === "pending" || generationRequest?.status === "generating";
 
   useEffect(() => {
-    if (
-      generationRequest?.status === "failed" &&
-      generationRequest.generation_type === "extend"
-    ) {
-      rolloverAttemptRef.current = null;
-    }
-  }, [generationRequest]);
-
-  useEffect(() => {
     if (!plan || days.length === 0 || isGenerating) return;
     const maxDayNumber = Math.max(...days.map((day) => day.day_number ?? 0));
     const blockExhausted = maxDayNumber > 0 && days.every((day) => day.completed);
     if (!blockExhausted) return;
 
     const nextBlockIndex = Math.max(...days.map((day) => day.block_index ?? 1)) + 1;
+    const latestExtensionFailed =
+      generationRequest?.status === "failed" &&
+      generationRequest.generation_type === "extend" &&
+      generationRequest.target_plan_id === plan.id &&
+      generationRequest.block_index === nextBlockIndex;
+    if (latestExtensionFailed) return;
+
     const attemptKey = `${plan.id}:${nextBlockIndex}`;
     if (rolloverAttemptRef.current === attemptKey) return;
     rolloverAttemptRef.current = attemptKey;
     requestNextBlockGeneration(plan.id, nextBlockIndex)
       .then(load)
       .catch((err) => console.error("Automatic block generation failed:", err));
-  }, [days, isGenerating, load, plan]);
+  }, [days, generationRequest, isGenerating, load, plan]);
 
   useEffect(() => {
     if (isGenerating) {

@@ -7,7 +7,6 @@
     "icon": "./assets/images/icon.png",
     "scheme": "hoopplan",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.hoopplan.app",
@@ -40,6 +39,7 @@
     },
     "plugins": [
       "expo-router",
+      "expo-dev-client",
       [
         "expo-splash-screen",
         {
@@ -64,10 +64,6 @@
       ],
       "expo-config-plugin-incall-manager"
     ],
-    "notification": {
-      "icon": "./assets/images/icon.png",
-      "color": "#FF7A1A"
-    },
     "extra": {
       "eas": {
         "projectId": "2b536ebc-e798-403b-bc5c-26d472cbaa4f"

@@ -97,7 +97,7 @@ export default function AnalyticsScreen() {
         </Card>
 
         <View style={styles.chartCard}>
-          <ShotMap data={summary.shotMap} />
+          <ShotMap logs={summary.shotMapLogs} />
         </View>
 
         <Card style={styles.chartCard}>

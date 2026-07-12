@@ -292,7 +292,13 @@ export default function DaysScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: "transparent" }]} edges={["top"]}>
-      <View style={styles.pageHeader}>
+      <View style={styles.selectorHeader}>
+        <DaySelector
+          days={days}
+          selectedDayNumber={selectedDayNumber ?? 1}
+          currentDayNumber={defaultDayNumber ?? 1}
+          onSelect={handleSelectDay}
+        />
         <View style={styles.streakBadge}>
           <FireIcon size={23} color="#F7B379" weight="fill" />
           <Text
@@ -305,12 +311,6 @@ export default function DaysScreen() {
           </Text>
         </View>
       </View>
-      <DaySelector
-        days={days}
-        selectedDayNumber={selectedDayNumber ?? 1}
-        currentDayNumber={defaultDayNumber ?? 1}
-        onSelect={handleSelectDay}
-      />
       {plan &&
       generationRequest?.generation_type === "extend" &&
       (generationRequest.status === "pending" || generationRequest.status === "generating") ? (
@@ -426,7 +426,7 @@ export default function DaysScreen() {
               <View style={styles.weekStat}>
                 <ChartLineUpIcon size={26} color={colors.accent} weight="duotone" />
                 <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>
-                  Avg. performance
+                  Weekly perf
                 </Text>
                 <Text style={[styles.weekStatValue, { color: colors.text }]}>
                   {weeklyStats.averagePerformance != null
@@ -529,15 +529,14 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  pageHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "flex-end",
-    paddingHorizontal: 20,
-    paddingTop: 4,
-    paddingBottom: 6,
+  selectorHeader: {
+    position: "relative",
   },
   streakBadge: {
+    position: "absolute",
+    top: 14,
+    right: 28,
+    zIndex: 30,
     flexDirection: "row",
     alignItems: "center",
     gap: 5,

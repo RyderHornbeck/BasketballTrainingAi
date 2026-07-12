@@ -1,37 +1,43 @@
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
-import {
-  ShotMapData,
-  ShotMapViewMode,
-  zoneHeatColor,
-} from "@/lib/shotMap";
+import { computeShotMapData, ShotMapLogEntry, zoneHeatColor } from "@/lib/shotMap";
 import {
   buildCourtMarkings,
   COURT,
   COURT_VIEWBOX,
   SHOT_ZONE_LAYOUTS,
 } from "@/lib/shotMapCourt";
+import { getWeekRange } from "@/lib/shootingAnalytics";
+import { CaretLeftIcon, CaretRightIcon } from "phosphor-react-native";
 import React, { useMemo, useState } from "react";
 import { Dimensions, Pressable, StyleSheet, View } from "react-native";
 import Svg, { Circle, G, Line, Path, Rect, Text as SvgText } from "react-native-svg";
 
 const DIVIDER_COLOR = "#F7B379";
 const COURT_LINE_COLOR = "#F7B379";
-const COURT_FLOOR = "#F3E7D8";
 
 interface ShotMapProps {
-  data: ShotMapData;
+  logs: ShotMapLogEntry[];
   width?: number;
-  /** Optional explicit shot coordinates for dots mode */
-  shots?: { x: number; y: number; made: boolean }[];
 }
 
-export function ShotMap({ data, width, shots }: ShotMapProps) {
-  const { colors } = useTheme();
-  const [mode, setMode] = useState<ShotMapViewMode>("heatmap");
+export function ShotMap({ logs, width }: ShotMapProps) {
+  const { colors, scheme } = useTheme();
+  const [weekOffset, setWeekOffset] = useState(0);
   const screenWidth = Dimensions.get("window").width;
   const mapWidth = width ?? screenWidth - 76;
   const courtHeight = (mapWidth * COURT_VIEWBOX.height) / COURT_VIEWBOX.width;
+  const weekRange = useMemo(() => getWeekRange(weekOffset), [weekOffset]);
+  const data = useMemo(
+    () =>
+      computeShotMapData(
+        logs.filter((log) => {
+          const date = new Date(log.created_at);
+          return date >= weekRange.start && date <= weekRange.end;
+        })
+      ),
+    [logs, weekRange]
+  );
 
   const zoneStatsById = useMemo(
     () => Object.fromEntries(data.zones.map((zone) => [zone.id, zone])),
@@ -40,15 +46,15 @@ export function ShotMap({ data, width, shots }: ShotMapProps) {
 
   const courtLines = useMemo(() => buildCourtMarkings(), []);
   const hasShotData = data.totalAttempts > 0;
-  const dotPoints = shots ?? data.dots;
+  const courtFloor = scheme === "dark" ? "#292522" : "#F3E7D8";
 
   return (
-    <View style={[styles.card, { backgroundColor: "#FFFFFF", borderColor: colors.border }]}>
+    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <View style={styles.headerRow}>
         <View style={styles.headerLeft}>
           <Text style={[styles.title, { color: colors.text }]}>Shot Map</Text>
           <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-            Where you shoot best — this week
+            Where you shoot best
           </Text>
         </View>
         <View style={styles.overallWrap}>
@@ -59,31 +65,28 @@ export function ShotMap({ data, width, shots }: ShotMapProps) {
         </View>
       </View>
 
-      <View style={styles.toggleRow}>
-        <View style={[styles.toggle, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}>
-          {(["heatmap", "dots"] as ShotMapViewMode[]).map((option) => {
-            const selected = mode === option;
-            return (
-              <Pressable
-                key={option}
-                onPress={() => setMode(option)}
-                style={[
-                  styles.toggleButton,
-                  selected && { backgroundColor: DIVIDER_COLOR },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.toggleText,
-                    { color: selected ? "#FFFFFF" : colors.textSecondary },
-                  ]}
-                >
-                  {option === "heatmap" ? "Heatmap" : "Dots"}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
+      <View style={styles.weekNavRow}>
+        <Pressable
+          onPress={() => setWeekOffset((value) => value + 1)}
+          hitSlop={8}
+          style={[styles.weekNavButton, { borderColor: colors.border }]}
+        >
+          <CaretLeftIcon size={18} color={colors.text} weight="bold" />
+        </Pressable>
+        <Text style={[styles.weekNavLabel, { color: colors.textSecondary }]}>
+          {weekRange.label}
+        </Text>
+        <Pressable
+          onPress={() => setWeekOffset((value) => Math.max(0, value - 1))}
+          disabled={weekOffset === 0}
+          hitSlop={8}
+          style={[
+            styles.weekNavButton,
+            { borderColor: colors.border, opacity: weekOffset > 0 ? 1 : 0.35 },
+          ]}
+        >
+          <CaretRightIcon size={18} color={colors.text} weight="bold" />
+        </Pressable>
       </View>
 
       <Svg
@@ -93,24 +96,46 @@ export function ShotMap({ data, width, shots }: ShotMapProps) {
         preserveAspectRatio="xMidYMid meet"
       >
         {/* Court floor */}
-        <Rect x={0} y={0} width={COURT_VIEWBOX.width} height={COURT_VIEWBOX.height} rx={12} fill={COURT_FLOOR} />
+        <Rect x={0} y={0} width={COURT_VIEWBOX.width} height={COURT_VIEWBOX.height} rx={12} fill={courtFloor} />
 
-        {/* 1) Zone fills (heatmap) or transparent background (dots) */}
-        {mode === "heatmap"
-          ? SHOT_ZONE_LAYOUTS.map((zone) => {
-              const stats = zoneStatsById[zone.id];
-              const hasData = (stats?.attempted ?? 0) > 0;
-              const fill = zoneHeatColor(stats?.pct ?? null, hasData);
-              return (
-                <Path
-                  key={`zone-fill-${zone.id}`}
-                  d={zone.path}
-                  fill={fill}
-                  stroke="none"
-                />
-              );
-            })
-          : null}
+        {/* 1) Zone heatmap fills */}
+        {SHOT_ZONE_LAYOUTS.map((zone) => {
+          const stats = zoneStatsById[zone.id];
+          const hasData = (stats?.attempted ?? 0) > 0;
+          const fill = zoneHeatColor(stats?.pct ?? null, hasData, scheme === "dark");
+          return (
+            <Path
+              key={`zone-fill-${zone.id}`}
+              d={zone.path}
+              fill={fill}
+              stroke="none"
+            />
+          );
+        })}
+
+        {/* Thin zone boundaries clarify the radial partition without obscuring court lines. */}
+        {SHOT_ZONE_LAYOUTS.filter(
+          (zone) =>
+            zone.id !== "top_of_key_three" && zone.id !== "center_midrange"
+        ).map((zone) => (
+          <Path
+            key={`zone-boundary-${zone.id}`}
+            d={zone.path}
+            fill="none"
+            stroke={DIVIDER_COLOR}
+            strokeWidth={1.6}
+          />
+        ))}
+
+        {/* Unique center dividers. The shared three-point curve itself is
+            rendered once below as a court marking, avoiding a doubled arc. */}
+        <G stroke={DIVIDER_COLOR} strokeWidth={2} fill="none">
+          <Line x1={200} y1={COURT.topY} x2={400} y2={COURT.topY} />
+          <Line x1={200} y1={COURT.topY} x2={185} y2={231} />
+          <Line x1={400} y1={COURT.topY} x2={415} y2={231} />
+          <Line x1={240} y1={COURT.ftY} x2={185} y2={231} />
+          <Line x1={360} y1={COURT.ftY} x2={415} y2={231} />
+        </G>
 
         {/* 2) Court markings — always above fills */}
         <G stroke={COURT_LINE_COLOR} strokeWidth={1.6} fill="none">
@@ -141,54 +166,43 @@ export function ShotMap({ data, width, shots }: ShotMapProps) {
           strokeWidth={1.8}
         />
 
-        {/* 3) Labels (heatmap) or dots */}
-        {mode === "heatmap"
-          ? SHOT_ZONE_LAYOUTS.map((zone) => {
-              const stats = zoneStatsById[zone.id];
-              const attempted = stats?.attempted ?? 0;
-              const made = stats?.made ?? 0;
-              const hasData = attempted > 0;
-              const pctLabel = hasData && stats?.pct != null ? `${stats.pct}%` : "—";
-              const ratioLabel = `${made}/${attempted}`;
-              const textColor = hasData ? "#FFFFFF" : "#5C5C5C";
-              const pctSize = zone.labelSize ?? 12;
-              const ratioSize = zone.ratioSize ?? 9;
+        {/* 3) Zone labels */}
+        {SHOT_ZONE_LAYOUTS.map((zone) => {
+          const stats = zoneStatsById[zone.id];
+          const attempted = stats?.attempted ?? 0;
+          const made = stats?.made ?? 0;
+          const hasData = attempted > 0;
+          const pctLabel = hasData && stats?.pct != null ? `${stats.pct}%` : "—";
+          const ratioLabel = `${made}/${attempted}`;
+          const textColor = hasData ? "#FFFFFF" : colors.textSecondary;
+          const pctSize = (zone.labelSize ?? 12) + 8;
+          const ratioSize = (zone.ratioSize ?? 9) + 4;
 
-              return (
-                <G key={`zone-label-${zone.id}`}>
-                  <SvgText
-                    x={zone.labelX}
-                    y={zone.labelY}
-                    fill={textColor}
-                    fontSize={pctSize}
-                    fontWeight="700"
-                    textAnchor="middle"
-                  >
-                    {pctLabel}
-                  </SvgText>
-                  <SvgText
-                    x={zone.labelX}
-                    y={zone.labelY + pctSize + 2}
-                    fill={textColor}
-                    fontSize={ratioSize}
-                    fontWeight="600"
-                    textAnchor="middle"
-                  >
-                    {ratioLabel}
-                  </SvgText>
-                </G>
-              );
-            })
-          : dotPoints.map((dot, index) => (
-              <Circle
-                key={`dot-${index}`}
-                cx={dot.x}
-                cy={dot.y}
-                r={3.2}
-                fill={dot.made ? "#58A86C" : "#D66058"}
-                opacity={0.92}
-              />
-            ))}
+          return (
+            <G key={`zone-label-${zone.id}`}>
+              <SvgText
+                x={zone.labelX}
+                y={zone.labelY}
+                fill={textColor}
+                fontSize={pctSize}
+                fontWeight="700"
+                textAnchor="middle"
+              >
+                {pctLabel}
+              </SvgText>
+              <SvgText
+                x={zone.labelX}
+                y={zone.labelY + pctSize + 2}
+                fill={textColor}
+                fontSize={ratioSize}
+                fontWeight="600"
+                textAnchor="middle"
+              >
+                {ratioLabel}
+              </SvgText>
+            </G>
+          );
+        })}
       </Svg>
 
       {!hasShotData ? (
@@ -198,8 +212,9 @@ export function ShotMap({ data, width, shots }: ShotMapProps) {
       ) : null}
 
       <View style={styles.legendRow}>
-        <LegendSwatch color="#58A86C" label="≥ 50%" />
-        <LegendSwatch color="#E8A848" label="30–50%" />
+        <LegendSwatch color="#22C55E" label="≥ 80%" />
+        <LegendSwatch color="#58A86C" label="50–79%" />
+        <LegendSwatch color="#E8A848" label="30–49%" />
         <LegendSwatch color="#D66058" label="< 30%" />
       </View>
     </View>
@@ -258,24 +273,25 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginTop: 2,
   },
-  toggleRow: {
-    alignItems: "flex-end",
-    marginBottom: 10,
-  },
-  toggle: {
+  weekNavRow: {
     flexDirection: "row",
-    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    marginBottom: 12,
+  },
+  weekNavButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     borderWidth: 1,
-    padding: 3,
-    gap: 2,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  toggleButton: {
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  toggleText: {
-    fontSize: 11,
+  weekNavLabel: {
+    minWidth: 140,
+    textAlign: "center",
+    fontSize: 13,
     fontWeight: "700",
   },
   emptyText: {
@@ -287,13 +303,13 @@ const styles = StyleSheet.create({
   legendRow: {
     flexDirection: "row",
     justifyContent: "center",
-    gap: 14,
+    gap: 8,
     marginTop: 12,
   },
   legendItem: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 4,
   },
   legendSwatch: {
     width: 12,
@@ -301,7 +317,7 @@ const styles = StyleSheet.create({
     borderRadius: 3,
   },
   legendLabel: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: "600",
   },
 });

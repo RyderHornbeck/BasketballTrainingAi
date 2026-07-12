@@ -32,15 +32,6 @@ export interface SkillProfile {
   workoutsInfluencing: number;
 }
 
-const CATEGORY_TEXT: Record<RadarSkillKey, RegExp> = {
-  shooting: /shoot|shot|three|midrange|free throw/i,
-  ball_handling: /handl|dribbl|control|turnover/i,
-  finishing: /finish|layup|rim|mikan|floater/i,
-  defense: /defen|on.ball|closeout/i,
-  conditioning: /condition|cardio|stamina|endurance|gas/i,
-  basketball_iq: /basketball iq|decision|read|vision|awareness/i,
-};
-
 const CATEGORY_ALIASES: Record<string, RadarSkillKey | null> = {
   shooting: "shooting",
   ball_handling: "ball_handling",
@@ -94,10 +85,10 @@ function baselineForSkill(
 ): number {
   if (!answers) return 50;
   const raw = Number.parseInt(String(answers[skill.levelField] ?? "5"), 10);
-  let baseline = clamp((Number.isFinite(raw) ? raw : 5) * 10, 25, 85);
-  if (CATEGORY_TEXT[skill.key].test(answers.weaknesses ?? "")) baseline -= 10;
-  if (CATEGORY_TEXT[skill.key].test(answers.strengths ?? "")) baseline += 10;
-  return clamp(baseline);
+  const selfRating = clamp(Number.isFinite(raw) ? raw : 5, 0, 10);
+  // Onboarding establishes only a 20–70 baseline. Logged workout performance
+  // can then move the score outside that range as confidence grows.
+  return 20 + selfRating * 5;
 }
 
 function scoreSetEntry(entry: SetLogEntry, plan: ExerciseSetPlan): number {

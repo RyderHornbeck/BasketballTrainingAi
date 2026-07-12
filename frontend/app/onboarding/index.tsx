@@ -7,8 +7,8 @@ import { loadOnboardingDraft, saveOnboardingDraft } from "@/lib/onboardingDraft"
 import { requestPlanGeneration, submitOnboardingAnswers } from "@/lib/plan";
 import { OnboardingFormData } from "@/types/plan";
 import { Text } from "@/components/Text";
-import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
+import { CheckCircleIcon } from "phosphor-react-native";
 import React, { useEffect, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 
@@ -25,6 +25,16 @@ const GOALS = [
   "Become an all-around better player",
 ];
 const POSITIONS = ["Guard", "Wing", "Big", "Unknown"];
+const WEAKNESS_OPTIONS = [
+  "Shooting",
+  "Ball handling",
+  "Finishing",
+  "Defense",
+  "Footwork",
+  "Conditioning",
+  "Strength",
+  "Basketball IQ",
+];
 const EQUIPMENT_OPTIONS = ["Basketball", "Cones", "Resistance bands", "Weights", "None"];
 const INTENSITY_OPTIONS = ["Light", "Medium", "Hard", "Extremely hard"];
 const DAYS_PER_WEEK_OPTIONS = [1, 2, 3, 4, 5, 6, 7];
@@ -94,6 +104,19 @@ export default function OnboardingScreen() {
         ...prev,
         equipment: has ? withoutNone.filter((e) => e !== option) : [...withoutNone, option],
       };
+    });
+  };
+
+  const toggleWeakness = (option: string) => {
+    setForm((prev) => {
+      const selected = prev.weaknesses
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const next = selected.includes(option)
+        ? selected.filter((value) => value !== option)
+        : [...selected, option];
+      return { ...prev, weaknesses: next.join(", ") };
     });
   };
 
@@ -209,13 +232,23 @@ export default function OnboardingScreen() {
             multiline
             style={styles.multiline}
           />
-          <TextInput
-            label="Your weaknesses"
-            placeholder="e.g. Left hand finishing, catch-and-shoot"
-            value={form.weaknesses}
-            onChangeText={(v) => update("weaknesses", v)}
-            multiline
-            style={styles.multiline}
+          <Text style={[styles.groupLabel, styles.weaknessLabel, { color: colors.text }]}>
+            What do you want to improve?
+          </Text>
+          <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+            Select every area that needs extra work.
+          </Text>
+          <ChipGroup
+            options={WEAKNESS_OPTIONS.map((weakness) => ({
+              label: weakness,
+              value: weakness,
+            }))}
+            selected={form.weaknesses
+              .split(",")
+              .map((value) => value.trim())
+              .filter(Boolean)}
+            onToggle={toggleWeakness}
+            multi
           />
         </View>
       )}
@@ -295,7 +328,7 @@ const STEP_TITLES = [
   { title: "What's your main goal?", subtitle: "We'll build your plan around this." },
   { title: "What position do you play?", subtitle: "Helps us pick position-relevant drills." },
   { title: "Strengths & weaknesses", subtitle: "Tell us what's working and what needs work." },
-  { title: "Rate your skills", subtitle: "A quick self-assessment, 1 to 10." },
+  { title: "Rate your skills", subtitle: "A quick self-assessment, 0 to 10." },
   { title: "Your training schedule", subtitle: "How often and how long can you train?" },
   { title: "Court access & equipment", subtitle: "We'll adapt drills to what you have." },
   { title: "Injuries & intensity", subtitle: "Last step -- let's dial in the difficulty." },
@@ -359,7 +392,7 @@ function ChipGroup({
               {opt.label}
             </Text>
             {vertical && active ? (
-              <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" />
+              <CheckCircleIcon size={20} color="#FFFFFF" weight="fill" />
             ) : null}
           </Pressable>
         );
@@ -377,6 +410,15 @@ const styles = StyleSheet.create({
   groupLabel: {
     fontSize: 15,
     fontWeight: "700",
+    marginBottom: 14,
+  },
+  weaknessLabel: {
+    marginTop: 24,
+    marginBottom: 4,
+  },
+  helperText: {
+    fontSize: 13,
+    lineHeight: 18,
     marginBottom: 14,
   },
   chipGroup: {

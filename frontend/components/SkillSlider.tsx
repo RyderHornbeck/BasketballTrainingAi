@@ -14,7 +14,7 @@ interface SkillSliderProps {
 }
 
 /**
- * A dependency-free "slider" made of tappable step segments (1-10 by
+ * A dependency-free "slider" made of tappable step segments (0-10 by
  * default). Avoids requiring a native slider module while still giving
  * users a quick way to self-rate a skill.
  */
@@ -22,7 +22,7 @@ export function SkillSlider({
   label,
   value,
   onChange,
-  min = 1,
+  min = 0,
   max = 10,
   lowLabel = "Just starting",
   highLabel = "Elite",

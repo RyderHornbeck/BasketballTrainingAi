@@ -121,9 +121,16 @@ function SetShootingRow({
       ]}
     >
       <View style={styles.setHeaderRow}>
-        <Text style={[styles.setNumber, { color: colors.text }]}>Set {setNumber}</Text>
-        {sideLabel ? (
-          <Text style={[styles.sideLabel, { color: colors.accent }]}>{sideLabel}</Text>
+        <View style={styles.setTitleGroup}>
+          <Text style={[styles.setNumber, { color: colors.text }]}>Set {setNumber}</Text>
+          {sideLabel ? (
+            <Text style={[styles.sideLabel, { color: colors.accent }]}>{sideLabel}</Text>
+          ) : null}
+        </View>
+        {targetMakes != null ? (
+          <Text style={[styles.setTargetHint, { color: colors.textMuted }]}>
+            Target {targetMakes}
+          </Text>
         ) : null}
       </View>
       <View style={styles.shootingInputs}>
@@ -159,11 +166,6 @@ function SetShootingRow({
           />
         </View>
       </View>
-      {targetMakes != null ? (
-        <Text style={[styles.setTargetHint, { color: colors.textMuted }]}>
-          Target {targetMakes} makes
-        </Text>
-      ) : null}
     </View>
   );
 }
@@ -805,7 +807,8 @@ const styles = StyleSheet.create({
   shootingSetRow: {
     flexDirection: "column",
     alignItems: "stretch",
-    gap: 12,
+    gap: 8,
+    padding: 10,
   },
   setNumber: {
     fontSize: 14,
@@ -815,6 +818,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 8,
+  },
+  setTitleGroup: {
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   sideLabel: {
@@ -833,7 +841,6 @@ const styles = StyleSheet.create({
   setTargetHint: {
     fontSize: 12,
     fontWeight: "600",
-    alignSelf: "flex-end",
   },
   shootingInputs: {
     flexDirection: "row",
@@ -851,10 +858,10 @@ const styles = StyleSheet.create({
   },
   shootingInput: {
     borderWidth: 1.5,
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    fontSize: 22,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 19,
     fontFamily: "Poppins_700Bold",
     textAlign: "center",
     width: "100%",

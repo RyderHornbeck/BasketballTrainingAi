@@ -1,6 +1,6 @@
 import { OnboardingAnswers } from "@/types/database";
 import { computeSkillProfile, SkillProfile } from "./skillRatings";
-import { computeShotMapData, ShotMapData } from "./shotMap";
+import { ShotMapLogEntry } from "./shotMap";
 import { supabase } from "./supabase";
 
 export interface CategoryStats {
@@ -62,7 +62,7 @@ export interface AnalyticsSummary {
   shootingLogs: { created_at: string; makes: number | null; attempts: number | null }[];
   firstActivityDate: string | null;
   completionTrend: CompletionTrendPoint[];
-  shotMap: ShotMapData;
+  shotMapLogs: ShotMapLogEntry[];
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -95,7 +95,7 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
       supabase
         .from("exercise_logs")
         .select(
-          "*, workout_exercises(category, name, sets, duration, target_makes, target_attempts, log_type)"
+          "*, workout_exercises(category, name, instructions, sets, duration, target_makes, target_attempts, log_type, set_side_labels)"
         )
         .eq("user_id", userId)
         .order("created_at", { ascending: true }),
@@ -201,7 +201,7 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
       : (onboarding as { created_at?: string } | null)?.created_at ?? null;
   const completionTrend = computeCompletionTrend(allDays ?? [], logs);
   const workoutHeatmap = computeWorkoutHeatmap(logs);
-  const shotMap = computeShotMapData(exerciseLogs ?? []);
+  const shotMapLogs = (exerciseLogs ?? []) as ShotMapLogEntry[];
 
   const recentWorkouts = logs.slice(0, 8).map((l: any) => ({
     id: l.id,
@@ -234,7 +234,7 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     firstActivityDate,
     completionTrend,
     workoutHeatmap,
-    shotMap,
+    shotMapLogs,
     skillProfile,
   };
 }
