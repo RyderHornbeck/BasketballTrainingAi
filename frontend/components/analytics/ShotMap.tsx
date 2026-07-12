@@ -1,49 +1,65 @@
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import {
-  SHOT_ZONE_LAYOUTS,
   ShotMapData,
   ShotMapViewMode,
   zoneHeatColor,
 } from "@/lib/shotMap";
+import {
+  buildCourtMarkings,
+  COURT,
+  COURT_VIEWBOX,
+  SHOT_ZONE_LAYOUTS,
+} from "@/lib/shotMapCourt";
 import React, { useMemo, useState } from "react";
 import { Dimensions, Pressable, StyleSheet, View } from "react-native";
-import Svg, { Circle, Line, Path, Rect, Text as SvgText } from "react-native-svg";
+import Svg, { Circle, G, Line, Path, Rect, Text as SvgText } from "react-native-svg";
 
-const COURT_VIEWBOX = { width: 200, height: 210 };
 const DIVIDER_COLOR = "#F7B379";
+const COURT_LINE_COLOR = "#F7B379";
+const COURT_FLOOR = "#F3E7D8";
 
 interface ShotMapProps {
   data: ShotMapData;
   width?: number;
+  /** Optional explicit shot coordinates for dots mode */
+  shots?: { x: number; y: number; made: boolean }[];
 }
 
-export function ShotMap({ data, width }: ShotMapProps) {
+export function ShotMap({ data, width, shots }: ShotMapProps) {
   const { colors } = useTheme();
   const [mode, setMode] = useState<ShotMapViewMode>("heatmap");
   const screenWidth = Dimensions.get("window").width;
   const mapWidth = width ?? screenWidth - 76;
-  const mapHeight = (mapWidth * COURT_VIEWBOX.height) / COURT_VIEWBOX.width;
+  const courtHeight = (mapWidth * COURT_VIEWBOX.height) / COURT_VIEWBOX.width;
 
   const zoneStatsById = useMemo(
     () => Object.fromEntries(data.zones.map((zone) => [zone.id, zone])),
     [data.zones]
   );
 
+  const courtLines = useMemo(() => buildCourtMarkings(), []);
   const hasShotData = data.totalAttempts > 0;
+  const dotPoints = shots ?? data.dots;
 
   return (
     <View style={[styles.card, { backgroundColor: "#FFFFFF", borderColor: colors.border }]}>
       <View style={styles.headerRow}>
-        <View>
+        <View style={styles.headerLeft}>
           <Text style={[styles.title, { color: colors.text }]}>Shot Map</Text>
           <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-            Overall FG%{" "}
-            <Text style={[styles.overallPct, { color: colors.text }]}>
-              {data.overallPct != null ? `${data.overallPct}%` : "--"}
-            </Text>
+            Where you shoot best — this week
           </Text>
         </View>
+        <View style={styles.overallWrap}>
+          <Text style={[styles.overallLabel, { color: colors.textSecondary }]}>Overall FG%</Text>
+          <Text style={[styles.overallPct, { color: colors.text }]}>
+            {data.overallPct != null ? `${data.overallPct}%` : "—"}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.toggleRow}>
         <View style={[styles.toggle, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}>
           {(["heatmap", "dots"] as ShotMapViewMode[]).map((option) => {
             const selected = mode === option;
@@ -70,82 +86,107 @@ export function ShotMap({ data, width }: ShotMapProps) {
         </View>
       </View>
 
-      <Svg width={mapWidth} height={mapHeight} viewBox={`0 0 ${COURT_VIEWBOX.width} ${COURT_VIEWBOX.height}`}>
-        <Rect x={0} y={0} width={200} height={210} rx={10} fill="#F3E7D8" />
+      <Svg
+        width={mapWidth}
+        height={courtHeight}
+        viewBox={`0 0 ${COURT_VIEWBOX.width} ${COURT_VIEWBOX.height}`}
+        preserveAspectRatio="xMidYMid meet"
+      >
+        {/* Court floor */}
+        <Rect x={0} y={0} width={COURT_VIEWBOX.width} height={COURT_VIEWBOX.height} rx={12} fill={COURT_FLOOR} />
 
-        {/* Court markings */}
-        <Rect x={58} y={96} width={84} height={108} fill="none" stroke="rgba(255,255,255,0.85)" strokeWidth={1.5} />
-        <Circle cx={100} cy={150} r={18} fill="none" stroke="rgba(255,255,255,0.85)" strokeWidth={1.5} />
-        <Path
-          d="M 12 150 A 88 88 0 0 1 188 150"
-          fill="none"
-          stroke="rgba(255,255,255,0.85)"
-          strokeWidth={1.5}
-        />
-        <Line x1={12} y1={204} x2={188} y2={204} stroke="rgba(255,255,255,0.85)" strokeWidth={1.5} />
-
+        {/* 1) Zone fills (heatmap) or transparent background (dots) */}
         {mode === "heatmap"
           ? SHOT_ZONE_LAYOUTS.map((zone) => {
               const stats = zoneStatsById[zone.id];
-              const hasData = (stats?.attempts ?? 0) > 0;
+              const hasData = (stats?.attempted ?? 0) > 0;
               const fill = zoneHeatColor(stats?.pct ?? null, hasData);
               return (
                 <Path
-                  key={`zone-${zone.id}`}
+                  key={`zone-fill-${zone.id}`}
                   d={zone.path}
                   fill={fill}
-                  stroke={DIVIDER_COLOR}
-                  strokeWidth={2}
+                  stroke="none"
                 />
               );
             })
-          : SHOT_ZONE_LAYOUTS.map((zone) => (
-              <Path
-                key={`zone-outline-${zone.id}`}
-                d={zone.path}
-                fill="rgba(255,255,255,0.18)"
-                stroke={DIVIDER_COLOR}
-                strokeWidth={2}
-              />
-            ))}
+          : null}
 
+        {/* 2) Court markings — always above fills */}
+        <G stroke={COURT_LINE_COLOR} strokeWidth={1.6} fill="none">
+          <Path d={courtLines.baseline} />
+          <Path d={courtLines.sidelines} />
+          <Path d={courtLines.paint} />
+          <Path d={courtLines.ftLine} />
+          <Path d={courtLines.ftSemicircle} />
+          <Path d={courtLines.restrictedArc} />
+          <Line
+            x1={COURT.basketX - 18}
+            y1={COURT.basketY + 8}
+            x2={COURT.basketX + 18}
+            y2={COURT.basketY + 8}
+            stroke={COURT_LINE_COLOR}
+            strokeWidth={2}
+          />
+          <Path d={courtLines.threePoint} />
+        </G>
+
+        {/* Basket rim */}
+        <Circle
+          cx={COURT.basketX}
+          cy={COURT.basketY}
+          r={6}
+          fill="none"
+          stroke={COURT_LINE_COLOR}
+          strokeWidth={1.8}
+        />
+
+        {/* 3) Labels (heatmap) or dots */}
         {mode === "heatmap"
           ? SHOT_ZONE_LAYOUTS.map((zone) => {
               const stats = zoneStatsById[zone.id];
-              if (!stats || stats.attempts <= 0) return null;
+              const attempted = stats?.attempted ?? 0;
+              const made = stats?.made ?? 0;
+              const hasData = attempted > 0;
+              const pctLabel = hasData && stats?.pct != null ? `${stats.pct}%` : "—";
+              const ratioLabel = `${made}/${attempted}`;
+              const textColor = hasData ? "#FFFFFF" : "#5C5C5C";
+              const pctSize = zone.labelSize ?? 12;
+              const ratioSize = zone.ratioSize ?? 9;
+
               return (
-                <React.Fragment key={`label-${zone.id}`}>
+                <G key={`zone-label-${zone.id}`}>
                   <SvgText
                     x={zone.labelX}
-                    y={zone.labelY - 4}
-                    fill="#FFFFFF"
-                    fontSize={11}
+                    y={zone.labelY}
+                    fill={textColor}
+                    fontSize={pctSize}
                     fontWeight="700"
                     textAnchor="middle"
                   >
-                    {`${stats.pct}%`}
+                    {pctLabel}
                   </SvgText>
                   <SvgText
                     x={zone.labelX}
-                    y={zone.labelY + 10}
-                    fill="#FFFFFF"
-                    fontSize={9}
+                    y={zone.labelY + pctSize + 2}
+                    fill={textColor}
+                    fontSize={ratioSize}
                     fontWeight="600"
                     textAnchor="middle"
                   >
-                    {`${stats.makes}/${stats.attempts}`}
+                    {ratioLabel}
                   </SvgText>
-                </React.Fragment>
+                </G>
               );
             })
-          : data.dots.map((dot, index) => (
+          : dotPoints.map((dot, index) => (
               <Circle
                 key={`dot-${index}`}
                 cx={dot.x}
                 cy={dot.y}
-                r={2.6}
-                fill={dot.made ? "#4CAF50" : "#F44336"}
-                opacity={0.95}
+                r={3.2}
+                fill={dot.made ? "#58A86C" : "#D66058"}
+                opacity={0.92}
               />
             ))}
       </Svg>
@@ -157,9 +198,9 @@ export function ShotMap({ data, width }: ShotMapProps) {
       ) : null}
 
       <View style={styles.legendRow}>
-        <LegendSwatch color="#4CAF50" label="≥ 50%" />
-        <LegendSwatch color="#FFC107" label="30–50%" />
-        <LegendSwatch color="#F44336" label="< 30%" />
+        <LegendSwatch color="#58A86C" label="≥ 50%" />
+        <LegendSwatch color="#E8A848" label="30–50%" />
+        <LegendSwatch color="#D66058" label="< 30%" />
       </View>
     </View>
   );
@@ -191,7 +232,10 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     justifyContent: "space-between",
     gap: 12,
-    marginBottom: 12,
+    marginBottom: 10,
+  },
+  headerLeft: {
+    flex: 1,
   },
   title: {
     fontSize: 15,
@@ -202,9 +246,21 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginTop: 4,
   },
+  overallWrap: {
+    alignItems: "flex-end",
+  },
+  overallLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+  },
   overallPct: {
-    fontSize: 14,
+    fontSize: 20,
     fontWeight: "800",
+    marginTop: 2,
+  },
+  toggleRow: {
+    alignItems: "flex-end",
+    marginBottom: 10,
   },
   toggle: {
     flexDirection: "row",
@@ -215,7 +271,7 @@ const styles = StyleSheet.create({
   },
   toggleButton: {
     borderRadius: 999,
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingVertical: 6,
   },
   toggleText: {

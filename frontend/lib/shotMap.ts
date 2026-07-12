@@ -1,37 +1,20 @@
 import { decodeExerciseLogMeta } from "./exerciseSetLogs";
+import {
+  SHOT_ZONE_LAYOUTS,
+  ShotZoneId,
+  ZONE_BY_ID,
+} from "./shotMapCourt";
+
+export type { ShotZoneId } from "./shotMapCourt";
+export { SHOT_ZONE_LAYOUTS, COURT_VIEWBOX } from "./shotMapCourt";
 
 export type ShotMapViewMode = "heatmap" | "dots";
 
-export type ShotZoneId =
-  | "rim"
-  | "paint_left"
-  | "paint_right"
-  | "mid_left_corner"
-  | "mid_left_wing"
-  | "mid_center"
-  | "mid_right_wing"
-  | "mid_right_corner"
-  | "three_left_wing"
-  | "three_top"
-  | "three_right_wing"
-  | "deep_left"
-  | "deep_center"
-  | "deep_right";
-
-export interface ShotZoneLayout {
-  id: ShotZoneId;
-  label: string;
-  path: string;
-  labelX: number;
-  labelY: number;
-  dotBounds: { x: number; y: number; w: number; h: number };
-}
-
 export interface ShotZoneStats {
   id: ShotZoneId;
-  label: string;
-  makes: number;
-  attempts: number;
+  name: string;
+  made: number;
+  attempted: number;
   pct: number | null;
 }
 
@@ -50,164 +33,55 @@ export interface ShotMapData {
   totalAttempts: number;
 }
 
-export const SHOT_ZONE_LAYOUTS: ShotZoneLayout[] = [
-  {
-    id: "rim",
-    label: "Rim",
-    path: "M 86 176 L 114 176 A 14 14 0 0 1 114 204 L 86 204 Z",
-    labelX: 100,
-    labelY: 192,
-    dotBounds: { x: 88, y: 178, w: 24, h: 22 },
-  },
-  {
-    id: "paint_left",
-    label: "Paint L",
-    path: "M 58 150 L 86 150 L 86 204 L 58 204 Z",
-    labelX: 72,
-    labelY: 180,
-    dotBounds: { x: 60, y: 152, w: 24, h: 50 },
-  },
-  {
-    id: "paint_right",
-    label: "Paint R",
-    path: "M 114 150 L 142 150 L 142 204 L 114 204 Z",
-    labelX: 128,
-    labelY: 180,
-    dotBounds: { x: 116, y: 152, w: 24, h: 50 },
-  },
-  {
-    id: "mid_left_corner",
-    label: "Mid L",
-    path: "M 12 132 L 58 132 L 58 150 L 12 150 Z",
-    labelX: 35,
-    labelY: 142,
-    dotBounds: { x: 14, y: 134, w: 42, h: 14 },
-  },
-  {
-    id: "mid_left_wing",
-    label: "Mid LW",
-    path: "M 12 96 L 58 96 L 58 132 L 12 132 Z",
-    labelX: 35,
-    labelY: 116,
-    dotBounds: { x: 14, y: 98, w: 42, h: 32 },
-  },
-  {
-    id: "mid_center",
-    label: "Mid C",
-    path: "M 58 96 L 142 96 L 142 150 L 58 150 Z",
-    labelX: 100,
-    labelY: 126,
-    dotBounds: { x: 60, y: 98, w: 80, h: 50 },
-  },
-  {
-    id: "mid_right_wing",
-    label: "Mid RW",
-    path: "M 142 96 L 188 96 L 188 132 L 142 132 Z",
-    labelX: 165,
-    labelY: 116,
-    dotBounds: { x: 144, y: 98, w: 42, h: 32 },
-  },
-  {
-    id: "mid_right_corner",
-    label: "Mid R",
-    path: "M 142 132 L 188 132 L 188 150 L 142 150 Z",
-    labelX: 165,
-    labelY: 142,
-    dotBounds: { x: 144, y: 134, w: 42, h: 14 },
-  },
-  {
-    id: "three_left_wing",
-    label: "3PT LW",
-    path: "M 12 58 L 58 58 L 58 96 L 12 96 Z",
-    labelX: 35,
-    labelY: 78,
-    dotBounds: { x: 14, y: 60, w: 42, h: 34 },
-  },
-  {
-    id: "three_top",
-    label: "3PT Top",
-    path: "M 58 58 L 142 58 L 142 96 L 58 96 Z",
-    labelX: 100,
-    labelY: 78,
-    dotBounds: { x: 60, y: 60, w: 80, h: 34 },
-  },
-  {
-    id: "three_right_wing",
-    label: "3PT RW",
-    path: "M 142 58 L 188 58 L 188 96 L 142 96 Z",
-    labelX: 165,
-    labelY: 78,
-    dotBounds: { x: 144, y: 60, w: 42, h: 34 },
-  },
-  {
-    id: "deep_left",
-    label: "Deep L",
-    path: "M 12 18 L 58 18 L 58 58 L 12 58 Z",
-    labelX: 35,
-    labelY: 40,
-    dotBounds: { x: 14, y: 20, w: 42, h: 36 },
-  },
-  {
-    id: "deep_center",
-    label: "Deep C",
-    path: "M 58 18 L 142 18 L 142 58 L 58 58 Z",
-    labelX: 100,
-    labelY: 40,
-    dotBounds: { x: 60, y: 20, w: 80, h: 36 },
-  },
-  {
-    id: "deep_right",
-    label: "Deep R",
-    path: "M 142 18 L 188 18 L 188 58 L 142 58 Z",
-    labelX: 165,
-    labelY: 40,
-    dotBounds: { x: 144, y: 20, w: 42, h: 36 },
-  },
-];
-
-const ZONE_BY_ID = Object.fromEntries(SHOT_ZONE_LAYOUTS.map((zone) => [zone.id, zone])) as Record<
-  ShotZoneId,
-  ShotZoneLayout
->;
+/** Softened heat colors — court lines render above these fills */
+export function zoneHeatColor(pct: number | null, hasData: boolean): string {
+  if (!hasData || pct == null) return "rgba(220, 220, 220, 0.55)";
+  if (pct >= 50) return "rgba(88, 168, 108, 0.78)";
+  if (pct >= 30) return "rgba(232, 168, 72, 0.78)";
+  return "rgba(214, 96, 88, 0.78)";
+}
 
 export function classifyShotZone(name: string, category: string): ShotZoneId {
   const text = name.toLowerCase();
 
   if (
     category === "finishing" ||
-    /layup|rim|mikan|finger roll|floater|finish|backboard|cradle|euro|spill|touch|inside hand|outside hand/i.test(
+    /layup|rim|mikan|finger roll|floater|finish|backboard|cradle|euro|spill|touch|inside hand|outside hand|at.rim/i.test(
       text
     )
   ) {
-    if (/left block|paint left|left side|left angle/i.test(text)) return "paint_left";
-    if (/right block|paint right|right side|right angle/i.test(text)) return "paint_right";
+    if (/left block|paint left|left short|left angle|left side/i.test(text)) return "left_short_range";
+    if (/right block|paint right|right short|right angle|right side/i.test(text)) return "right_short_range";
+    if (/paint|key|post/i.test(text)) return "paint";
     return "rim";
   }
 
-  if (/3[\s-]?(point|pt)|three|crackback|deep three|logo/i.test(text)) {
-    if (/left corner|baseline left/i.test(text)) return "deep_left";
-    if (/right corner|baseline right/i.test(text)) return "deep_right";
-    if (/left wing|left side/i.test(text)) return "three_left_wing";
-    if (/right wing|right side/i.test(text)) return "three_right_wing";
-    if (/top|center|key/i.test(text)) return "three_top";
-    return "deep_center";
+  if (/3[\s-]?(point|pt)|three|crackback|logo/i.test(text)) {
+    if (/left corner|baseline left/i.test(text)) return "left_corner_three";
+    if (/right corner|baseline right/i.test(text)) return "right_corner_three";
+    if (/left wing|left side/i.test(text)) return "left_wing_three";
+    if (/right wing|right side/i.test(text)) return "right_wing_three";
+    if (/top|center|key/i.test(text)) return "top_of_key_three";
+    return "top_of_key_three";
   }
 
   if (/corner|baseline/i.test(text)) {
-    if (/left/i.test(text)) return "mid_left_corner";
-    if (/right/i.test(text)) return "mid_right_corner";
+    if (/left/i.test(text)) return "left_short_range";
+    if (/right/i.test(text)) return "right_short_range";
   }
-  if (/left wing|free throw.*left/i.test(text)) return "mid_left_wing";
-  if (/right wing|free throw.*right/i.test(text)) return "mid_right_wing";
-  if (/top|center|free throw|midrange|mid-range|pull-up|pull up/i.test(text)) return "mid_center";
+  if (/left wing|free throw.*left/i.test(text)) return "left_midrange";
+  if (/right wing|free throw.*right/i.test(text)) return "right_midrange";
+  if (/top|center|free throw|midrange|mid-range|pull-up|pull up/i.test(text)) {
+    return "center_midrange";
+  }
 
-  if (category === "shooting") return "mid_center";
-  return "mid_center";
+  if (category === "shooting") return "center_midrange";
+  return "center_midrange";
 }
 
-function jitterDotPosition(seed: number, bounds: ShotZoneLayout["dotBounds"]): { x: number; y: number } {
-  const x = bounds.x + 4 + ((seed * 17) % Math.max(1, bounds.w - 8));
-  const y = bounds.y + 4 + ((seed * 31) % Math.max(1, bounds.h - 8));
+function jitterDotPosition(seed: number, bounds: { x: number; y: number; w: number; h: number }) {
+  const x = bounds.x + 6 + ((seed * 17) % Math.max(1, bounds.w - 12));
+  const y = bounds.y + 6 + ((seed * 31) % Math.max(1, bounds.h - 12));
   return { x, y };
 }
 
@@ -230,13 +104,6 @@ function pushDotsForAttempts(
     const point = jitterDotPosition(seed++, bounds);
     dots.push({ zoneId, made: false, x: point.x, y: point.y });
   }
-}
-
-export function zoneHeatColor(pct: number | null, hasData: boolean): string {
-  if (!hasData || pct == null) return "rgba(210, 210, 210, 0.45)";
-  if (pct >= 50) return "rgba(76, 175, 80, 0.82)";
-  if (pct >= 30) return "rgba(255, 193, 7, 0.82)";
-  return "rgba(244, 67, 54, 0.82)";
 }
 
 export function computeShotMapData(exerciseLogs: any[]): ShotMapData {
@@ -278,19 +145,20 @@ export function computeShotMapData(exerciseLogs: any[]): ShotMapData {
 
   const zones: ShotZoneStats[] = SHOT_ZONE_LAYOUTS.map((layout) => {
     const stats = zoneAgg[layout.id];
-    const pct =
-      stats.attempts > 0 ? Math.round((stats.makes / stats.attempts) * 100) : null;
+    const attempted = stats.attempts;
+    const made = stats.makes;
+    const pct = attempted > 0 ? Math.round((made / attempted) * 100) : null;
     return {
       id: layout.id,
-      label: layout.label,
-      makes: stats.makes,
-      attempts: stats.attempts,
+      name: layout.name,
+      made,
+      attempted,
       pct,
     };
   });
 
-  const totalMakes = zones.reduce((sum, zone) => sum + zone.makes, 0);
-  const totalAttempts = zones.reduce((sum, zone) => sum + zone.attempts, 0);
+  const totalMakes = zones.reduce((sum, zone) => sum + zone.made, 0);
+  const totalAttempts = zones.reduce((sum, zone) => sum + zone.attempted, 0);
 
   return {
     zones,
