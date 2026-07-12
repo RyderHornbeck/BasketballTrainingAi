@@ -24,7 +24,7 @@ import {
   ChartLineUpIcon,
   CheckCircleIcon,
   BasketballIcon,
-  FlameIcon,
+  FireIcon,
   PercentIcon,
   PlayCircleIcon,
   TimerIcon,
@@ -293,9 +293,8 @@ export default function DaysScreen() {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: "transparent" }]} edges={["top"]}>
       <View style={styles.pageHeader}>
-        <Text style={[styles.pageTitle, { color: colors.text }]}>Workouts</Text>
         <View style={styles.streakBadge}>
-          <FlameIcon size={23} color="#C65A08" weight="fill" />
+          <FireIcon size={23} color="#F7B379" weight="fill" />
           <Text
             style={[
               styles.streakValue,
@@ -533,14 +532,10 @@ const styles = StyleSheet.create({
   pageHeader: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    justifyContent: "flex-end",
     paddingHorizontal: 20,
     paddingTop: 4,
     paddingBottom: 6,
-  },
-  pageTitle: {
-    fontSize: 28,
-    fontWeight: "800",
   },
   streakBadge: {
     flexDirection: "row",

@@ -5,6 +5,7 @@ import {
   SkillRadarChart,
   WorkoutActivityHeatmap,
 } from "@/components/analytics/AnalyticsCharts";
+import { ShotMap } from "@/components/analytics/ShotMap";
 import { StatCard } from "@/components/StatCard";
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
@@ -94,6 +95,10 @@ export default function AnalyticsScreen() {
         <Card style={styles.chartCard}>
           <SkillRadarChart profile={summary.skillProfile} />
         </Card>
+
+        <View style={styles.chartCard}>
+          <ShotMap data={summary.shotMap} />
+        </View>
 
         <Card style={styles.chartCard}>
           <Text style={[styles.chartTitle, { color: colors.text }]}>Makes & Misses</Text>
