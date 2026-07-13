@@ -651,6 +651,7 @@ export class RealtimeCoachSession {
         local_confirmation?: string | null;
         skip_model_response?: boolean;
         deduplicated?: boolean;
+        updated_context?: string | null;
         error?: string;
       }>("coach-tools", {
         body: {
@@ -680,6 +681,22 @@ export class RealtimeCoachSession {
           output: data.result,
         },
       });
+
+      if (data.updated_context) {
+        this.sendEvent({
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: `Authoritative workout state update. Replace any older workout position with this data:\n${data.updated_context}`,
+              },
+            ],
+          },
+        });
+      }
 
       if (data.result) {
         this.conversationSummary = appendConversationSummary(

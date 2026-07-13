@@ -1,14 +1,13 @@
 // Supabase Edge Function: coach-tools
-// ----------------------------------------------------------------------------
-// Executes a single coach tool call from the OpenAI Realtime data channel.
-// Called by the client when the model invokes a function during a live session.
-//
-// Deploy: supabase functions deploy coach-tools
-// ----------------------------------------------------------------------------
+// Executes coach tool calls with idempotency and session limits.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { executeCoachTool, loadWorkoutContext } from "../_shared/coachCore.ts";
+import {
+  buildRealtimeNavigationUpdate,
+  executeCoachTool,
+  loadWorkoutContext,
+} from "../_shared/coachCore.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -43,12 +42,75 @@ Deno.serve(async (req: Request) => {
 
     const body = (await req.json().catch(() => ({}))) as {
       day_id?: string;
+      session_key?: string;
       tool_name?: string;
       arguments?: Record<string, unknown>;
     };
 
     if (!body.day_id) return jsonResponse({ error: "day_id is required" }, 400);
     if (!body.tool_name) return jsonResponse({ error: "tool_name is required" }, 400);
+
+    const args = { ...(body.arguments ?? {}) };
+    let clientRequestId =
+      typeof args.client_request_id === "string" ? args.client_request_id : null;
+
+    const idempotentTools = new Set([
+      "save_shooting_results",
+      "set_set_completion",
+      "complete_drill",
+      "uncomplete_drill",
+      "skip_drill",
+      "save_note",
+      "extend_workout",
+      "shorten_workout",
+      "finish_workout",
+      "start_timer",
+      "pause_timer",
+      "resume_timer",
+      "stop_timer",
+    ]);
+
+    if (!clientRequestId && idempotentTools.has(body.tool_name)) {
+      clientRequestId = `${body.tool_name}-${userId}-${crypto.randomUUID()}`;
+      args.client_request_id = clientRequestId;
+    }
+
+    if (clientRequestId) {
+      const { data: cached } = await supabase
+        .from("coach_tool_requests")
+        .select("result, db_changed, client_action, local_confirmation, skip_model_response")
+        .eq("user_id", userId)
+        .eq("client_request_id", clientRequestId)
+        .maybeSingle();
+
+      if (cached) {
+        const refreshedContext = cached.db_changed
+          ? await loadWorkoutContext(supabase, userId, body.day_id)
+          : null;
+        return jsonResponse({
+          result: cached.result,
+          client_action: cached.client_action,
+          db_changed: cached.db_changed,
+          local_confirmation: cached.local_confirmation,
+          skip_model_response: cached.skip_model_response,
+          deduplicated: true,
+          updated_context: refreshedContext ? buildRealtimeNavigationUpdate(refreshedContext) : null,
+        });
+      }
+    }
+
+    if (body.session_key) {
+      const { data: session } = await supabase
+        .from("coach_sessions")
+        .select("id, response_count, expires_at, ended_at")
+        .eq("session_key", body.session_key)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (!session || session.ended_at) {
+        return jsonResponse({ error: "Coach session is not active." }, 409);
+      }
+    }
 
     const ctx = await loadWorkoutContext(supabase, userId, body.day_id);
     if (!ctx) return jsonResponse({ error: "Workout day not found" }, 404);
@@ -59,13 +121,50 @@ Deno.serve(async (req: Request) => {
       body.day_id,
       ctx,
       body.tool_name,
-      body.arguments ?? {}
+      args
     );
+
+    if (clientRequestId) {
+      await supabase.from("coach_tool_requests").insert({
+        user_id: userId,
+        day_id: body.day_id,
+        client_request_id: clientRequestId,
+        tool_name: body.tool_name,
+        result: outcome.result,
+        db_changed: outcome.dbChanged,
+        client_action: outcome.clientAction ?? null,
+        local_confirmation: outcome.localConfirmation ?? null,
+        skip_model_response: outcome.skipModelResponse ?? false,
+      });
+    }
+
+    if (body.session_key) {
+      const { data: session } = await supabase
+        .from("coach_sessions")
+        .select("id, response_count")
+        .eq("session_key", body.session_key)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (session) {
+        await supabase
+          .from("coach_sessions")
+          .update({ response_count: (session.response_count ?? 0) + 1 })
+          .eq("id", session.id);
+      }
+    }
+
+    const refreshedContext = outcome.dbChanged
+      ? await loadWorkoutContext(supabase, userId, body.day_id)
+      : null;
 
     return jsonResponse({
       result: outcome.result,
       client_action: outcome.clientAction ?? null,
       db_changed: outcome.dbChanged,
+      local_confirmation: outcome.localConfirmation ?? null,
+      skip_model_response: outcome.skipModelResponse ?? false,
+      updated_context: refreshedContext ? buildRealtimeNavigationUpdate(refreshedContext) : null,
     });
   } catch (err) {
     console.error("coach-tools error:", err);

@@ -216,18 +216,22 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     completedAt: l.completed_at,
     totalMinutes: l.total_minutes,
   }));
-  const exercisesByDay = new Map<string, Array<{ exercise_logs?: { completed?: boolean }[] | null }>>();
+  type NestedExerciseLog = { completed?: boolean } | { completed?: boolean }[] | null;
+  const exercisesByDay = new Map<string, Array<{ exercise_logs?: NestedExerciseLog }>>();
   for (const exercise of workoutExercises ?? []) {
     const dayId = String((exercise as any).day_id);
     const rows = exercisesByDay.get(dayId) ?? [];
-    rows.push(exercise as { exercise_logs?: { completed?: boolean }[] | null });
+    rows.push(exercise as { exercise_logs?: NestedExerciseLog });
     exercisesByDay.set(dayId, rows);
   }
   const disciplineWorkouts: DisciplineWorkout[] = logs.map((workout: any) => {
     const exercises = exercisesByDay.get(String(workout.day_id)) ?? [];
-    const completedExercises = exercises.filter((exercise) =>
-      (exercise.exercise_logs ?? []).some((log) => log.completed === true)
-    ).length;
+    const completedExercises = exercises.filter((exercise) => {
+      const nestedLog = exercise.exercise_logs;
+      return Array.isArray(nestedLog)
+        ? nestedLog.some((log) => log.completed === true)
+        : nestedLog?.completed === true;
+    }).length;
     return {
       completedExercises,
       totalExercises: exercises.length,

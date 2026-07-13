@@ -7,6 +7,7 @@ import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { calculateDayPerformance, getPerformanceColor } from "@/lib/dayPerformance";
+import { sortWorkoutExercisesForDisplay } from "@/lib/workoutOrder";
 import {
   ExerciseLogInput,
   finishWorkoutDay,
@@ -39,19 +40,6 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-const CATEGORY_DISPLAY_ORDER: Record<string, number> = {
-  warmup: 0,
-  mobility: 1,
-  shooting: 2,
-  ball_handling: 3,
-  finishing: 4,
-  footwork: 5,
-  defense: 6,
-  conditioning: 7,
-  strength: 8,
-  basketball_iq: 9,
-};
 
 type DaysViewMode = "overview" | "workout";
 
@@ -512,14 +500,7 @@ export default function DaysScreen() {
 
             <Text style={[styles.drillsLabel, { color: colors.textMuted }]}>Drills</Text>
 
-            {dayDetail.exercises
-              .sort((a, b) => {
-                const categoryOrder =
-                  (CATEGORY_DISPLAY_ORDER[a.category ?? ""] ?? Number.MAX_SAFE_INTEGER) -
-                  (CATEGORY_DISPLAY_ORDER[b.category ?? ""] ?? Number.MAX_SAFE_INTEGER);
-                return categoryOrder || (a.order_index ?? 0) - (b.order_index ?? 0);
-              })
-              .map((exercise) => (
+            {sortWorkoutExercisesForDisplay(dayDetail.exercises).map((exercise) => (
                 <ExerciseCard
                   key={exercise.id}
                   exercise={exercise}
