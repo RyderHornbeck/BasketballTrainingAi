@@ -255,9 +255,6 @@ export function useCoach(dayId: string | null): UseCoachResult {
             ) {
               return;
             }
-            if (reason === "max_duration") {
-              void startSessionRef.current();
-            }
           },
         },
         {

@@ -1,5 +1,5 @@
 import { OnboardingAnswers } from "@/types/database";
-import { computeSkillProfile, SkillProfile } from "./skillRatings";
+import { computeSkillProfile, DisciplineWorkout, SkillProfile } from "./skillRatings";
 import { ShotMapLogEntry } from "./shotMap";
 import { supabase } from "./supabase";
 
@@ -76,7 +76,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   warmup: "Warmup",
   cooldown: "Cooldown",
   mobility: "Mobility",
-  basketball_iq: "Basketball IQ",
+  basketball_iq: "Discipline",
 };
 
 export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
@@ -109,6 +109,13 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     ]);
 
   const logs = dayLogs ?? [];
+  const workoutDayIds = (allDays ?? []).map((day: any) => day.id).filter(Boolean);
+  const { data: workoutExercises } = workoutDayIds.length
+    ? await supabase
+        .from("workout_exercises")
+        .select("id, day_id, exercise_logs(completed)")
+        .in("day_id", workoutDayIds)
+    : { data: [] };
   const totalWorkoutsCompleted = logs.length;
   const totalMinutesTrained = logs.reduce((sum, l: any) => sum + (l.total_minutes ?? 0), 0);
 
@@ -209,10 +216,29 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     completedAt: l.completed_at,
     totalMinutes: l.total_minutes,
   }));
+  const exercisesByDay = new Map<string, Array<{ exercise_logs?: { completed?: boolean }[] | null }>>();
+  for (const exercise of workoutExercises ?? []) {
+    const dayId = String((exercise as any).day_id);
+    const rows = exercisesByDay.get(dayId) ?? [];
+    rows.push(exercise as { exercise_logs?: { completed?: boolean }[] | null });
+    exercisesByDay.set(dayId, rows);
+  }
+  const disciplineWorkouts: DisciplineWorkout[] = logs.map((workout: any) => {
+    const exercises = exercisesByDay.get(String(workout.day_id)) ?? [];
+    const completedExercises = exercises.filter((exercise) =>
+      (exercise.exercise_logs ?? []).some((log) => log.completed === true)
+    ).length;
+    return {
+      completedExercises,
+      totalExercises: exercises.length,
+      timestamp: new Date(workout.completed_at).getTime(),
+    };
+  });
 
   const skillProfile = computeSkillProfile(
     (onboarding as OnboardingAnswers | null) ?? null,
-    exerciseLogs ?? []
+    exerciseLogs ?? [],
+    disciplineWorkouts
   );
 
   return {

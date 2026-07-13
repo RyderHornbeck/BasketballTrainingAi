@@ -12,7 +12,7 @@ export const RADAR_SKILLS = [
   { key: "finishing", label: "Finishing", levelField: "finishing_level" as const },
   { key: "defense", label: "Defense", levelField: "defense_level" as const },
   { key: "conditioning", label: "Conditioning", levelField: "conditioning_level" as const },
-  { key: "basketball_iq", label: "Basketball IQ", levelField: "basketball_iq_level" as const },
+  { key: "discipline", label: "Discipline" },
 ] as const;
 
 export type RadarSkillKey = (typeof RADAR_SKILLS)[number]["key"];
@@ -38,7 +38,7 @@ const CATEGORY_ALIASES: Record<string, RadarSkillKey | null> = {
   finishing: "finishing",
   defense: "defense",
   conditioning: "conditioning",
-  basketball_iq: "basketball_iq",
+  basketball_iq: null,
   footwork: null,
   strength: null,
   warmup: null,
@@ -70,6 +70,12 @@ interface ExerciseLogRow {
   } | null;
 }
 
+export interface DisciplineWorkout {
+  completedExercises: number;
+  totalExercises: number;
+  timestamp: number;
+}
+
 function clamp(value: number, min = 0, max = 100): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -83,7 +89,7 @@ function baselineForSkill(
   skill: (typeof RADAR_SKILLS)[number],
   answers: OnboardingAnswers | null
 ): number {
-  if (!answers) return 50;
+  if (!answers || !("levelField" in skill)) return 50;
   const raw = Number.parseInt(String(answers[skill.levelField] ?? "5"), 10);
   const selfRating = clamp(Number.isFinite(raw) ? raw : 5, 0, 10);
   // Onboarding establishes only a 20–70 baseline. Logged workout performance
@@ -182,7 +188,7 @@ function expandExerciseLogToEvents(log: ExerciseLogRow): PerformanceEvent[] {
   const events: PerformanceEvent[] = [];
 
   if (meta.set_logs?.length) {
-    for (const entry of meta.set_logs) {
+    for (const entry of meta.set_logs.filter((set) => set.completed)) {
       events.push({
         skill,
         observedScore: scoreSetEntry(entry, plan),
@@ -191,6 +197,8 @@ function expandExerciseLogToEvents(log: ExerciseLogRow): PerformanceEvent[] {
     }
     return events;
   }
+
+  if (!log.completed) return events;
 
   events.push({
     skill,
@@ -227,7 +235,8 @@ function applyTrendNudge(
 
 export function computeSkillProfile(
   answers: OnboardingAnswers | null,
-  exerciseLogs: ExerciseLogRow[]
+  exerciseLogs: ExerciseLogRow[],
+  disciplineWorkouts: DisciplineWorkout[] = []
 ): SkillProfile {
   const ratings = Object.fromEntries(
     RADAR_SKILLS.map((skill) => [skill.key, baselineForSkill(skill, answers)])
@@ -242,6 +251,20 @@ export function computeSkillProfile(
 
   const events = exerciseLogs
     .flatMap(expandExerciseLogToEvents)
+    .concat(
+      disciplineWorkouts
+        .filter((workout) => workout.totalExercises > 0)
+        .map((workout) => {
+          const completionRatio = clamp((workout.completedExercises / workout.totalExercises) * 100);
+          return {
+            skill: "discipline" as const,
+            // Mirrors the timed-drill score: a fully completed workout is 87.5,
+            // while a partial workout scales directly with its completion ratio.
+            observedScore: 0.75 * completionRatio + 12.5,
+            timestamp: workout.timestamp,
+          };
+        })
+    )
     .sort((a, b) => a.timestamp - b.timestamp);
 
   for (const event of events) {

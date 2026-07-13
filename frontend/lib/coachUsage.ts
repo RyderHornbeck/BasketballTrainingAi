@@ -100,6 +100,7 @@ export interface CoachUsageTotals {
 }
 
 function splitCachedTokens(usage?: {
+  input_tokens?: number;
   input_token_details?: {
     text_tokens?: number;
     audio_tokens?: number;
@@ -111,14 +112,22 @@ function splitCachedTokens(usage?: {
   };
 }): { cachedText: number; cachedAudio: number } {
   const details = usage?.input_token_details?.cached_tokens_details;
+  const input = usage?.input_token_details;
+  const inputCountFromDetails = (input?.text_tokens ?? 0) + (input?.audio_tokens ?? 0);
+  const totalInputCount = usage?.input_tokens ?? inputCountFromDetails;
+  const cachedTotal = input?.cached_tokens ?? 0;
+  const cachedIsIncluded = cachedTotal > 0 && cachedTotal <= totalInputCount;
+
+  if (!cachedIsIncluded) {
+    return { cachedText: 0, cachedAudio: 0 };
+  }
   if (details) {
     return {
-      cachedText: details.text_tokens ?? 0,
-      cachedAudio: details.audio_tokens ?? 0,
+      cachedText: Math.min(details.text_tokens ?? 0, input?.text_tokens ?? 0),
+      cachedAudio: Math.min(details.audio_tokens ?? 0, input?.audio_tokens ?? 0),
     };
   }
-  const cached = usage?.input_token_details?.cached_tokens ?? 0;
-  return { cachedText: cached, cachedAudio: 0 };
+  return { cachedText: Math.min(cachedTotal, input?.text_tokens ?? 0), cachedAudio: 0 };
 }
 
 export function createUsageTracker(model: string) {
@@ -133,6 +142,8 @@ export function createUsageTracker(model: string) {
 
   return {
     addResponseUsage(usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
       input_token_details?: {
         text_tokens?: number;
         audio_tokens?: number;
@@ -155,8 +166,13 @@ export function createUsageTracker(model: string) {
       cachedTextTokens += cached.cachedText;
       cachedAudioTokens += cached.cachedAudio;
       inputAudioTokens += input?.audio_tokens ?? 0;
-      outputTextTokens += output?.text_tokens ?? 0;
-      outputAudioTokens += output?.audio_tokens ?? 0;
+      const outputAudio = output?.audio_tokens ?? 0;
+      const outputText =
+        usage?.output_tokens != null
+          ? Math.max(0, usage.output_tokens - outputAudio)
+          : output?.text_tokens ?? 0;
+      outputTextTokens += outputText;
+      outputAudioTokens += outputAudio;
     },
     snapshot(): CoachUsageTotals {
       const uncachedText = Math.max(0, inputTextTokens - cachedTextTokens);

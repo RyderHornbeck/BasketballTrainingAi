@@ -33,7 +33,6 @@ const WEAKNESS_OPTIONS = [
   "Footwork",
   "Conditioning",
   "Strength",
-  "Basketball IQ",
 ];
 const EQUIPMENT_OPTIONS = ["Basketball", "Cones", "Resistance bands", "Weights", "None"];
 const INTENSITY_OPTIONS = ["Light", "Medium", "Hard", "Extremely hard"];
@@ -259,7 +258,6 @@ export default function OnboardingScreen() {
           <SkillSlider label="Ball Handling" value={Number(form.ball_handling_level)} onChange={(v) => update("ball_handling_level", String(v))} />
           <SkillSlider label="Finishing" value={Number(form.finishing_level)} onChange={(v) => update("finishing_level", String(v))} />
           <SkillSlider label="Defense" value={Number(form.defense_level)} onChange={(v) => update("defense_level", String(v))} />
-          <SkillSlider label="Basketball IQ" value={Number(form.basketball_iq_level)} onChange={(v) => update("basketball_iq_level", String(v))} />
           <SkillSlider label="Conditioning" value={Number(form.conditioning_level)} onChange={(v) => update("conditioning_level", String(v))} />
           <SkillSlider label="Athleticism" value={Number(form.athleticism_level)} onChange={(v) => update("athleticism_level", String(v))} />
           <SkillSlider label="Strength" value={Number(form.strength_level)} onChange={(v) => update("strength_level", String(v))} />

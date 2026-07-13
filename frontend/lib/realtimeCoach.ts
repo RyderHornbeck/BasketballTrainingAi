@@ -14,8 +14,6 @@ import {
 } from "@/lib/coachUsage";
 import {
   COACH_DUPLICATE_SPEECH_MS,
-  COACH_MAX_RESPONSES_PER_SESSION,
-  COACH_MAX_SESSION_MS,
   COACH_MIN_SPEECH_MS,
 } from "@/lib/coachStateMachine";
 import { supabase } from "@/lib/supabase";
@@ -149,11 +147,9 @@ export class RealtimeCoachSession {
   private speaking = false;
   private toolBusy = false;
   private pendingResponseCreate = false;
-  private responseCount = 0;
   private speechStartedAt = 0;
   private lastSpeechEndedAt = 0;
   private lastCoachAudioEnd = 0;
-  private sessionTimer: ReturnType<typeof setTimeout> | null = null;
   private disconnectReason = "manual";
   private workoutSpentBaseline = 0;
   private workoutBudgetUsd = COACH_WORKOUT_BUDGET_USD;
@@ -194,7 +190,6 @@ export class RealtimeCoachSession {
     this.conversationSummary = conversationSummary;
     this.sessionKey = createSessionKey();
     this.model = "gpt-realtime-2.1-mini";
-    this.responseCount = 0;
     this.handledToolCalls.clear();
     this.usageTracker = createUsageTracker(this.model);
     callbacks.onStatus("connecting");
@@ -306,7 +301,6 @@ export class RealtimeCoachSession {
         this.seedWorkoutContext(data.workout_context);
       }
 
-      this.armSessionTimeout();
       this.callbacks?.onStatus("listening");
     } catch (err) {
       console.error("Realtime coach connect failed:", err);
@@ -368,7 +362,6 @@ export class RealtimeCoachSession {
 
     this.disconnectReason = reason;
     this.callbacks?.onStatus("disconnecting");
-    this.clearTimers();
     this.active = false;
     this.connecting = false;
     this.speaking = false;
@@ -449,18 +442,6 @@ export class RealtimeCoachSession {
     });
   }
 
-  private clearTimers(): void {
-    if (this.sessionTimer) clearTimeout(this.sessionTimer);
-    this.sessionTimer = null;
-  }
-
-  private armSessionTimeout(): void {
-    if (this.sessionTimer) clearTimeout(this.sessionTimer);
-    this.sessionTimer = setTimeout(() => {
-      if (this.active) void this.disconnect("max_duration");
-    }, COACH_MAX_SESSION_MS);
-  }
-
   private sendEvent(event: Record<string, unknown>): void {
     if (this.dc?.readyState === "open") {
       this.dc.send(JSON.stringify(event));
@@ -520,11 +501,6 @@ export class RealtimeCoachSession {
 
       case "response.created":
         if (this.cancelledShortSpeech) return;
-        this.responseCount += 1;
-        if (this.responseCount > COACH_MAX_RESPONSES_PER_SESSION) {
-          void this.disconnect("response_limit");
-          return;
-        }
         this.callbacks?.onStatus("thinking");
         this.setSpeaking(true);
         break;
@@ -577,6 +553,8 @@ export class RealtimeCoachSession {
     response?: {
       output?: FunctionCallItem[];
       usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
         input_token_details?: {
           text_tokens?: number;
           audio_tokens?: number;

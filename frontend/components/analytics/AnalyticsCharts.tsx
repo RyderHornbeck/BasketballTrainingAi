@@ -46,7 +46,7 @@ const SKILL_LABELS: Record<string, string> = {
   finishing: "Finishing",
   defense: "Defense",
   conditioning: "Conditioning",
-  basketball_iq: "Basketball IQ",
+  discipline: "Discipline",
 };
 
 const COMPACT_SKILL_LABELS: Record<string, string> = {
@@ -55,7 +55,7 @@ const COMPACT_SKILL_LABELS: Record<string, string> = {
   finishing: "Finish",
   defense: "Def",
   conditioning: "Cond",
-  basketball_iq: "IQ",
+  discipline: "Discipline",
 };
 
 const FINISHING_BLUE = { dark: "#5AC8FA", light: "#007AFF" };
@@ -85,7 +85,7 @@ function clamp(value: number, min: number, max: number) {
 
 function getSkillLabelLines(key: string, compact: boolean): string[] {
   if (compact) return [COMPACT_SKILL_LABELS[key] ?? key];
-  if (key === "basketball_iq") return ["Basketball", "IQ"];
+  if (key === "discipline") return ["Discipline"];
   if (key === "ball_handling") return ["Ball", "Handling"];
   return [SKILL_LABELS[key] ?? key];
 }

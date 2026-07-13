@@ -44,7 +44,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   warmup: "Warmup",
   cooldown: "Cooldown",
   mobility: "Mobility",
-  basketball_iq: "Basketball IQ",
+  basketball_iq: "Discipline",
 };
 
 function SetCheckboxRow({
@@ -215,6 +215,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
   const [expanded, setExpanded] = useState(false);
   const [videoError, setVideoError] = useState(false);
   const [videoStarted, setVideoStarted] = useState(false);
+  const previousExerciseIdRef = useRef(exercise.id);
 
   const baseSetPlan = useMemo(() => buildSetPlan(exercise), [exercise]);
   const [attemptsOverride, setAttemptsOverride] = useState<number | null>(() => {
@@ -256,9 +257,12 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
     setDifficulty(exercise.log?.difficulty ?? 0);
     setUserNotes(meta.user_notes ?? "");
     hasUserEditsRef.current = false;
-    setExpanded(false);
-    setVideoStarted(false);
-    setVideoError(false);
+    if (previousExerciseIdRef.current !== exercise.id) {
+      previousExerciseIdRef.current = exercise.id;
+      setExpanded(false);
+      setVideoStarted(false);
+      setVideoError(false);
+    }
   }, [exercise.id, exercise.log, baseSetPlan]);
 
   const clip = exercise.video_clip;
