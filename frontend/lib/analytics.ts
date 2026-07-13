@@ -1,4 +1,5 @@
 import { OnboardingAnswers } from "@/types/database";
+import { decodeExerciseLogMeta } from "./exerciseSetLogs";
 import { computeSkillProfile, DisciplineWorkout, SkillProfile } from "./skillRatings";
 import { ShotMapLogEntry } from "./shotMap";
 import { supabase } from "./supabase";
@@ -79,6 +80,41 @@ const CATEGORY_LABELS: Record<string, string> = {
   basketball_iq: "Discipline",
 };
 
+interface CompletedShotTotals {
+  makes: number;
+  attempts: number;
+}
+
+/**
+ * Match the Shot Map's source of truth: only completed per-set results count.
+ * Legacy logs without set metadata retain their recorded aggregate result.
+ */
+function completedShotTotals(log: any): CompletedShotTotals | null {
+  const meta = decodeExerciseLogMeta(log.notes ?? null);
+  if (meta.set_logs?.length) {
+    const completedSets = meta.set_logs.filter((set) => set.completed);
+    if (completedSets.length === 0) return null;
+    const totals = completedSets.reduce(
+      (totals, set) => {
+        const makes = set.makes ?? 0;
+        const attempts = set.attempts ?? makes;
+        if (attempts <= 0) return totals;
+        return {
+          makes: totals.makes + makes,
+          attempts: totals.attempts + attempts,
+        };
+      },
+      { makes: 0, attempts: 0 }
+    );
+    return totals.attempts > 0 ? totals : null;
+  }
+
+  if (!log.completed && log.makes == null) return null;
+  const attempts = log.attempts ?? 0;
+  if (attempts <= 0) return null;
+  return { makes: log.makes ?? 0, attempts };
+}
+
 export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
   const { data: userData } = await supabase.auth.getUser();
   const userId = userData.user?.id;
@@ -140,12 +176,13 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     categoryMap[category].total += 1;
     if (log.completed) categoryMap[category].completed += 1;
 
-    const makes = log.makes ?? 0;
-    const attempts = log.attempts ?? 0;
-    if (log.makes != null) categoryMap[category].makes += makes;
-    if (log.attempts != null) categoryMap[category].attempts += attempts;
-    if (log.makes != null) totalMakes += makes;
-    if (log.attempts != null) totalAttempts += attempts;
+    const shotTotals = completedShotTotals(log);
+    if (shotTotals) {
+      categoryMap[category].makes += shotTotals.makes;
+      categoryMap[category].attempts += shotTotals.attempts;
+      totalMakes += shotTotals.makes;
+      totalAttempts += shotTotals.attempts;
+    }
   }
 
   const totalMisses = Math.max(0, totalAttempts - totalMakes);
@@ -191,13 +228,18 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
   const weeklyProgress = computeWeeklyProgress(logs);
   const weeklyShooting = computeWeeklyShooting(exerciseLogs ?? []);
   const weeklyPctTrend = computeWeeklyPctTrend(exerciseLogs ?? []);
-  const shootingLogs = (exerciseLogs ?? [])
-    .filter((log) => log.makes != null || log.attempts != null)
-    .map((log) => ({
-      created_at: log.created_at as string,
-      makes: log.makes as number | null,
-      attempts: log.attempts as number | null,
-    }));
+  const shootingLogs = (exerciseLogs ?? []).flatMap((log) => {
+    const totals = completedShotTotals(log);
+    return totals
+      ? [
+          {
+            created_at: log.created_at as string,
+            makes: totals.makes,
+            attempts: totals.attempts,
+          },
+        ]
+      : [];
+  });
 
   const firstActivityDate =
     shootingLogs.length > 0
@@ -353,13 +395,13 @@ function computeWeeklyPctTrend(
   }
 
   for (const log of exerciseLogs) {
-    if (log.makes == null && log.attempts == null) continue;
+    const shotTotals = completedShotTotals(log);
+    if (!shotTotals) continue;
     const category = log.workout_exercises?.category ?? "";
     const date = new Date(log.created_at);
     for (const bucket of buckets) {
       if (date >= bucket.start && date <= bucket.end) {
-        const makes = log.makes ?? 0;
-        const attempts = log.attempts ?? 0;
+        const { makes, attempts } = shotTotals;
         if (category === "finishing") {
           bucket.finishingMakes += makes;
           bucket.finishingAttempts += attempts;
@@ -419,12 +461,13 @@ function computeWeeklyShooting(
   }
 
   for (const log of exerciseLogs) {
-    if (log.makes == null && log.attempts == null) continue;
+    const shotTotals = completedShotTotals(log);
+    if (!shotTotals) continue;
     const date = new Date(log.created_at);
     for (const bucket of buckets) {
       if (date >= bucket.start && date <= bucket.end) {
-        bucket.makes += log.makes ?? 0;
-        bucket.attempts += log.attempts ?? 0;
+        bucket.makes += shotTotals.makes;
+        bucket.attempts += shotTotals.attempts;
         break;
       }
     }
