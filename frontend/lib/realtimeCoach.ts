@@ -461,6 +461,8 @@ export class RealtimeCoachSession {
   private setSpeaking(speaking: boolean): void {
     this.speaking = speaking;
     if (speaking) {
+      // Do not disable the WebRTC microphone track here. Server VAD needs the
+      // live earbud mic to detect a barge-in while the coach is speaking.
       this.callbacks?.onStatus("speaking");
       return;
     }
@@ -484,8 +486,16 @@ export class RealtimeCoachSession {
         break;
 
       case "input_audio_buffer.speech_started": {
-        if (this.speaking || this.toolBusy) return;
-        if (Date.now() - this.lastCoachAudioEnd < 400) return;
+        const interruptedCoach = this.speaking;
+        if (interruptedCoach) {
+          // The server VAD is configured to interrupt output, and cancelling
+          // over the WebRTC data channel clears any response audio already
+          // buffered for playback without muting the microphone track.
+          this.sendEvent({ type: "response.cancel" });
+          this.setSpeaking(false);
+        }
+        if (this.toolBusy) return;
+        if (!interruptedCoach && Date.now() - this.lastCoachAudioEnd < 400) return;
         if (Date.now() - this.lastSpeechEndedAt < COACH_DUPLICATE_SPEECH_MS) return;
         this.speechStartedAt = Date.now();
         this.cancelledShortSpeech = false;
