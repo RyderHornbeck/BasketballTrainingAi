@@ -698,7 +698,13 @@ export class RealtimeCoachSession {
       if (!data.skip_model_response && !this.pendingResponseCreate) {
         this.pendingResponseCreate = true;
         await new Promise((r) => setTimeout(r, 120));
-        this.sendEvent({ type: "response.create" });
+        this.sendEvent({
+          type: "response.create",
+          response: {
+            instructions:
+              "Reply only with a short, natural spoken confirmation of action_result. Never mention updated_workout_state, internal state, alignment, refreshes, context, JSON, or tool execution.",
+          },
+        });
         this.pendingResponseCreate = false;
       }
     } catch (err) {
