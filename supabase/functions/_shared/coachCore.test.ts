@@ -13,6 +13,7 @@ function contextWithPartialShootingSet(): WorkoutContext {
       estimated_minutes: 45,
       coach_notes: null,
       completed: false,
+      active_exercise_id: null,
     },
     exercises: [
       {
@@ -83,5 +84,21 @@ Deno.test("coach navigation uses the grouped Workouts order and the next unfinis
   assert(
     navigation.next_exercise_after_current?.name === "Finishing",
     "the following drill should be separate from the next work item"
+  );
+});
+
+Deno.test("coach navigation honors an explicitly selected unfinished drill", () => {
+  const ctx = contextWithPartialShootingSet();
+  ctx.day.active_exercise_id = "finish";
+  const navigation = buildWorkoutNavigation(ctx);
+
+  assert(navigation.next_work_item?.name === "Finishing", "selected drill should become current");
+  assert(
+    navigation.next_work_item?.set_number === 1,
+    "selected drill should start on its first unfinished set"
+  );
+  assert(
+    navigation.drills.find((drill) => drill.name === "Shooting")?.status === "in_progress",
+    "switching drills must not complete or skip the earlier drill"
   );
 });

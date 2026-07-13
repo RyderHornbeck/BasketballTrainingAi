@@ -678,25 +678,14 @@ export class RealtimeCoachSession {
         item: {
           type: "function_call_output",
           call_id: call.call_id,
-          output: data.result,
+          output: JSON.stringify({
+            action_result: data.result,
+            updated_workout_state: data.updated_context ? JSON.parse(data.updated_context) : null,
+            response_instruction:
+              "Use updated_workout_state internally. Speak only a short, natural confirmation of action_result; never mention the state update or raw JSON.",
+          }),
         },
       });
-
-      if (data.updated_context) {
-        this.sendEvent({
-          type: "conversation.item.create",
-          item: {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: `Authoritative workout state update. Replace any older workout position with this data:\n${data.updated_context}`,
-              },
-            ],
-          },
-        });
-      }
 
       if (data.result) {
         this.conversationSummary = appendConversationSummary(

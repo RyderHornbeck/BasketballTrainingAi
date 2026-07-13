@@ -80,6 +80,7 @@ export interface WorkoutContext {
     estimated_minutes: number | null;
     coach_notes: string | null;
     completed: boolean;
+    active_exercise_id: string | null;
   };
   exercises: ExerciseRow[];
   logs: Map<string, LogRow>;
@@ -95,6 +96,7 @@ Rules:
 - "What's next?" always means navigation.next_work_item: the first incomplete set of the current drill. Do not move to another drill until every set in the current drill is complete.
 - "What drill/exercise comes after this?" means navigation.next_exercise_after_current. Never treat this as the answer to "what's next?"
 - For progress, location, sequence, or next-action questions, call get_workout_position. Never infer a drill number; use the returned drill_position.
+- If the athlete asks to switch or go to another drill, call set_current_drill. They can return to earlier unfinished drills; never claim that switching is unavailable.
 - Context includes has_video_demo per drill. Video drills have an in-app demo on the exercise card; text-only drills do not. For text-only drills, use drill_description and coaching_notes from context instead of telling them to watch a video.
 - For video drills, if they seem confused by your verbal description, briefly tell them to watch the video demo on that exercise card.
 - For drill-list questions, call list_workout_drills with an optional category (e.g. shooting) if helpful.
@@ -202,6 +204,18 @@ const REALTIME_TOOL_DEFS = [
     description:
       "Fetch the authoritative current set, next work item, next exercise, ordered drill list, and progress. Use for where-am-I, what's-next, and workout-sequence questions.",
     parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "set_current_drill",
+    description:
+      "Switch the active workout drill without completing or skipping any other drills. Use when the athlete asks to go to, switch to, or return to a specific drill.",
+    parameters: {
+      type: "object",
+      properties: {
+        exercise_id: { type: "string" },
+      },
+      required: ["exercise_id"],
+    },
   },
   {
     name: "get_progress",
@@ -393,7 +407,7 @@ export async function loadWorkoutContext(
 ): Promise<WorkoutContext | null> {
   const { data: day } = await supabase
     .from("workout_days")
-    .select("id, title, focus, estimated_minutes, coach_notes, completed, user_id")
+    .select("id, title, focus, estimated_minutes, coach_notes, completed, active_exercise_id, user_id")
     .eq("id", dayId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -628,8 +642,27 @@ function orderedDrillStates(ctx: WorkoutContext): OrderedDrillState[] {
   });
 }
 
+function currentDrillIndex(states: OrderedDrillState[], activeExerciseId: string | null): number {
+  const activeIndex = activeExerciseId
+    ? states.findIndex((state) => state.exercise.id === activeExerciseId)
+    : -1;
+  if (activeIndex >= 0 && !states[activeIndex].totals.completed) return activeIndex;
+
+  // When the active drill just finished, continue forward before wrapping to
+  // earlier drills the athlete intentionally left available.
+  if (activeIndex >= 0) {
+    const nextIndex = states.findIndex(
+      (state, index) => index > activeIndex && !state.totals.completed
+    );
+    if (nextIndex >= 0) return nextIndex;
+  }
+  return states.findIndex((state) => !state.totals.completed);
+}
+
 function findCurrentDrillState(ctx: WorkoutContext): OrderedDrillState | null {
-  return orderedDrillStates(ctx).find((state) => !state.totals.completed) ?? null;
+  const states = orderedDrillStates(ctx);
+  const index = currentDrillIndex(states, ctx.day.active_exercise_id);
+  return index >= 0 ? states[index] : null;
 }
 
 function findCurrentExercise(ctx: WorkoutContext): ExerciseRow | null {
@@ -674,7 +707,7 @@ function drillContext(state: OrderedDrillState) {
 
 export function buildWorkoutNavigation(ctx: WorkoutContext) {
   const states = orderedDrillStates(ctx);
-  const currentIndex = states.findIndex((state) => !state.totals.completed);
+  const currentIndex = currentDrillIndex(states, ctx.day.active_exercise_id);
   const current = currentIndex >= 0 ? states[currentIndex] : null;
   const nextExercise =
     currentIndex >= 0
@@ -1018,6 +1051,34 @@ export async function executeCoachTool(
     // Retained for an in-flight session that received the prior tool schema.
     case "get_next_drill":
       return { result: buildWorkoutPositionSummary(ctx), dbChanged: false };
+
+    case "set_current_drill": {
+      const exerciseId = validExercise(args.exercise_id);
+      if (!exerciseId) return { result: "Error: unknown exercise_id", dbChanged: false };
+      const targetState = orderedDrillStates(ctx).find(
+        (state) => state.exercise.id === exerciseId
+      );
+      if (!targetState || targetState.totals.completed) {
+        return {
+          result: "That drill is already complete. Choose an unfinished drill instead.",
+          dbChanged: false,
+        };
+      }
+      const { error } = await supabase
+        .from("workout_days")
+        .update({ active_exercise_id: exerciseId })
+        .eq("id", dayId)
+        .eq("user_id", userId);
+      if (error) return { result: `Error: ${error.message}`, dbChanged: false };
+      ctx.day.active_exercise_id = exerciseId;
+      const setNumber = getCurrentSetNumber(targetState.totals.set_logs, targetState.plan);
+      return {
+        result: `Now on drill ${targetState.position}, ${targetState.exercise.name ?? "unnamed drill"}, set ${
+          setNumber ?? 1
+        } of ${targetState.plan.setCount}.`,
+        dbChanged: true,
+      };
+    }
 
     case "list_workout_drills": {
       const category =
