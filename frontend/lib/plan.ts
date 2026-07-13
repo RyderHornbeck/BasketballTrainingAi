@@ -15,7 +15,6 @@ import {
   buildSetPlan,
   decodeExerciseLogMeta,
   hydrateSetLogs,
-  normalizeSetLogs,
 } from "./exerciseSetLogs";
 import { supabase } from "./supabase";
 import { registerForPushNotificationsAsync } from "./notifications";
@@ -82,9 +81,12 @@ export async function getWeeklyWorkoutStats(): Promise<WeeklyWorkoutStats> {
       for (const exercise of day.exercises) {
         if (exercise.log_type !== "makes_attempts" || !exercise.log) continue;
         const plan = buildSetPlan(exercise);
-        const setLogs = normalizeSetLogs(
-          hydrateSetLogs(plan, decodeExerciseLogMeta(exercise.log.notes), exercise.log),
-          plan
+        // Weekly shots follow the Shot Map rule: a user must explicitly
+        // complete a set before its attempts count toward the weekly total.
+        const setLogs = hydrateSetLogs(
+          plan,
+          decodeExerciseLogMeta(exercise.log.notes),
+          exercise.log
         );
         for (const set of setLogs) {
           if (!set.completed) continue;

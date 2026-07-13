@@ -145,6 +145,7 @@ function SetShootingRow({
             onChangeText={readOnly ? undefined : onMakesChange}
             editable={!readOnly}
             keyboardType="number-pad"
+            inputMode="numeric"
             placeholder="0"
             placeholderTextColor={colors.textMuted}
             style={[
@@ -161,6 +162,7 @@ function SetShootingRow({
             onChangeText={readOnly ? undefined : onAttemptsChange}
             editable={!readOnly}
             keyboardType="number-pad"
+            inputMode="numeric"
             placeholder={targetAttempts != null ? String(targetAttempts) : "0"}
             placeholderTextColor={colors.textMuted}
             style={[
@@ -336,6 +338,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
           const attempts = resetPlan.perSetAttempts;
           return {
             ...row,
+            makes: attempts != null ? Math.min(makesNum, attempts) : makesNum,
             attempts,
             completed: row.makes != null && (attempts ?? 0) > 0,
           };
@@ -351,6 +354,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
         const makesNum = row.makes ?? 0;
         return {
           ...row,
+          makes: Math.min(makesNum, attemptsNum),
           attempts: attemptsNum,
           completed:
             row.makes != null && attemptsNum > 0,
@@ -423,7 +427,7 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
             const makesNum = text ? parseInt(text.replace(/[^0-9]/g, ""), 10) : 0;
             const attemptsNum = row.attempts ?? setPlan.perSetAttempts ?? 0;
             updateSet(row.set_number, {
-              makes: text ? makesNum : null,
+              makes: text ? Math.min(makesNum, attemptsNum) : null,
               completed: Boolean(text) && attemptsNum > 0,
             });
           }}
