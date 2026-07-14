@@ -4,7 +4,10 @@
   "private": true,
   "description": "Supabase seed/import scripts for the HoopPlan app.",
   "scripts": {
-    "seed:videos": "tsx seed/import-videos.ts"
+    "seed:videos": "tsx seed/import-videos.ts",
+    "seed:metadata": "tsx seed/apply-exercise-metadata.ts",
+    "seed:advanced": "tsx seed/seed-advanced-drills.ts",
+    "seed:shot-zones": "tsx seed/seed-shot-zone-drills.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

@@ -4,6 +4,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import {
+  buildRealtimeInstructions,
   buildRealtimeNavigationUpdate,
   executeCoachTool,
   loadWorkoutContext,
@@ -39,6 +40,13 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "Invalid or expired session" }, 401);
     }
     const userId = userData.user.id;
+    const { data: answers } = await supabase
+      .from("onboarding_answers")
+      .select("main_goal")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     const body = (await req.json().catch(() => ({}))) as {
       day_id?: string;
@@ -84,7 +92,7 @@ Deno.serve(async (req: Request) => {
         .maybeSingle();
 
       if (cached) {
-        const refreshedContext = cached.db_changed
+        const refreshedContext = cached.db_changed || body.tool_name === "get_workout_position"
           ? await loadWorkoutContext(supabase, userId, body.day_id)
           : null;
         return jsonResponse({
@@ -95,6 +103,9 @@ Deno.serve(async (req: Request) => {
           skip_model_response: cached.skip_model_response,
           deduplicated: true,
           updated_context: refreshedContext ? buildRealtimeNavigationUpdate(refreshedContext) : null,
+          updated_instructions: refreshedContext
+            ? buildRealtimeInstructions(refreshedContext, answers ?? null)
+            : null,
         });
       }
     }
@@ -154,7 +165,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    const refreshedContext = outcome.dbChanged
+    const refreshedContext = outcome.dbChanged || body.tool_name === "get_workout_position"
       ? await loadWorkoutContext(supabase, userId, body.day_id)
       : null;
 
@@ -165,6 +176,9 @@ Deno.serve(async (req: Request) => {
       local_confirmation: outcome.localConfirmation ?? null,
       skip_model_response: outcome.skipModelResponse ?? false,
       updated_context: refreshedContext ? buildRealtimeNavigationUpdate(refreshedContext) : null,
+      updated_instructions: refreshedContext
+        ? buildRealtimeInstructions(refreshedContext, answers ?? null)
+        : null,
     });
   } catch (err) {
     console.error("coach-tools error:", err);

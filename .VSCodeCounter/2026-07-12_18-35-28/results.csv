@@ -1,0 +1,102 @@
+"filename", "language", "JSON with Comments", "TypeScript", "Markdown", "JSON", "MS SQL", "TypeScript JSX", "JavaScript", "XML", "comment", "blank", "total"
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/README.md", "Markdown", 0, 0, 228, 0, 0, 0, 0, 0, 0, 46, 274
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/README.md", "Markdown", 0, 0, 14, 0, 0, 0, 0, 0, 0, 6, 20
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app.json", "JSON", 0, 0, 0, 75, 0, 0, 0, 0, 0, 1, 76
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app/(tabs)/_layout.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 201, 0, 0, 1, 13, 215
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app/(tabs)/analytics.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 157, 0, 0, 0, 17, 174
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app/(tabs)/days.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 732, 0, 0, 0, 44, 776
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app/(tabs)/profile.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 219, 0, 0, 0, 16, 235
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app/_layout.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 103, 0, 0, 0, 12, 115
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app/auth/forgot-password.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 90, 0, 0, 0, 8, 98
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app/auth/login.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 138, 0, 0, 0, 10, 148
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app/auth/signup.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 175, 0, 0, 5, 14, 194
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app/drill-timer.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 161, 0, 0, 0, 16, 177
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app/generating.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 179, 0, 0, 1, 13, 193
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app/index.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 74, 0, 0, 0, 7, 81
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app/onboarding/index.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 415, 0, 0, 10, 30, 455
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/app/welcome.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 85, 0, 0, 0, 5, 90
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/assets/expo.icon/Assets/expo-symbol 2.svg", "XML", 0, 0, 0, 0, 0, 0, 0, 3, 0, 1, 4
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/assets/expo.icon/icon.json", "JSON", 0, 0, 0, 40, 0, 0, 0, 0, 0, 0, 40
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/babel.config.js", "JavaScript", 0, 0, 0, 0, 0, 0, 7, 0, 0, 1, 8
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/Button.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 115, 0, 0, 0, 12, 127
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/Card.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 47, 0, 0, 1, 5, 53
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/CoachOverlay.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 311, 0, 0, 1, 23, 335
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/DaySelector.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 169, 0, 0, 0, 15, 184
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/ExerciseCard.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 967, 0, 0, 1, 40, 1008
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/OnboardingStep.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 160, 0, 0, 0, 11, 171
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/ProgressRing.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 73, 0, 0, 0, 5, 78
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/ScreenBackground.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 45, 0, 0, 0, 7, 52
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/SkillSlider.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 121, 0, 0, 5, 5, 131
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/StatCard.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 48, 0, 0, 0, 5, 53
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/Text.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 20, 0, 0, 5, 4, 29
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/TextInput.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 57, 0, 0, 0, 5, 62
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/ThemeProvider.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 95, 0, 0, 3, 15, 113
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/analytics/AnalyticsCharts.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 963, 0, 0, 2, 65, 1030
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/components/analytics/ShotMap.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 296, 0, 0, 8, 20, 324
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/eas.json", "JSON", 0, 0, 0, 33, 0, 0, 0, 0, 0, 1, 34
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/hooks/useAuth.ts", "TypeScript", 0, 168, 0, 0, 0, 0, 0, 0, 0, 21, 189
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/hooks/useCoach.ts", "TypeScript", 0, 319, 0, 0, 0, 0, 0, 0, 2, 30, 351
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/hooks/usePlan.ts", "TypeScript", 0, 136, 0, 0, 0, 0, 0, 0, 5, 18, 159
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/hooks/usePushNotifications.ts", "TypeScript", 0, 22, 0, 0, 0, 0, 0, 0, 8, 6, 36
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/hooks/useTheme.ts", "TypeScript", 0, 4, 0, 0, 0, 0, 0, 0, 1, 2, 7
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/hooks/useTimerAudioCues.ts", "TypeScript", 0, 106, 0, 0, 0, 0, 0, 0, 2, 16, 124
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/analytics.ts", "TypeScript", 0, 415, 0, 0, 0, 0, 0, 0, 0, 46, 461
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/coachEvents.ts", "TypeScript", 0, 16, 0, 0, 0, 0, 0, 0, 3, 5, 24
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/coachStateMachine.ts", "TypeScript", 0, 21, 0, 0, 0, 0, 0, 0, 0, 3, 24
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/coachUsage.ts", "TypeScript", 0, 203, 0, 0, 0, 0, 0, 0, 1, 24, 228
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/dayPerformance.ts", "TypeScript", 0, 90, 0, 0, 0, 0, 0, 0, 4, 18, 112
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/drillDescription.ts", "TypeScript", 0, 58, 0, 0, 0, 0, 0, 0, 0, 12, 70
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/exerciseClip.ts", "TypeScript", 0, 9, 0, 0, 0, 0, 0, 0, 0, 4, 13
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/exerciseSetLogs.ts", "TypeScript", 0, 245, 0, 0, 0, 0, 0, 0, 0, 30, 275
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/navigationTheme.ts", "TypeScript", 0, 18, 0, 0, 0, 0, 0, 0, 0, 2, 20
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/notifications.ts", "TypeScript", 0, 83, 0, 0, 0, 0, 0, 0, 8, 15, 106
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/onboardingDraft.ts", "TypeScript", 0, 18, 0, 0, 0, 0, 0, 0, 5, 5, 28
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/plan.ts", "TypeScript", 0, 379, 0, 0, 0, 0, 0, 0, 18, 58, 455
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/realtimeCoach.ts", "TypeScript", 0, 626, 0, 0, 0, 0, 0, 0, 4, 75, 705
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/shootingAnalytics.ts", "TypeScript", 0, 182, 0, 0, 0, 0, 0, 0, 0, 25, 207
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/shotMap.ts", "TypeScript", 0, 353, 0, 0, 0, 0, 0, 0, 17, 46, 416
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/shotMapCourt.ts", "TypeScript", 0, 192, 0, 0, 0, 0, 0, 0, 29, 9, 230
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/skillRatings.ts", "TypeScript", 0, 249, 0, 0, 0, 0, 0, 0, 2, 30, 281
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/supabase.ts", "TypeScript", 0, 34, 0, 0, 0, 0, 0, 0, 3, 7, 44
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/webrtcAudio.ts", "TypeScript", 0, 89, 0, 0, 0, 0, 0, 0, 9, 22, 120
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/lib/youtubePlayer.ts", "TypeScript", 0, 74, 0, 0, 0, 0, 0, 0, 5, 4, 83
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/metro.config.js", "JavaScript", 0, 0, 0, 0, 0, 0, 4, 0, 3, 4, 11
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/package-lock.json", "JSON", 0, 0, 0, 12004, 0, 0, 0, 0, 0, 1, 12005
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/package.json", "JSON", 0, 0, 0, 73, 0, 0, 0, 0, 0, 1, 74
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/tsconfig.json", "JSON with Comments", 15, 0, 0, 0, 0, 0, 0, 0, 0, 1, 16
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/types/database.ts", "TypeScript", 0, 167, 0, 0, 0, 0, 0, 0, 2, 18, 187
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/frontend/types/plan.ts", "TypeScript", 0, 41, 0, 0, 0, 0, 0, 0, 1, 6, 48
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/_shared/adaptivePlan.test.ts", "TypeScript", 0, 88, 0, 0, 0, 0, 0, 0, 0, 8, 96
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/_shared/adaptivePlan.ts", "TypeScript", 0, 296, 0, 0, 0, 0, 0, 0, 3, 27, 326
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/_shared/coachCore.ts", "TypeScript", 0, 1140, 0, 0, 0, 0, 0, 0, 5, 85, 1230
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/_shared/coachUsage.ts", "TypeScript", 0, 55, 0, 0, 0, 0, 0, 0, 6, 12, 73
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/_shared/cors.ts", "TypeScript", 0, 6, 0, 0, 0, 0, 0, 0, 0, 1, 7
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/_shared/exerciseClip.ts", "TypeScript", 0, 10, 0, 0, 0, 0, 0, 0, 0, 3, 13
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/_shared/exerciseSetLogs.ts", "TypeScript", 0, 226, 0, 0, 0, 0, 0, 0, 1, 29, 256
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/_shared/expo-push.ts", "TypeScript", 0, 29, 0, 0, 0, 0, 0, 0, 0, 1, 30
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/_shared/smartPlan.smoke.ts", "TypeScript", 0, 202, 0, 0, 0, 0, 0, 0, 11, 18, 231
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/_shared/smartPlan.ts", "TypeScript", 0, 869, 0, 0, 0, 0, 0, 0, 62, 110, 1041
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/coach-realtime/index.ts", "TypeScript", 0, 241, 0, 0, 0, 0, 0, 0, 2, 27, 270
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/coach-tools/index.ts", "TypeScript", 0, 136, 0, 0, 0, 0, 0, 0, 2, 23, 161
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/coach-usage/index.ts", "TypeScript", 0, 89, 0, 0, 0, 0, 0, 0, 2, 14, 105
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/coach/index.ts", "TypeScript", 0, 712, 0, 0, 0, 0, 0, 0, 50, 81, 843
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/functions/generate-plan/index.ts", "TypeScript", 0, 944, 0, 0, 0, 0, 0, 0, 60, 104, 1108
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/migrations/20260710000001_initial_schema.sql", "MS SQL", 0, 0, 0, 0, 167, 0, 0, 0, 29, 27, 223
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/migrations/20260710000002_rls_policies.sql", "MS SQL", 0, 0, 0, 0, 112, 0, 0, 0, 35, 30, 177
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/migrations/20260710000003_exercise_logs_unique.sql", "MS SQL", 0, 0, 0, 0, 2, 0, 0, 0, 2, 1, 5
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/migrations/20260711000001_coach_usage.sql", "MS SQL", 0, 0, 0, 0, 59, 0, 0, 0, 1, 11, 71
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/migrations/20260711000002_adaptive_five_day_blocks.sql", "MS SQL", 0, 0, 0, 0, 32, 0, 0, 0, 1, 9, 42
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/migrations/20260711000003_backfill_workout_blocks.sql", "MS SQL", 0, 0, 0, 0, 3, 0, 0, 0, 2, 2, 7
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/migrations/20260711000004_exercise_metadata_and_sides.sql", "MS SQL", 0, 0, 0, 0, 10, 0, 0, 0, 1, 4, 15
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/migrations/20260712000001_dedupe_coach_usage_logs.sql", "MS SQL", 0, 0, 0, 0, 22, 0, 0, 0, 2, 2, 26
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/package-lock.json", "JSON", 0, 0, 0, 703, 0, 0, 0, 0, 0, 1, 704
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/package.json", "JSON", 0, 0, 0, 22, 0, 0, 0, 0, 0, 1, 23
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/seed/advanced-combo-drills-catalog.ts", "TypeScript", 0, 660, 0, 0, 0, 0, 0, 0, 7, 9, 676
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/seed/apply-exercise-metadata.ts", "TypeScript", 0, 54, 0, 0, 0, 0, 0, 0, 4, 13, 71
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/seed/exercise-catalog-metadata.ts", "TypeScript", 0, 726, 0, 0, 0, 0, 0, 0, 0, 1, 727
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/seed/import-videos.ts", "TypeScript", 0, 389, 0, 0, 0, 0, 0, 0, 121, 65, 575
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/seed/seed-advanced-drills.ts", "TypeScript", 0, 106, 0, 0, 0, 0, 0, 0, 4, 16, 126
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/seed/seed-shot-zone-drills.ts", "TypeScript", 0, 90, 0, 0, 0, 0, 0, 0, 4, 13, 107
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/seed/shot-zone-drills-catalog.ts", "TypeScript", 0, 98, 0, 0, 0, 0, 0, 0, 5, 6, 109
+"/Users/ryderhornbeck/CodingProjects/BasketballTrainer/supabase/tsconfig.json", "JSON with Comments", 13, 0, 0, 0, 0, 0, 0, 0, 0, 1, 14
+"Total", "-", 28, 11483, 242, 12950, 407, 6216, 11, 3, 597, 1817, 33754

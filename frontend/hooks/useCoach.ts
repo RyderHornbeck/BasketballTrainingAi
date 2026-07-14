@@ -8,6 +8,7 @@ import {
   fetchWorkoutCoachBudget,
   isCoachLimitMessage,
 } from "@/lib/coachUsage";
+import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { type CoachMachineState } from "@/lib/coachStateMachine";
 import {
   RealtimeCoachSession,
@@ -52,6 +53,8 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const limitBlockedRef = useRef(false);
   const workoutSpentBaselineRef = useRef(0);
   const startSessionRef = useRef<() => Promise<void>>(async () => {});
+  const teardownRef = useRef<Promise<void>>(Promise.resolve());
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [status, setStatus] = useState<CoachStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -207,6 +210,11 @@ export function useCoach(dayId: string | null): UseCoachResult {
     connectingRef.current = true;
     setError(null);
 
+    await teardownRef.current;
+    if (!overlayOpenRef.current || !dayId || limitBlockedRef.current) {
+      connectingRef.current = false;
+      return;
+    }
     const session = ensureSession();
     try {
       await session.connect(
@@ -255,6 +263,16 @@ export function useCoach(dayId: string | null): UseCoachResult {
             ) {
               return;
             }
+            if (reason === "connection_lost") {
+              setStatus("connecting");
+              if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+              reconnectTimerRef.current = setTimeout(() => {
+                reconnectTimerRef.current = null;
+                if (overlayOpenRef.current && !limitBlockedRef.current) {
+                  void startSessionRef.current();
+                }
+              }, 1_000);
+            }
           },
         },
         {
@@ -279,13 +297,19 @@ export function useCoach(dayId: string | null): UseCoachResult {
     markLimitReached,
   ]);
 
-  startSessionRef.current = startSession;
+  useEffect(() => {
+    startSessionRef.current = startSession;
+  }, [startSession]);
 
   const stopSession = useCallback(async () => {
     overlayOpenRef.current = false;
     connectingRef.current = false;
-    await sessionRef.current?.disconnect("overlay_closed");
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+    const session = sessionRef.current;
     sessionRef.current = null;
+    teardownRef.current = session?.disconnect("overlay_closed") ?? Promise.resolve();
+    await teardownRef.current;
   }, []);
 
   const toggleMute = useCallback(() => {
@@ -311,15 +335,35 @@ export function useCoach(dayId: string | null): UseCoachResult {
     return () => {
       overlayOpenRef.current = false;
       connectingRef.current = false;
-      void sessionRef.current?.disconnect("overlay_closed");
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+      const session = sessionRef.current;
       sessionRef.current = null;
+      teardownRef.current = session?.disconnect("overlay_closed") ?? Promise.resolve();
     };
   }, [dayId]);
 
   useEffect(() => {
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = onWorkoutUpdated(() => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        void sessionRef.current?.refreshWorkoutContext();
+      }, 300);
+    });
+    return () => {
+      unsubscribe();
+      if (refreshTimer) clearTimeout(refreshTimer);
+    };
+  }, []);
+
+  useEffect(() => {
     const onAppStateChange = (next: AppStateStatus) => {
       if (next === "background" || next === "inactive") {
-        void sessionRef.current?.disconnect("background");
+        const session = sessionRef.current;
+        sessionRef.current = null;
+        teardownRef.current = session?.disconnect("background") ?? Promise.resolve();
         return;
       }
       if (next === "active" && dayId && overlayOpenRef.current && !limitBlockedRef.current) {

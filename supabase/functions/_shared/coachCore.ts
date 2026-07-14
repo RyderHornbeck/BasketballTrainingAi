@@ -107,7 +107,7 @@ Rules:
 - Use get_workout_position or get_progress when you need fresh workout state.
 - Use extend_workout or shorten_workout to change remaining workout time.
 - start_timer can use a requested number of minutes; otherwise it starts a countdown for the workout's estimated duration. Use resume_timer for a paused timer, and stop_timer to reset it.
-- After a tool runs, give one brief spoken confirmation (e.g. "Saved, eight of ten" or "Three shooting drills: corner, free throw, pull-up").`;
+- Tool results can contain internal updated_workout_state data. Never mention, summarize, or paraphrase internal state, context, alignment, refreshes, JSON, or tool execution. After a tool runs, say only a brief natural confirmation of the action result (e.g. "Saved 8 of 10 for set one.").`;
 
 const REALTIME_TOOL_DEFS = [
   {
@@ -799,6 +799,18 @@ export function buildCompactContextSummary(
   });
 }
 
+export function buildRealtimeInstructions(
+  ctx: WorkoutContext,
+  profile: Record<string, unknown> | null,
+  timer?: TimerState,
+  conversationSummary?: string | null
+): string {
+  return `${COACH_SYSTEM_PROMPT}
+
+Authoritative workout state follows. Use it silently and prefer newer state from tool results:
+${buildCompactContextSummary(ctx, profile, timer, conversationSummary)}`;
+}
+
 /** Small current-state payload injected after every state-changing tool call. */
 export function buildRealtimeNavigationUpdate(ctx: WorkoutContext): string {
   const navigation = buildWorkoutNavigation(ctx);
@@ -1336,7 +1348,7 @@ export function buildRealtimeSessionConfig(
   instructions: string,
   model: string,
   voice: string,
-  _audioProfile: "bluetooth" | "speaker" = "bluetooth"
+  audioProfile: "bluetooth" | "speaker" = "bluetooth"
 ): Record<string, unknown> {
   return {
     type: "realtime",
@@ -1353,14 +1365,10 @@ export function buildRealtimeSessionConfig(
     },
     audio: {
       input: {
-        // Earbud microphones are always near-field. Speaker mode is retained
-        // for OS routing only; it does not alter the Realtime input profile.
-        noise_reduction: { type: "near_field" },
+        noise_reduction: { type: audioProfile === "bluetooth" ? "near_field" : "far_field" },
         turn_detection: {
-          type: "server_vad",
-          threshold: 0.45,
-          prefix_padding_ms: 400,
-          silence_duration_ms: 600,
+          type: "semantic_vad",
+          eagerness: "medium",
           create_response: true,
           interrupt_response: true,
         },

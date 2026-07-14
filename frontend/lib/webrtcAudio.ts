@@ -7,6 +7,7 @@ export type VoiceAudioProfile = "bluetooth" | "speaker";
 
 let active = false;
 let keepAwakeActive = false;
+let currentProfile: VoiceAudioProfile = "speaker";
 
 const KEEP_AWAKE_TAG = "voice-coach";
 
@@ -52,9 +53,9 @@ async function loadInCallManager() {
 
 /** Configure OS audio session for a live voice coach call. */
 export async function startVoiceCallAudio(): Promise<VoiceAudioProfile> {
-  if (active) return "bluetooth";
+  if (active) return currentProfile;
 
-  let profile: VoiceAudioProfile = "bluetooth";
+  let profile: VoiceAudioProfile = "speaker";
 
   const InCallManager = await loadInCallManager();
   if (InCallManager) {
@@ -69,26 +70,29 @@ export async function startVoiceCallAudio(): Promise<VoiceAudioProfile> {
       } catch {
         profile = "speaker";
       }
-    } else {
-      // Do not force speaker — iOS routes to Bluetooth/AirPods when connected.
     }
-
     await enableKeepScreenOn(InCallManager);
   } else {
     await enableKeepScreenOn(null);
   }
 
-  if (Platform.OS === "ios") {
-    try {
-      const { RTCAudioSession } = await import("react-native-webrtc");
-      RTCAudioSession.audioSessionDidActivate();
-    } catch (err) {
-      console.warn("RTCAudioSession activation failed:", err);
-    }
-  }
-
   active = true;
+  currentProfile = profile;
   return profile;
+}
+
+export function inferVoiceAudioProfile(
+  tracks: { label?: string; getSettings?: () => { deviceId?: string } }[],
+  fallback: VoiceAudioProfile
+): VoiceAudioProfile {
+  const routeText = tracks
+    .flatMap((track) => [track.label, track.getSettings?.().deviceId])
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (/airpods|bluetooth|headset|earbuds|buds|beats|sco/.test(routeText)) return "bluetooth";
+  if (/iphone|ipad|built.?in|speaker|receiver|microphone/.test(routeText)) return "speaker";
+  return fallback;
 }
 
 /** Tear down call-audio routing when the coach session ends. */
@@ -106,14 +110,6 @@ export async function stopVoiceCallAudio(): Promise<void> {
 
   await disableKeepScreenOn(InCallManager);
 
-  if (Platform.OS === "ios") {
-    try {
-      const { RTCAudioSession } = await import("react-native-webrtc");
-      RTCAudioSession.audioSessionDidDeactivate();
-    } catch {
-      // Ignore teardown errors.
-    }
-  }
-
   active = false;
+  currentProfile = "speaker";
 }

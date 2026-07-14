@@ -1,14 +1,16 @@
 // Supabase Edge Function: generate-plan
 // ----------------------------------------------------------------------------
-// Generates a personalized 4-week basketball workout plan using GPT-5,
-// constrained to only use exercises from the `exercise_video_clips` catalog.
+// Generates adaptive five-workout blocks with a deterministic algorithm
+// (see _shared/smartPlan.ts). GPT-5 no longer generates plan structure; it is
+// only used to make small, validated tweaks to extension blocks based on the
+// user's written exercise notes.
 //
 // Deploy with:
 //   supabase functions deploy generate-plan
 //
 // Required secrets (set with `supabase secrets set`):
-//   OPENAI_API_KEY
-//   OPENAI_MODEL (optional, defaults to "gpt-5")
+//   OPENAI_API_KEY  (optional -- without it the tweak pass is skipped)
+//   OPENAI_MODEL    (optional, defaults to "gpt-5")
 //
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are automatically provided by
 // the Edge Function runtime -- do not set them manually.
@@ -16,7 +18,22 @@
 
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { isCatalogOnlyVideoId } from "../_shared/exerciseClip.ts";
 import { sendExpoPushNotification } from "../_shared/expo-push.ts";
+import {
+  AdaptiveProfile,
+  buildAdaptiveProfile,
+  buildCompositionRules,
+  CompositionRules,
+  PerformanceSample,
+} from "../_shared/adaptivePlan.ts";
+import {
+  buildSmartPlan,
+  extractUserNotes,
+  repairSmartPlan,
+  SmartExercise,
+  SmartPlan,
+} from "../_shared/smartPlan.ts";
 
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL") ?? "gpt-5";
@@ -59,7 +76,7 @@ const WEAKNESS_KEYWORD_CATEGORY: Array<[RegExp, string]> = [
   [/strength|weak|weight/i, "strength"],
   [/footwork|foot work/i, "footwork"],
   [/mobil|flexib/i, "mobility"],
-  [/iq|decision/i, "basketball_iq"],
+  [/discipline|iq|decision/i, "basketball_iq"],
 ];
 
 interface OnboardingAnswers {
@@ -93,38 +110,23 @@ interface VideoClip {
   difficulty_level: string | null;
   description: string | null;
   coaching_notes: string | null;
+  requires_both_sides: boolean | null;
   source_section: string | null;
+  equipment: string[] | null;
+  weaknesses: string[] | null;
+  positions: string[] | null;
+  skill_levels: string[] | null;
+  youtube_video_id: string | null;
 }
 
-interface GeneratedExercise {
-  order_index: number;
-  video_clip_id: string;
-  name: string;
-  category: string;
-  instructions: string;
-  sets?: string | null;
-  reps?: string | null;
-  duration?: string | null;
-  target_makes?: number | null;
-  target_attempts?: number | null;
-  log_type: string;
-}
-
-interface GeneratedDay {
-  day_number: number;
-  title: string;
-  focus: string;
-  estimated_minutes: number;
-  coach_notes: string;
-  exercises: GeneratedExercise[];
-}
-
-interface GeneratedPlan {
-  title: string;
-  summary: string;
-  duration_weeks: number;
-  days_per_week: number;
-  days: GeneratedDay[];
+interface GenerationContext {
+  generationType: "initial" | "extend";
+  targetPlanId: string | null;
+  blockIndex: number;
+  startDayNumber: number;
+  adaptiveProfile: AdaptiveProfile;
+  composition: CompositionRules;
+  samples: PerformanceSample[];
 }
 
 function jsonResponse(body: unknown, status = 200) {
@@ -134,7 +136,15 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-function scoreClip(clip: VideoClip, answers: OnboardingAnswers): number {
+// ---------------------------------------------------------------------------
+// Clip filtering / ranking (input pool for the algorithm)
+// ---------------------------------------------------------------------------
+
+function scoreClip(
+  clip: VideoClip,
+  answers: OnboardingAnswers,
+  adaptiveProfile?: AdaptiveProfile
+): number {
   let score = 0;
 
   const goalCategories = GOAL_CATEGORY_MAP[(answers.main_goal ?? "").toLowerCase()] ?? [];
@@ -158,137 +168,196 @@ function scoreClip(clip: VideoClip, answers: OnboardingAnswers): number {
     if (clip.category === "shooting") score -= 1;
   }
 
+  if (adaptiveProfile?.weaknesses.some((category) => category === clip.category)) score += 5;
+  if (adaptiveProfile?.strengths.some((category) => category === clip.category)) score += 3;
+
   return score;
 }
 
-function filterAndRankClips(clips: VideoClip[], answers: OnboardingAnswers, limit = 140): VideoClip[] {
+function clipEquipmentCompatible(clip: VideoClip, answers: OnboardingAnswers): boolean {
+  const available = new Set((answers.equipment ?? []).map((item) => item.toLowerCase()));
+  const requirements = (clip.equipment ?? []).map((item) => item.toLowerCase());
+  for (const requirement of requirements) {
+    if (
+      (requirement.includes("hoop") ||
+        requirement.includes("basket") ||
+        requirement.includes("court")) &&
+      !answers.has_court_access
+    ) {
+      return false;
+    }
+    if (requirement.includes("cone") && !available.has("cones")) return false;
+    if (requirement.includes("band") && !available.has("resistance bands")) return false;
+    if (
+      (requirement.includes("weight") || requirement.includes("dumbbell")) &&
+      !available.has("weights")
+    ) {
+      return false;
+    }
+    if (
+      (requirement === "ball" || requirement.includes("basketball")) &&
+      !available.has("basketball")
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function dedupeClips(clips: VideoClip[]): VideoClip[] {
+  const seen = new Set<string>();
+  const merged: VideoClip[] = [];
+  for (const clip of clips) {
+    if (seen.has(clip.id)) continue;
+    seen.add(clip.id);
+    merged.push(clip);
+  }
+  return merged;
+}
+
+function buildClipPool(
+  clips: VideoClip[],
+  answers: OnboardingAnswers,
+  adaptiveProfile: AdaptiveProfile
+): VideoClip[] {
   const level = (answers.overall_skill_level ?? "beginner").toLowerCase();
   const allowedDifficulties = DIFFICULTY_ALLOWANCE[level] ?? DIFFICULTY_ORDER;
 
-  const filtered = clips.filter((c) => {
-    if (!c.difficulty_level) return true;
-    return allowedDifficulties.includes(c.difficulty_level);
-  });
+  const difficultyOk = (c: VideoClip) =>
+    !c.difficulty_level || allowedDifficulties.includes(c.difficulty_level);
 
-  const pool = filtered.length > 0 ? filtered : clips;
+  const strict = clips.filter((c) => difficultyOk(c) && clipEquipmentCompatible(c, answers));
+  // Never let equipment filtering starve the pool.
+  let pool = strict.length >= 20 ? strict : clips.filter(difficultyOk);
 
-  const ranked = [...pool].sort((a, b) => scoreClip(b, answers) - scoreClip(a, answers));
-  return ranked.slice(0, limit);
-}
+  // Court access must always include hoop work, even when skill tier filters
+  // would otherwise remove every shooting clip (e.g. elite users vs beginner drills).
+  if (answers.has_court_access && !pool.some((clip) => clip.category === "shooting")) {
+    pool = dedupeClips([
+      ...pool,
+      ...clips.filter((clip) => clip.category === "shooting"),
+    ]);
+  }
 
-function buildSystemPrompt(): string {
-  return `You are an elite basketball performance coach and program designer.
-
-You must only use exercises from the provided exercise catalog.
-Every exercise in the plan must include a valid video_clip_id from the catalog.
-Do not invent exercise names.
-Do not invent YouTube URLs.
-Do not invent video IDs.
-Return strict JSON only. Do not include markdown, backticks, or any commentary outside the JSON object.
-
-Follow these rules:
-- Generate a 4-week basketball training plan (duration_weeks should be 4 unless the user's schedule clearly calls for something else).
-- Use the user's "days_per_week" answer for how many training days appear per week.
-- Personalize heavily based on skill level, goal, position, strengths, weaknesses, equipment, court access, injuries, and preferred intensity.
-- Beginner users should mostly receive beginner-difficulty clips with a few intermediate progressions. Intermediate users can receive beginner warmups, intermediate main drills, and occasional advanced challenges. Advanced users can receive intermediate and advanced drills. Elite users can receive advanced and elite drills.
-- Never place elite-level clips on Day 1 for a beginner.
-- The plan should progress in difficulty over the 4 weeks -- later days/weeks should be harder than earlier ones.
-- If the user has no hoop/court access, favor ball handling, footwork, strength, mobility, and conditioning drills over shooting drills.
-- Number days sequentially across the whole plan (day_number 1, 2, 3, ... continuing across weeks, not resetting each week).
-- Each day must include a warmup, main drills relevant to the day's focus, conditioning, and cooldown where the catalog allows it, plus short "coach_notes" with practical advice for that day.
-- Each exercise needs a "log_type" of one of: "checkbox", "makes_attempts", "minutes", "difficulty_rating", "notes". Use "makes_attempts" for shooting drills whenever possible, and set target_makes/target_attempts. Use "minutes" for conditioning drills. Use "checkbox" for simple completion drills. You may combine intents by choosing the single most relevant log_type.
-
-Return JSON matching exactly this shape:
-{
-  "title": string,
-  "summary": string,
-  "duration_weeks": number,
-  "days_per_week": number,
-  "days": [
-    {
-      "day_number": number,
-      "title": string,
-      "focus": string,
-      "estimated_minutes": number,
-      "coach_notes": string,
-      "exercises": [
-        {
-          "order_index": number,
-          "video_clip_id": string,
-          "name": string,
-          "category": string,
-          "instructions": string,
-          "sets": string | null,
-          "reps": string | null,
-          "duration": string | null,
-          "target_makes": number | null,
-          "target_attempts": number | null,
-          "log_type": "checkbox" | "makes_attempts" | "minutes" | "difficulty_rating" | "notes"
-        }
-      ]
-    }
-  ]
-}`;
-}
-
-function buildUserPrompt(answers: OnboardingAnswers, clips: VideoClip[]): string {
-  const catalog = clips.map((c) => ({
-    id: c.id,
-    name: c.exercise_name,
-    category: c.category,
-    difficulty: c.difficulty_level,
-    notes: c.coaching_notes ?? c.description ?? undefined,
-  }));
-
-  // Strip internal ids before handing the answers to the model -- GPT only
-  // needs the actual preferences, not database identifiers.
-  const { id: _id, user_id: _userId, ...userPreferences } = answers;
-
-  return JSON.stringify({
-    user_preferences: userPreferences,
-    exercise_catalog: catalog,
-  });
-}
-
-function validatePlan(plan: unknown, validClipIds: Set<string>): { valid: true; plan: GeneratedPlan } | { valid: false; error: string } {
-  if (!plan || typeof plan !== "object") return { valid: false, error: "Plan is not an object." };
-  const p = plan as Record<string, unknown>;
-
-  if (typeof p.title !== "string" || !p.title.trim()) return { valid: false, error: "Missing title." };
-  if (typeof p.summary !== "string") return { valid: false, error: "Missing summary." };
-  if (typeof p.duration_weeks !== "number") return { valid: false, error: "Missing duration_weeks." };
-  if (typeof p.days_per_week !== "number") return { valid: false, error: "Missing days_per_week." };
-  if (!Array.isArray(p.days) || p.days.length === 0) return { valid: false, error: "Missing days array." };
-
-  for (const day of p.days as unknown[]) {
-    if (!day || typeof day !== "object") return { valid: false, error: "Invalid day entry." };
-    const d = day as Record<string, unknown>;
-    if (typeof d.day_number !== "number") return { valid: false, error: "Day missing day_number." };
-    if (!Array.isArray(d.exercises) || d.exercises.length === 0) {
-      return { valid: false, error: `Day ${d.day_number} has no exercises.` };
-    }
-    for (const ex of d.exercises as unknown[]) {
-      if (!ex || typeof ex !== "object") return { valid: false, error: "Invalid exercise entry." };
-      const e = ex as Record<string, unknown>;
-      if (typeof e.video_clip_id !== "string" || !validClipIds.has(e.video_clip_id)) {
-        return {
-          valid: false,
-          error: `Exercise "${e.name ?? "unknown"}" has an invalid or invented video_clip_id.`,
-        };
-      }
-      if (typeof e.name !== "string" || !e.name.trim()) {
-        return { valid: false, error: "Exercise missing name." };
-      }
+  // Never drop an entire core skill category because of difficulty mismatch alone.
+  for (const category of ["ball_handling", "finishing", "defense"] as const) {
+    if (!pool.some((clip) => clip.category === category)) {
+      pool = dedupeClips([...pool, ...clips.filter((clip) => clip.category === category)]);
     }
   }
 
-  return { valid: true, plan: p as unknown as GeneratedPlan };
+  return [...pool].sort(
+    (a, b) => scoreClip(b, answers, adaptiveProfile) - scoreClip(a, answers, adaptiveProfile)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// GPT-5 tweak pass (extension blocks only, driven by user exercise notes)
+// ---------------------------------------------------------------------------
+
+interface UserNoteEntry {
+  dayNumber: number;
+  exerciseName: string;
+  category: string;
+  note: string;
+}
+
+function collectRecentUserNotes(
+  samples: PerformanceSample[],
+  startDayNumber: number,
+  clipNameById: Map<string, string>
+): UserNoteEntry[] {
+  const previousBlockStart = Math.max(1, startDayNumber - 5);
+  return samples.flatMap((sample) => {
+    if (sample.dayNumber < previousBlockStart || sample.dayNumber >= startDayNumber) return [];
+    const note = extractUserNotes(sample.notes);
+    if (!note) return [];
+    return [{
+      dayNumber: sample.dayNumber,
+      exerciseName:
+        (sample.videoClipId ? clipNameById.get(sample.videoClipId) : null) ?? sample.category,
+      category: sample.category,
+      note,
+    }];
+  });
+}
+
+interface PlanTweak {
+  day_number: number;
+  order_index: number;
+  action: "swap_drill" | "adjust_volume" | "adjust_targets";
+  video_clip_id?: string;
+  sets?: string;
+  target_makes?: number;
+  target_attempts?: number;
+  reason?: string;
+}
+
+function buildTweakSystemPrompt(): string {
+  return `You are a basketball coach reviewing an already-built five-day workout block.
+The block was generated by a deterministic training algorithm and is structurally final.
+You may ONLY suggest small tweaks motivated by the user's written notes on recent exercises.
+
+Allowed tweak actions:
+- "swap_drill": replace one exercise with a different catalog drill of the SAME category (provide video_clip_id from alternatives).
+- "adjust_volume": change an exercise's set count (sets must be a string integer between "1" and "5").
+- "adjust_targets": change target_makes/target_attempts for a shooting drill (makes must be less than or equal to attempts).
+
+Rules:
+- Suggest at most 5 tweaks total. Zero tweaks is a valid answer if the notes don't call for changes.
+- Only tweak exercises that clearly relate to a user note (same drill, same category, or the issue described).
+- If a note mentions pain or discomfort, swap the related drill for a gentler alternative of the same category or reduce its volume.
+- If a note says a drill was too easy, increase targets or swap to a harder same-category alternative.
+- If a note says a drill was too hard, reduce targets/sets or swap to an easier same-category alternative.
+- Never change day structure, exercise counts, categories of slots, or day numbers.
+
+Return strict JSON only:
+{"tweaks":[{"day_number":number,"order_index":number,"action":"swap_drill"|"adjust_volume"|"adjust_targets","video_clip_id":string|null,"sets":string|null,"target_makes":number|null,"target_attempts":number|null,"reason":string}]}`;
+}
+
+function buildTweakUserPrompt(
+  plan: SmartPlan,
+  notes: UserNoteEntry[],
+  alternatives: VideoClip[],
+  clipById: Map<string, VideoClip>
+): string {
+  const hasVideoDemo = (clip: VideoClip | undefined) =>
+    Boolean(clip?.youtube_video_id && !isCatalogOnlyVideoId(clip.youtube_video_id));
+
+  return JSON.stringify({
+    user_notes: notes,
+    plan_block: plan.days.map((day) => ({
+      day_number: day.day_number,
+      exercises: day.exercises.map((exercise) => {
+        const clip = exercise.video_clip_id ? clipById.get(exercise.video_clip_id) : undefined;
+        return {
+          order_index: exercise.order_index,
+          name: exercise.name,
+          category: exercise.category,
+          video_clip_id: exercise.video_clip_id,
+          has_video_demo: hasVideoDemo(clip),
+          sets: exercise.sets,
+          duration: exercise.duration,
+          target_makes: exercise.target_makes,
+          target_attempts: exercise.target_attempts,
+          log_type: exercise.log_type,
+        };
+      }),
+    })),
+    alternative_drills: alternatives.map((clip) => ({
+      id: clip.id,
+      name: clip.exercise_name,
+      category: clip.category,
+      difficulty: clip.difficulty_level,
+      has_video_demo: hasVideoDemo(clip),
+    })),
+  });
 }
 
 async function callOpenAI(systemPrompt: string, userPrompt: string): Promise<unknown> {
   if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY secret is not configured.");
 
-  const timeoutMs = 240_000;
+  const timeoutMs = 90_000;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -304,11 +373,7 @@ async function callOpenAI(systemPrompt: string, userPrompt: string): Promise<unk
       body: JSON.stringify({
         model: OPENAI_MODEL,
         response_format: { type: "json_object" },
-        // gpt-5 is a reasoning model; without capping reasoning effort it can
-        // spend minutes "thinking" before producing output, which blows past
-        // any reasonable HTTP/edge-function timeout. "low" keeps latency in
-        // the ~60-100s range for a full 4-week plan while still producing a
-        // coherent, well-structured result.
+        // The tweak task is small; low effort keeps latency bounded.
         reasoning_effort: "low",
         messages: [
           { role: "system", content: systemPrompt },
@@ -346,20 +411,355 @@ async function callOpenAI(systemPrompt: string, userPrompt: string): Promise<unk
   }
 }
 
-function computeScheduledDate(dayIndexZeroBased: number, daysPerWeek: number): string {
+/**
+ * Applies GPT tweaks to the algorithm-built plan. Every tweak is validated
+ * individually; invalid tweaks are skipped rather than failing generation.
+ */
+function applyTweaks(
+  plan: SmartPlan,
+  rawTweaks: unknown,
+  clipById: Map<string, VideoClip>
+): { plan: SmartPlan; applied: number } {
+  const tweaks = Array.isArray((rawTweaks as Record<string, unknown>)?.tweaks)
+    ? ((rawTweaks as Record<string, unknown>).tweaks as PlanTweak[])
+    : [];
+  let applied = 0;
+
+  const days = plan.days.map((day) => ({ ...day, exercises: [...day.exercises] }));
+
+  for (const tweak of tweaks.slice(0, 5)) {
+    const day = days.find((d) => d.day_number === tweak.day_number);
+    if (!day) continue;
+    const exerciseIndex = day.exercises.findIndex(
+      (exercise) => exercise.order_index === tweak.order_index
+    );
+    if (exerciseIndex < 0) continue;
+    const exercise = day.exercises[exerciseIndex];
+
+    if (tweak.action === "swap_drill") {
+      const clip = tweak.video_clip_id ? clipById.get(tweak.video_clip_id) : null;
+      if (!clip) continue;
+      if (clip.category !== exercise.category) continue;
+      if (day.exercises.some((item) => item.video_clip_id === clip.id)) continue;
+      let setCount = Math.max(1, Number.parseInt(exercise.sets, 10) || 1);
+      if (clip.category === "ball_handling") setCount = Math.max(2, setCount);
+      if (clip.requires_both_sides) setCount = setCount <= 2 ? 2 : 4;
+      day.exercises[exerciseIndex] = {
+        ...exercise,
+        video_clip_id: clip.id,
+        name: clip.exercise_name,
+        instructions: clip.description ?? clip.coaching_notes ?? exercise.instructions,
+        sets: String(setCount),
+        set_side_labels: clip.requires_both_sides
+          ? Array.from({ length: setCount }, (_, index) =>
+              index % 2 === 0 ? "Right side" : "Left side"
+            )
+          : null,
+      };
+      applied++;
+      continue;
+    }
+
+    if (tweak.action === "adjust_volume") {
+      let sets = Number.parseInt(String(tweak.sets ?? ""), 10);
+      if (!Number.isFinite(sets) || sets < 1 || sets > 5) continue;
+      const clip = clipById.get(exercise.video_clip_id);
+      if (!clip) continue;
+      if (exercise.category === "ball_handling") sets = Math.max(2, sets);
+      if (clip.requires_both_sides) sets = sets <= 2 ? 2 : 4;
+      day.exercises[exerciseIndex] = {
+        ...exercise,
+        sets: String(sets),
+        set_side_labels: clip.requires_both_sides
+          ? Array.from({ length: sets }, (_, index) =>
+              index % 2 === 0 ? "Right side" : "Left side"
+            )
+          : null,
+      };
+      applied++;
+      continue;
+    }
+
+    if (tweak.action === "adjust_targets") {
+      if (exercise.log_type !== "makes_attempts") continue;
+      const proposedMakes = Number(tweak.target_makes);
+      const proposedAttempts = Number(tweak.target_attempts ?? exercise.target_attempts);
+      const minimumAttempts = exercise.category === "shooting" ? 20 : 15;
+      const attempts = Math.min(60, Math.max(minimumAttempts, Math.round(proposedAttempts)));
+      const makes = Math.max(Math.round(proposedMakes), Math.ceil(attempts * 0.5));
+      if (!Number.isFinite(proposedMakes) || !Number.isFinite(proposedAttempts)) continue;
+      if (makes < 1 || attempts < makes) continue;
+      day.exercises[exerciseIndex] = {
+        ...exercise,
+        target_makes: Math.round(makes),
+        target_attempts: Math.round(attempts),
+      };
+      applied++;
+    }
+  }
+
+  return { plan: { ...plan, days }, applied };
+}
+
+async function maybeApplyGptTweaks(
+  plan: SmartPlan,
+  context: GenerationContext,
+  pool: VideoClip[],
+  clipById: Map<string, VideoClip>
+): Promise<SmartPlan> {
+  if (context.generationType !== "extend" || !OPENAI_API_KEY) return plan;
+
+  const clipNameById = new Map([...clipById].map(([id, clip]) => [id, clip.exercise_name]));
+  const notes = collectRecentUserNotes(context.samples, context.startDayNumber, clipNameById);
+  if (!notes.length) {
+    console.log("[generate-plan] No user notes in previous block; skipping GPT tweak pass.");
+    return plan;
+  }
+
+  // Offer same-category alternatives for every noted category (small list).
+  const notedCategories = new Set(notes.map((note) => note.category));
+  const usedIds = new Set(
+    plan.days.flatMap((day) => day.exercises.map((exercise) => exercise.video_clip_id))
+  );
+  const alternatives = pool
+    .filter((clip) => notedCategories.has(clip.category) && !usedIds.has(clip.id))
+    .slice(0, 40);
+
+  try {
+    const raw = await callOpenAI(
+      buildTweakSystemPrompt(),
+      buildTweakUserPrompt(plan, notes, alternatives, clipById)
+    );
+    const { plan: tweaked, applied } = applyTweaks(plan, raw, clipById);
+    console.log(`[generate-plan] GPT tweak pass applied ${applied} tweak(s).`);
+    return tweaked;
+  } catch (err) {
+    // Tweaks are best-effort; the algorithm plan is already valid.
+    console.error("[generate-plan] GPT tweak pass failed, using algorithm plan:", err);
+    return plan;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Scheduling / data loading
+// ---------------------------------------------------------------------------
+
+function computeScheduledDate(
+  dayIndexZeroBased: number,
+  daysPerWeek: number,
+  planStartDate?: string
+): string {
   const week = Math.floor(dayIndexZeroBased / daysPerWeek);
   const dayInWeek = dayIndexZeroBased % daysPerWeek;
   const offsetDays = week * 7 + Math.round((dayInWeek * 7) / Math.max(daysPerWeek, 1));
-  const date = new Date();
+  const date = planStartDate
+    ? new Date(`${planStartDate.slice(0, 10)}T12:00:00Z`)
+    : new Date();
   date.setDate(date.getDate() + offsetDays);
   return date.toISOString().slice(0, 10);
 }
 
+async function loadPerformanceSamples(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<PerformanceSample[]> {
+  const { data: completedDays, error: daysError } = await supabase
+    .from("workout_days")
+    .select("id, day_number")
+    .eq("user_id", userId)
+    .eq("completed", true)
+    .order("day_number", { ascending: false })
+    .limit(50);
+  if (daysError) throw new Error(`Failed to load completed workouts: ${daysError.message}`);
+  if (!completedDays?.length) return [];
+
+  const dayNumberById = new Map(
+    completedDays.map((day) => [day.id as string, Number(day.day_number ?? 0)])
+  );
+  const { data: exercises, error: exercisesError } = await supabase
+    .from("workout_exercises")
+    .select(
+      "id, day_id, category, video_clip_id, sets, duration, target_makes, target_attempts, log_type, exercise_video_clips(difficulty_level), exercise_logs(completed, makes, attempts, minutes_completed, difficulty, notes)"
+    )
+    .in("day_id", [...dayNumberById.keys()]);
+  if (exercisesError) throw new Error(`Failed to load workout performance: ${exercisesError.message}`);
+
+  return (exercises ?? []).flatMap((exercise: Record<string, unknown>) => {
+    const rawLogs = exercise.exercise_logs;
+    const log = Array.isArray(rawLogs) ? rawLogs[0] : rawLogs;
+    const rawClip = exercise.exercise_video_clips;
+    const clip = Array.isArray(rawClip) ? rawClip[0] : rawClip;
+    // Keep exercises without logs as skipped entries so the algorithm can
+    // carry their skill work into the next block.
+    const entry = (log && typeof log === "object" ? log : {}) as Record<string, unknown>;
+    return [{
+      dayNumber: dayNumberById.get(String(exercise.day_id)) ?? 0,
+      category: String(exercise.category ?? ""),
+      videoClipId: exercise.video_clip_id ? String(exercise.video_clip_id) : null,
+      sets: exercise.sets ? String(exercise.sets) : null,
+      duration: exercise.duration ? String(exercise.duration) : null,
+      targetMakes: typeof exercise.target_makes === "number" ? exercise.target_makes : null,
+      targetAttempts:
+        typeof exercise.target_attempts === "number" ? exercise.target_attempts : null,
+      logType: exercise.log_type ? String(exercise.log_type) : null,
+      completed: entry.completed === true,
+      makes: typeof entry.makes === "number" ? entry.makes : null,
+      attempts: typeof entry.attempts === "number" ? entry.attempts : null,
+      minutesCompleted:
+        typeof entry.minutes_completed === "number" ? entry.minutes_completed : null,
+      difficulty: typeof entry.difficulty === "number" ? entry.difficulty : null,
+      prescribedDifficulty:
+        clip && typeof clip === "object" &&
+        typeof (clip as Record<string, unknown>).difficulty_level === "string"
+          ? String((clip as Record<string, unknown>).difficulty_level)
+          : null,
+      notes: typeof entry.notes === "string" ? entry.notes : null,
+    }];
+  });
+}
+
+async function buildGenerationContext(
+  supabase: SupabaseClient,
+  userId: string,
+  answers: OnboardingAnswers,
+  generationType: "initial" | "extend",
+  targetPlanId: string | null,
+  requestedBlockIndex: number
+): Promise<GenerationContext> {
+  const samples = await loadPerformanceSamples(supabase, userId);
+  const adaptiveProfile = buildAdaptiveProfile(answers, samples);
+  const composition = buildCompositionRules(answers.minutes_per_workout ?? 45);
+
+  if (generationType === "initial") {
+    return {
+      generationType,
+      targetPlanId: null,
+      blockIndex: 1,
+      startDayNumber: 1,
+      adaptiveProfile,
+      composition,
+      samples,
+    };
+  }
+
+  if (!targetPlanId) throw new Error("An extension requires target_plan_id.");
+  const { data: plan } = await supabase
+    .from("workout_plans")
+    .select("id")
+    .eq("id", targetPlanId)
+    .eq("user_id", userId)
+    .eq("active", true)
+    .maybeSingle();
+  if (!plan) throw new Error("Active plan for extension was not found.");
+
+  const { data: latestDay } = await supabase
+    .from("workout_days")
+    .select("day_number, block_index")
+    .eq("plan_id", targetPlanId)
+    .order("day_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const maxDayNumber = Number(latestDay?.day_number ?? 0);
+  const expectedBlockIndex = Number(latestDay?.block_index ?? 0) + 1;
+  if (requestedBlockIndex !== expectedBlockIndex) {
+    throw new Error(`Expected block ${expectedBlockIndex}, received ${requestedBlockIndex}.`);
+  }
+
+  return {
+    generationType,
+    targetPlanId,
+    blockIndex: expectedBlockIndex,
+    startDayNumber: maxDayNumber + 1,
+    adaptiveProfile,
+    composition,
+    samples,
+  };
+}
+
 async function markRequestFailed(supabase: SupabaseClient, requestId: string, message: string) {
+  const { data: request } = await supabase
+    .from("plan_generation_requests")
+    .select("generation_type, target_plan_id, block_index")
+    .eq("id", requestId)
+    .maybeSingle();
+
+  if (request?.generation_type === "extend" && request.target_plan_id) {
+    // Extension writes happen one day at a time. Remove any partial block so
+    // the completed plan remains unchanged and a retry starts cleanly.
+    await supabase
+      .from("workout_days")
+      .delete()
+      .eq("plan_id", request.target_plan_id)
+      .eq("block_index", Number(request.block_index ?? 1));
+  }
+
   await supabase
     .from("plan_generation_requests")
     .update({ status: "failed", error_message: message.slice(0, 2000) })
     .eq("id", requestId);
+}
+
+/** Final sanity check before writing to Postgres. */
+function sanityCheckPlan(
+  plan: SmartPlan,
+  clipById: Map<string, VideoClip>,
+  context: GenerationContext,
+  answers: OnboardingAnswers
+): string | null {
+  if (plan.days.length !== 5) return "Plan must contain exactly five days.";
+  for (let index = 0; index < plan.days.length; index++) {
+    const day = plan.days[index];
+    if (day.day_number !== context.startDayNumber + index) {
+      return `Day numbering is wrong at position ${index + 1}.`;
+    }
+    if (!day.exercises.length) return `Day ${day.day_number} has no exercises.`;
+    const seen = new Set<string>();
+    for (const exercise of day.exercises) {
+      if (!clipById.has(exercise.video_clip_id)) {
+        return `Exercise "${exercise.name}" references an unknown video clip.`;
+      }
+      if (seen.has(exercise.video_clip_id)) {
+        return `Day ${day.day_number} repeats a video clip.`;
+      }
+      seen.add(exercise.video_clip_id);
+      const setCount = Number.parseInt(exercise.sets, 10) || 1;
+      if (exercise.category === "ball_handling" && setCount < 2) {
+        return `"${exercise.name}" must have at least two ball-handling sets.`;
+      }
+      if (
+        exercise.set_side_labels &&
+        (setCount !== exercise.set_side_labels.length || ![2, 4].includes(setCount))
+      ) {
+        return `"${exercise.name}" must use two or four balanced side sets.`;
+      }
+      if (exercise.category === "shooting" || exercise.category === "finishing") {
+        const minimumAttempts = exercise.category === "shooting" ? 20 : 15;
+        if (
+          exercise.target_attempts == null ||
+          exercise.target_makes == null ||
+          exercise.target_attempts < minimumAttempts ||
+          exercise.target_makes < Math.ceil(exercise.target_attempts * 0.5)
+        ) {
+          return `"${exercise.name}" has an invalid makes/attempts target.`;
+        }
+      }
+    }
+    if (answers.has_court_access) {
+      const shootingCount = day.exercises.filter((exercise) => exercise.category === "shooting").length;
+      if (shootingCount < 2) {
+        return `Day ${day.day_number} must include at least two shooting drills when court access is available.`;
+      }
+    }
+    for (const exercise of day.exercises) {
+      if (
+        (exercise.category === "shooting" || exercise.category === "finishing") &&
+        (exercise.target_attempts == null || exercise.target_attempts > 60)
+      ) {
+        return `"${exercise.name}" must have 60 or fewer attempts per set.`;
+      }
+    }
+  }
+  return null;
 }
 
 // Supabase-specific global available in the Edge Function (Deno Deploy)
@@ -367,25 +767,24 @@ async function markRequestFailed(supabase: SupabaseClient, requestId: string, me
 declare const EdgeRuntime: { waitUntil: (promise: Promise<unknown>) => void } | undefined;
 
 /**
- * Does the actual (slow) work: calls OpenAI, validates the plan, and writes
- * everything to Postgres. This runs as a background task via
- * `EdgeRuntime.waitUntil` so the HTTP response to the client can return as
- * soon as the request is marked "generating" -- GPT-5 can legitimately take
- * well over a minute to produce a full 4-week plan, and the client is
- * already polling `plan_generation_requests` for the final status instead
- * of waiting on this response body.
+ * Does the slow work: builds the block with the deterministic algorithm,
+ * optionally lets GPT-5 apply note-driven tweaks, and writes everything to
+ * Postgres. Runs as a background task via `EdgeRuntime.waitUntil` so the HTTP
+ * response can return immediately; the client polls plan_generation_requests.
  */
 async function runGeneration(
   supabase: SupabaseClient,
   requestId: string,
   userId: string,
-  answers: OnboardingAnswers
+  answers: OnboardingAnswers,
+  context: GenerationContext
 ): Promise<void> {
   try {
-    // 5. Load active video clips from exercise_video_clips.
     const { data: allClips, error: clipsError } = await supabase
       .from("exercise_video_clips")
-      .select("id, exercise_name, category, difficulty_level, description, coaching_notes, source_section")
+      .select(
+        "id, exercise_name, category, difficulty_level, description, coaching_notes, requires_both_sides, source_section, equipment, weaknesses, positions, skill_levels, youtube_video_id"
+      )
       .eq("active", true);
 
     if (clipsError || !allClips || allClips.length === 0) {
@@ -393,88 +792,115 @@ async function runGeneration(
       return;
     }
 
-    // 6. Filter clips to a reasonable number before sending to GPT (keeps the
-    // prompt -- and therefore generation latency -- manageable).
-    const rankedClips = filterAndRankClips(allClips as VideoClip[], answers, 90);
-    const validClipIds = new Set(rankedClips.map((c) => c.id));
-
-    // 8-11. Call OpenAI, validate JSON. Only retry (once) when GPT actually
-    // responded but produced invalid JSON/ids -- never retry after a
-    // network/timeout error, since that would just double the risk of
-    // running past the background task's own execution budget.
-    const systemPrompt = buildSystemPrompt();
-    const userPrompt = buildUserPrompt(answers, rankedClips);
-
-    let validatedPlan: GeneratedPlan | null = null;
-    let lastError = "";
-
-    for (let attempt = 0; attempt < 2; attempt++) {
-      let raw: unknown;
-      try {
-        raw = await callOpenAI(
-          systemPrompt,
-          attempt === 0
-            ? userPrompt
-            : `${userPrompt}\n\nIMPORTANT: Your previous response was invalid (${lastError}). Every video_clip_id MUST exactly match an "id" from exercise_catalog. Return corrected strict JSON only.`
-        );
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
-        break;
-      }
-      const result = validatePlan(raw, validClipIds);
-      if (result.valid) {
-        validatedPlan = result.plan;
-        break;
-      }
-      lastError = result.error;
-    }
-
-    if (!validatedPlan) {
-      await markRequestFailed(supabase, requestId, `Plan generation failed: ${lastError}`);
-      return;
-    }
-
-    // 12. Mark previous active workout plans as inactive.
-    await supabase.from("workout_plans").update({ active: false }).eq("user_id", userId).eq("active", true);
-
-    // 13. Insert the new workout plan.
-    const { data: planRow, error: planInsertError } = await supabase
-      .from("workout_plans")
-      .insert({
-        user_id: userId,
-        title: validatedPlan.title,
-        summary: validatedPlan.summary,
-        duration_weeks: validatedPlan.duration_weeks,
-        days_per_week: validatedPlan.days_per_week,
-        active: true,
+    const pool = buildClipPool(allClips as VideoClip[], answers, context.adaptiveProfile).map(
+      (clip) => ({
+        ...clip,
+        requires_both_sides: clip.requires_both_sides ?? false,
       })
-      .select()
-      .single();
+    );
+    const repairPool = (allClips as VideoClip[]).map((clip) => ({
+      ...clip,
+      requires_both_sides: clip.requires_both_sides ?? false,
+    }));
+    const clipById = new Map(repairPool.map((clip) => [clip.id, clip]));
 
-    if (planInsertError || !planRow) {
-      await markRequestFailed(supabase, requestId, `Failed to insert workout plan: ${planInsertError?.message}`);
+    // 1. Deterministic generation -- always succeeds if the pool is non-empty.
+    let plan: SmartPlan = buildSmartPlan(pool, {
+      startDayNumber: context.startDayNumber,
+      blockIndex: context.blockIndex,
+      adaptiveProfile: context.adaptiveProfile,
+      composition: context.composition,
+      daysPerWeek: answers.days_per_week ?? 3,
+      mainGoal: answers.main_goal,
+      hasCourtAccess: answers.has_court_access ?? false,
+      samples: context.samples,
+    });
+
+    // 2. Optional GPT-5 tweak pass driven by the user's exercise notes.
+    plan = await maybeApplyGptTweaks(plan, context, pool, clipById);
+
+    const planInput = {
+      startDayNumber: context.startDayNumber,
+      blockIndex: context.blockIndex,
+      adaptiveProfile: context.adaptiveProfile,
+      composition: context.composition,
+      daysPerWeek: answers.days_per_week ?? 3,
+      mainGoal: answers.main_goal,
+      hasCourtAccess: answers.has_court_access ?? false,
+      samples: context.samples,
+    };
+    plan = repairSmartPlan(plan, repairPool, planInput);
+
+    const sanityError = sanityCheckPlan(plan, clipById, context, answers);
+    if (sanityError) {
+      await markRequestFailed(supabase, requestId, `Plan generation failed: ${sanityError}`);
       return;
     }
 
-    // 14-16. Insert workout days + exercises. Unlock Day 1, lock the rest.
-    const sortedDays = [...validatedPlan.days].sort((a, b) => a.day_number - b.day_number);
-    const daysPerWeek = validatedPlan.days_per_week || answers.days_per_week || 3;
+    // 3. Persist.
+    let planRow: Record<string, unknown> | null = null;
+    if (context.generationType === "extend" && context.targetPlanId) {
+      const { data, error } = await supabase
+        .from("workout_plans")
+        .select("*")
+        .eq("id", context.targetPlanId)
+        .eq("user_id", userId)
+        .eq("active", true)
+        .single();
+      if (error || !data) {
+        await markRequestFailed(supabase, requestId, "The active plan could not be extended.");
+        return;
+      }
+      planRow = data;
+      // A failed prior attempt may have inserted only part of this block.
+      await supabase
+        .from("workout_days")
+        .delete()
+        .eq("plan_id", context.targetPlanId)
+        .eq("block_index", context.blockIndex);
+    } else {
+      const { data, error } = await supabase
+        .from("workout_plans")
+        .insert({
+          user_id: userId,
+          title: plan.title,
+          summary: plan.summary,
+          duration_weeks: 1,
+          days_per_week: answers.days_per_week ?? plan.days_per_week ?? 3,
+          active: false,
+        })
+        .select()
+        .single();
+      if (error || !data) {
+        await markRequestFailed(supabase, requestId, `Failed to insert workout plan: ${error?.message}`);
+        return;
+      }
+      planRow = data;
+    }
 
-    for (let i = 0; i < sortedDays.length; i++) {
-      const day = sortedDays[i];
-      const scheduledDate = computeScheduledDate(i, daysPerWeek);
+    const planId = String(planRow.id);
+    const sortedDays = [...plan.days].sort((a, b) => a.day_number - b.day_number);
+    const daysPerWeek = answers.days_per_week || plan.days_per_week || 3;
+
+    for (const day of sortedDays) {
+      const scheduledDate = computeScheduledDate(
+        day.day_number - 1,
+        daysPerWeek,
+        String(planRow.created_at ?? "")
+      );
 
       const { data: dayRow, error: dayInsertError } = await supabase
         .from("workout_days")
         .insert({
-          plan_id: planRow.id,
+          plan_id: planId,
           user_id: userId,
           day_number: day.day_number,
+          block_index: context.blockIndex,
           title: day.title,
           focus: day.focus,
           estimated_minutes: day.estimated_minutes,
           coach_notes: day.coach_notes,
-          locked: day.day_number !== 1,
+          locked: day.day_number !== context.startDayNumber,
           completed: false,
           scheduled_date: scheduledDate,
         })
@@ -486,7 +912,7 @@ async function runGeneration(
         return;
       }
 
-      const exerciseRows = day.exercises.map((ex) => ({
+      const exerciseRows = day.exercises.map((ex: SmartExercise) => ({
         day_id: dayRow.id,
         user_id: userId,
         video_clip_id: ex.video_clip_id,
@@ -500,6 +926,7 @@ async function runGeneration(
         target_makes: ex.target_makes ?? null,
         target_attempts: ex.target_attempts ?? null,
         log_type: ex.log_type,
+        set_side_labels: ex.set_side_labels ?? null,
       }));
 
       const { error: exercisesInsertError } = await supabase.from("workout_exercises").insert(exerciseRows);
@@ -509,22 +936,47 @@ async function runGeneration(
       }
     }
 
-    // 17-18. Mark the generation request as completed, save completed_at.
+    const totalDays = context.startDayNumber + 4;
+    await supabase
+      .from("workout_plans")
+      .update({
+        title: plan.title,
+        summary: plan.summary,
+        duration_weeks: Math.max(1, Math.ceil(totalDays / Math.max(daysPerWeek, 1))),
+        days_per_week: daysPerWeek,
+      })
+      .eq("id", planId);
+
+    if (context.generationType === "initial") {
+      await supabase
+        .from("workout_plans")
+        .update({ active: false })
+        .eq("user_id", userId)
+        .eq("active", true)
+        .neq("id", planId);
+      await supabase.from("workout_plans").update({ active: true }).eq("id", planId);
+    }
+
     await supabase
       .from("plan_generation_requests")
       .update({ status: "completed", completed_at: new Date().toISOString() })
       .eq("id", requestId);
 
-    // 19. Send an Expo push notification if the user has a push token.
     const { data: profile } = await supabase.from("profiles").select("push_token").eq("id", userId).single();
     if (profile?.push_token) {
-      await sendExpoPushNotification(profile.push_token, "HoopPlan", "Your basketball plan is ready 🏀", {
-        plan_id: planRow.id,
+      const message =
+        context.generationType === "extend"
+          ? "Your next five adaptive workouts are ready."
+          : "Your first five basketball workouts are ready.";
+      await sendExpoPushNotification(profile.push_token, "HoopPlan", message, {
+        plan_id: planId,
         screen: "days",
       });
     }
 
-    console.log(`[generate-plan] Completed request ${requestId} -> plan ${planRow.id}`);
+    console.log(
+      `[generate-plan] Completed request ${requestId} -> plan ${planId}, block ${context.blockIndex}`
+    );
   } catch (err) {
     console.error("generate-plan background task error:", err);
     await markRequestFailed(supabase, requestId, err instanceof Error ? err.message : String(err));
@@ -570,6 +1022,12 @@ Deno.serve(async (req: Request) => {
     if (genRequestError || !genRequest) {
       return jsonResponse({ error: "Generation request not found" }, 404);
     }
+    if (genRequest.status === "completed" || genRequest.status === "generating") {
+      return jsonResponse({ success: true, status: genRequest.status });
+    }
+    if (genRequest.status !== "pending") {
+      return jsonResponse({ error: "Generation request is not pending" }, 409);
+    }
 
     // 4. Load the user's latest onboarding answers.
     const { data: answersRows, error: answersError } = await supabase
@@ -585,10 +1043,53 @@ Deno.serve(async (req: Request) => {
     }
     const answers = answersRows[0] as OnboardingAnswers;
 
-    // 7. Mark the generation request as "generating".
-    await supabase.from("plan_generation_requests").update({ status: "generating" }).eq("id", requestId);
+    const generationType =
+      genRequest.generation_type === "extend" ? "extend" as const : "initial" as const;
+    if (generationType === "extend" && genRequest.target_plan_id) {
+      const { data: failedAttempt } = await supabase
+        .from("plan_generation_requests")
+        .select("id")
+        .eq("target_plan_id", genRequest.target_plan_id)
+        .eq("block_index", Number(genRequest.block_index ?? 1))
+        .eq("status", "failed")
+        .limit(1)
+        .maybeSingle();
+      if (failedAttempt) {
+        await supabase
+          .from("workout_days")
+          .delete()
+          .eq("plan_id", genRequest.target_plan_id)
+          .eq("block_index", Number(genRequest.block_index ?? 1));
+      }
+    }
+    let context: GenerationContext;
+    try {
+      context = await buildGenerationContext(
+        supabase,
+        userId,
+        answers,
+        generationType,
+        genRequest.target_plan_id ?? null,
+        Number(genRequest.block_index ?? 1)
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await markRequestFailed(supabase, requestId, message);
+      return jsonResponse({ error: message }, 400);
+    }
 
-    const backgroundTask = runGeneration(supabase, requestId, userId, answers);
+    const { data: claimedRequest } = await supabase
+      .from("plan_generation_requests")
+      .update({ status: "generating", error_message: null })
+      .eq("id", requestId)
+      .eq("status", "pending")
+      .select("id")
+      .maybeSingle();
+    if (!claimedRequest) {
+      return jsonResponse({ success: true, status: "generating" });
+    }
+
+    const backgroundTask = runGeneration(supabase, requestId, userId, answers, context);
 
     if (typeof EdgeRuntime !== "undefined") {
       EdgeRuntime.waitUntil(backgroundTask);

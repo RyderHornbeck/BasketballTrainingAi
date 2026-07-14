@@ -12,12 +12,12 @@ import {
   isWorkoutBudgetExhausted,
   logCoachUsage,
 } from "@/lib/coachUsage";
-import {
-  COACH_DUPLICATE_SPEECH_MS,
-  COACH_MIN_SPEECH_MS,
-} from "@/lib/coachStateMachine";
 import { supabase } from "@/lib/supabase";
-import { startVoiceCallAudio, stopVoiceCallAudio } from "@/lib/webrtcAudio";
+import {
+  inferVoiceAudioProfile,
+  startVoiceCallAudio,
+  stopVoiceCallAudio,
+} from "@/lib/webrtcAudio";
 
 async function edgeFunctionErrorMessage(error: {
   message: string;
@@ -144,19 +144,25 @@ export class RealtimeCoachSession {
   private model = "gpt-realtime-2.1-mini";
   private active = false;
   private connecting = false;
-  private speaking = false;
+  private muted = false;
+  private playbackActive = false;
+  private generationActive = false;
+  private activeResponseId: string | null = null;
   private toolBusy = false;
-  private pendingResponseCreate = false;
-  private speechStartedAt = 0;
-  private lastSpeechEndedAt = 0;
-  private lastCoachAudioEnd = 0;
-  private disconnectReason = "manual";
+  private responseCreatePending = false;
+  private queuedResponseInstruction: string | null = null;
+  private pendingEvents: Record<string, unknown>[] = [];
+  private responseCreateTimeout: ReturnType<typeof setTimeout> | null = null;
+  private disconnectGraceTimeout: ReturnType<typeof setTimeout> | null = null;
+  private disconnectPromise: Promise<void> | null = null;
+  private contextRefreshPromise: Promise<void> | null = null;
+  private responseDoneQueue: Promise<void> = Promise.resolve();
+  private connectionGeneration = 0;
   private workoutSpentBaseline = 0;
   private workoutBudgetUsd = COACH_WORKOUT_BUDGET_USD;
   private usageTracker: ReturnType<typeof createUsageTracker> | null = null;
   private handledToolCalls = new Set<string>();
   private loggedUsageSessionKeys = new Set<string>();
-  private cancelledShortSpeech = false;
 
   getSessionKey(): string | null {
     return this.sessionKey;
@@ -169,10 +175,12 @@ export class RealtimeCoachSession {
     callbacks: RealtimeCoachCallbacks,
     options?: { workoutSpentUsd?: number; workoutBudgetUsd?: number }
   ): Promise<void> {
+    if (this.disconnectPromise) await this.disconnectPromise;
     if (this.connecting) return;
     if (this.active) return;
     if (this.pc) await this.disconnect("reconnect");
 
+    const generation = ++this.connectionGeneration;
     this.connecting = true;
     this.callbacks = callbacks;
     this.workoutSpentBaseline = options?.workoutSpentUsd ?? 0;
@@ -191,11 +199,17 @@ export class RealtimeCoachSession {
     this.sessionKey = createSessionKey();
     this.model = "gpt-realtime-2.1-mini";
     this.handledToolCalls.clear();
+    this.pendingEvents = [];
+    this.generationActive = false;
+    this.playbackActive = false;
+    this.activeResponseId = null;
+    this.responseCreatePending = false;
+    this.queuedResponseInstruction = null;
     this.usageTracker = createUsageTracker(this.model);
     callbacks.onStatus("connecting");
 
     try {
-      const audioProfile = await startVoiceCallAudio();
+      let audioProfile = await startVoiceCallAudio();
       const webrtc = await loadWebRTC();
       const { mediaDevices, RTCPeerConnection, RTCSessionDescription } = webrtc;
 
@@ -211,15 +225,40 @@ export class RealtimeCoachSession {
       const dc = pc.createDataChannel("oai-events") as any;
       this.dc = dc;
       dc.addEventListener("message", (e: { data?: string | ArrayBuffer }) => {
-        if (e.data != null) this.handleDataChannelMessage(e.data);
+        if (generation === this.connectionGeneration && e.data != null) {
+          this.handleDataChannelMessage(e.data);
+        }
+      });
+      dc.addEventListener("close", () => {
+        if (generation === this.connectionGeneration && this.active) {
+          void this.disconnect("connection_lost");
+        }
       });
 
       pc.addEventListener("connectionstatechange", () => {
-        if (!this.active) return;
+        if (!this.active || generation !== this.connectionGeneration) return;
         const state = pc.connectionState;
-        if (state === "failed" || state === "disconnected" || state === "closed") {
+        if (state === "connected") {
+          if (this.disconnectGraceTimeout) clearTimeout(this.disconnectGraceTimeout);
+          this.disconnectGraceTimeout = null;
+          return;
+        }
+        if (state === "disconnected") {
+          if (this.disconnectGraceTimeout) clearTimeout(this.disconnectGraceTimeout);
+          this.disconnectGraceTimeout = setTimeout(() => {
+            if (
+              generation === this.connectionGeneration &&
+              this.active &&
+              this.pc?.connectionState === "disconnected"
+            ) {
+              this.callbacks?.onError("Coach connection lost.");
+              void this.disconnect("connection_lost");
+            }
+          }, 3_000);
+          return;
+        }
+        if (state === "failed" || state === "closed") {
           this.callbacks?.onError("Coach connection lost.");
-          this.callbacks?.onStatus("error");
           void this.disconnect("connection_lost");
         }
       });
@@ -234,9 +273,16 @@ export class RealtimeCoachSession {
         audio: MIC_CONSTRAINTS as Record<string, unknown>,
         video: false,
       });
+      if (generation !== this.connectionGeneration || !this.active) {
+        for (const track of stream.getTracks()) track.stop();
+        return;
+      }
       this.localStream = stream;
+      audioProfile = inferVoiceAudioProfile(stream.getAudioTracks(), audioProfile);
       for (const track of stream.getAudioTracks()) {
-        track.enabled = true;
+        // Prevent a user turn before the session instructions and workout state
+        // are installed by the server.
+        track.enabled = false;
         pc.addTrack(track, stream);
       }
 
@@ -265,7 +311,7 @@ export class RealtimeCoachSession {
         };
       }>("coach-realtime", {
         body: {
-          day_id: dayId,
+          day_id: this.dayId,
           sdp: offer.sdp,
           timer,
           audio_profile: audioProfile,
@@ -274,6 +320,7 @@ export class RealtimeCoachSession {
         },
       });
 
+      if (generation !== this.connectionGeneration || !this.active) return;
       if (error) throw new Error(await edgeFunctionErrorMessage(error));
       if (!data?.sdp) {
         if (data?.code === "workout_budget_exhausted") {
@@ -296,13 +343,16 @@ export class RealtimeCoachSession {
 
       await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: data.sdp }));
       await waitForDataChannelOpen(dc);
+      if (generation !== this.connectionGeneration || !this.active) return;
 
-      if (data.workout_context) {
-        this.seedWorkoutContext(data.workout_context);
+      this.flushPendingEvents();
+      if (!this.muted) {
+        for (const track of stream.getAudioTracks()) track.enabled = true;
       }
 
       this.callbacks?.onStatus("listening");
     } catch (err) {
+      if (generation !== this.connectionGeneration) return;
       console.error("Realtime coach connect failed:", err);
       const msg = err instanceof Error ? err.message : "Failed to connect to coach.";
       this.callbacks?.onError(msg);
@@ -314,12 +364,48 @@ export class RealtimeCoachSession {
       await this.disconnect("connect_failed");
       throw err;
     } finally {
-      this.connecting = false;
+      if (generation === this.connectionGeneration) this.connecting = false;
     }
   }
 
   updateTimer(timer: TimerState): void {
     this.timer = timer;
+  }
+
+  async refreshWorkoutContext(): Promise<void> {
+    if (this.contextRefreshPromise) return this.contextRefreshPromise;
+    if (!this.active || !this.dayId || !this.sessionKey) return;
+    this.contextRefreshPromise = (async () => {
+      const { data, error } = await supabase.functions.invoke<{
+        updated_instructions?: string | null;
+        error?: string;
+      }>("coach-tools", {
+        body: {
+          day_id: this.dayId,
+          session_key: this.sessionKey,
+          tool_name: "get_workout_position",
+          arguments: {},
+        },
+      });
+      if (error) throw new Error(await edgeFunctionErrorMessage(error));
+      if (data?.error) throw new Error(data.error);
+      if (data?.updated_instructions) {
+        this.sendEvent({
+          type: "session.update",
+          session: {
+            type: "realtime",
+            instructions: data.updated_instructions,
+          },
+        });
+      }
+    })()
+      .catch((err) => {
+        console.warn("Failed to refresh coach workout context:", err);
+      })
+      .finally(() => {
+        this.contextRefreshPromise = null;
+      });
+    return this.contextRefreshPromise;
   }
 
   markTimerSetComplete(exerciseId: string, setNumber: number): void {
@@ -336,10 +422,13 @@ export class RealtimeCoachSession {
         ],
       },
     });
-    this.sendEvent({ type: "response.create" });
+    this.requestResponse(
+      "The timer ended. Call set_set_completion for the exact set described by the latest user message, then confirm it briefly."
+    );
   }
 
   mute(): void {
+    this.muted = true;
     if (this.localStream) {
       for (const track of this.localStream.getAudioTracks()) {
         track.enabled = false;
@@ -349,103 +438,106 @@ export class RealtimeCoachSession {
   }
 
   unmute(): void {
+    this.muted = false;
     if (this.localStream) {
       for (const track of this.localStream.getAudioTracks()) {
         track.enabled = true;
       }
     }
-    this.callbacks?.onStatus(this.speaking ? "speaking" : "listening");
+    this.updateStatus();
   }
 
   async disconnect(reason = "manual"): Promise<void> {
+    if (this.disconnectPromise) return this.disconnectPromise;
     if (!this.active && !this.connecting && !this.pc) return;
 
-    this.disconnectReason = reason;
-    this.callbacks?.onStatus("disconnecting");
-    this.active = false;
-    this.connecting = false;
-    this.speaking = false;
-    this.toolBusy = false;
-    this.pendingResponseCreate = false;
+    this.disconnectPromise = (async () => {
+      const callbacks = this.callbacks;
+      const usageTracker = this.usageTracker;
+      const sessionKey = this.sessionKey;
+      const dayId = this.dayId;
+      callbacks?.onStatus("disconnecting");
+      ++this.connectionGeneration;
+      this.active = false;
+      this.connecting = false;
+      this.playbackActive = false;
+      this.generationActive = false;
+      this.activeResponseId = null;
+      this.toolBusy = false;
+      this.responseCreatePending = false;
+      this.queuedResponseInstruction = null;
+      this.pendingEvents = [];
 
-    if (
-      this.usageTracker &&
-      this.sessionKey &&
-      !this.loggedUsageSessionKeys.has(this.sessionKey)
-    ) {
-      this.loggedUsageSessionKeys.add(this.sessionKey);
-      const totals = this.usageTracker.snapshot();
-      this.callbacks?.onUsage?.(totals);
-      await logCoachUsage({
-        dayId: this.dayId,
-        sessionKey: this.sessionKey,
-        totals,
-      });
-    }
+      if (this.disconnectGraceTimeout) clearTimeout(this.disconnectGraceTimeout);
+      if (this.responseCreateTimeout) clearTimeout(this.responseCreateTimeout);
+      this.disconnectGraceTimeout = null;
+      this.responseCreateTimeout = null;
 
-    if (this.dc) {
       try {
-        this.dc.close();
+        this.dc?.close();
       } catch {
-        // ignore
+        // Already closed.
       }
       this.dc = null;
-    }
 
-    if (this.localStream) {
-      for (const track of this.localStream.getTracks()) track.stop();
-      this.localStream = null;
-    }
-
-    if (this.remoteStream) {
-      for (const track of this.remoteStream.getTracks()) track.stop();
-      this.remoteStream = null;
-    }
-
-    if (this.pc) {
+      if (this.localStream) {
+        for (const track of this.localStream.getTracks()) track.stop();
+        this.localStream = null;
+      }
+      if (this.remoteStream) {
+        for (const track of this.remoteStream.getTracks()) track.stop();
+        this.remoteStream = null;
+      }
       try {
-        this.pc.close();
+        this.pc?.close();
       } catch {
-        // ignore
+        // Already closed.
       }
       this.pc = null;
-    }
+      await stopVoiceCallAudio();
 
-    await stopVoiceCallAudio();
-    this.sessionKey = null;
-    this.usageTracker = null;
-    this.handledToolCalls.clear();
-
-    if (reason !== "connect_failed") {
-      if (reason === "workout_budget" || reason === "daily_budget") {
-        this.callbacks?.onStatus("budget_exhausted");
-      } else if (!this.active && !this.connecting) {
-        this.callbacks?.onStatus("idle");
+      if (usageTracker && sessionKey && !this.loggedUsageSessionKeys.has(sessionKey)) {
+        this.loggedUsageSessionKeys.add(sessionKey);
+        const totals = usageTracker.snapshot();
+        callbacks?.onUsage?.(totals);
+        await logCoachUsage({ dayId, sessionKey, totals }).catch((err) => {
+          console.warn("Failed to persist coach usage:", err);
+        });
       }
+
+      this.sessionKey = null;
+      this.usageTracker = null;
+      this.handledToolCalls.clear();
+      if (reason === "workout_budget" || reason === "daily_budget") {
+        callbacks?.onStatus("budget_exhausted");
+      } else if (reason !== "connect_failed" && reason !== "connection_lost") {
+        callbacks?.onStatus("idle");
+      }
+      callbacks?.onSessionEnded?.(reason);
+    })();
+
+    try {
+      await this.disconnectPromise;
+    } finally {
+      this.disconnectPromise = null;
     }
-    this.callbacks?.onSessionEnded?.(reason);
   }
 
-  private seedWorkoutContext(contextJson: string): void {
-    this.sendEvent({
-      type: "conversation.item.create",
-      item: {
-        type: "message",
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: `Today's workout data (use to answer questions — name drills when the athlete asks):\n${contextJson}`,
-          },
-        ],
-      },
-    });
-  }
-
-  private sendEvent(event: Record<string, unknown>): void {
+  private sendEvent(event: Record<string, unknown>, queueIfConnecting = true): boolean {
     if (this.dc?.readyState === "open") {
       this.dc.send(JSON.stringify(event));
+      return true;
     }
+    if (queueIfConnecting && this.active && this.connecting) {
+      this.pendingEvents.push(event);
+    }
+    return false;
+  }
+
+  private flushPendingEvents(): void {
+    const pending = this.pendingEvents;
+    this.pendingEvents = [];
+    for (const event of pending) this.sendEvent(event, false);
   }
 
   private handleDataChannelMessage(raw: string | ArrayBuffer): void {
@@ -458,82 +550,132 @@ export class RealtimeCoachSession {
     }
   }
 
-  private setSpeaking(speaking: boolean): void {
-    this.speaking = speaking;
-    if (speaking) {
-      // Do not disable the WebRTC microphone track here. Server VAD needs the
-      // live earbud mic to detect a barge-in while the coach is speaking.
+  private updateStatus(): void {
+    if (!this.active) return;
+    if (this.muted) {
+      this.callbacks?.onStatus("muted");
+    } else if (this.playbackActive) {
       this.callbacks?.onStatus("speaking");
-      return;
+    } else if (this.toolBusy || this.generationActive || this.responseCreatePending) {
+      this.callbacks?.onStatus("thinking");
+    } else {
+      this.callbacks?.onStatus("listening");
     }
-    this.lastCoachAudioEnd = Date.now();
-    if (!this.toolBusy) this.callbacks?.onStatus("listening");
   }
 
-  private maybeCancelShortSpeech(): void {
-    const duration = Date.now() - this.speechStartedAt;
-    if (duration > 0 && duration < COACH_MIN_SPEECH_MS) {
-      this.cancelledShortSpeech = true;
-      this.sendEvent({ type: "response.cancel" });
+  private requestResponse(instructions: string): void {
+    this.queuedResponseInstruction = instructions;
+    this.flushQueuedResponse();
+  }
+
+  private flushQueuedResponse(): void {
+    if (
+      !this.queuedResponseInstruction ||
+      this.generationActive ||
+      this.playbackActive ||
+      this.responseCreatePending ||
+      this.toolBusy ||
+      !this.active
+    ) {
+      return;
     }
+    const instructions = this.queuedResponseInstruction;
+    this.queuedResponseInstruction = null;
+    const sent = this.sendEvent(
+      {
+        type: "response.create",
+        response: { instructions },
+      },
+      false
+    );
+    if (!sent) {
+      this.queuedResponseInstruction = instructions;
+      return;
+    }
+    this.responseCreatePending = true;
+    this.updateStatus();
+    if (this.responseCreateTimeout) clearTimeout(this.responseCreateTimeout);
+    this.responseCreateTimeout = setTimeout(() => {
+      if (!this.responseCreatePending) return;
+      this.responseCreatePending = false;
+      this.callbacks?.onError("Coach response timed out. Please try again.");
+      this.updateStatus();
+    }, 8_000);
   }
 
   private processServerEvent(event: { type: string; [key: string]: unknown }): void {
     switch (event.type) {
       case "session.created":
       case "session.updated":
-        if (!this.speaking && !this.toolBusy) this.callbacks?.onStatus("listening");
+        this.updateStatus();
         break;
 
       case "input_audio_buffer.speech_started": {
-        const interruptedCoach = this.speaking;
-        if (interruptedCoach) {
-          // The server VAD is configured to interrupt output, and cancelling
-          // over the WebRTC data channel clears any response audio already
-          // buffered for playback without muting the microphone track.
-          this.sendEvent({ type: "response.cancel" });
-          this.setSpeaking(false);
-        }
-        if (this.toolBusy) return;
-        if (!interruptedCoach && Date.now() - this.lastCoachAudioEnd < 400) return;
-        if (Date.now() - this.lastSpeechEndedAt < COACH_DUPLICATE_SPEECH_MS) return;
-        this.speechStartedAt = Date.now();
-        this.cancelledShortSpeech = false;
+        // With WebRTC and interrupt_response enabled, OpenAI automatically
+        // cancels and truncates any unplayed assistant audio.
         this.sendTimerContext();
         this.callbacks?.onStatus("listening");
         break;
       }
 
       case "input_audio_buffer.speech_stopped":
-        this.lastSpeechEndedAt = Date.now();
-        this.maybeCancelShortSpeech();
         break;
 
-      case "response.created":
-        if (this.cancelledShortSpeech) return;
-        this.callbacks?.onStatus("thinking");
-        this.setSpeaking(true);
+      case "response.created": {
+        const response = event.response as { id?: string } | undefined;
+        this.generationActive = true;
+        this.activeResponseId = response?.id ?? null;
+        this.responseCreatePending = false;
+        if (this.responseCreateTimeout) clearTimeout(this.responseCreateTimeout);
+        this.responseCreateTimeout = null;
+        this.updateStatus();
         break;
+      }
 
-      case "response.done":
-        void this.handleResponseDone(event);
+      case "response.done": {
+        const generation = this.connectionGeneration;
+        this.responseDoneQueue = this.responseDoneQueue
+          .then(async () => {
+            if (generation === this.connectionGeneration) {
+              await this.handleResponseDone(event, generation);
+            }
+          })
+          .catch((err) => {
+            console.error("Failed to process coach response:", err);
+          });
         break;
+      }
 
       case "response.cancelled":
-        this.setSpeaking(false);
+        this.generationActive = false;
+        this.activeResponseId = null;
+        this.updateStatus();
+        this.flushQueuedResponse();
         break;
 
       case "output_audio_buffer.started":
-        if (!this.cancelledShortSpeech) this.setSpeaking(true);
+        this.playbackActive = true;
+        this.updateStatus();
         break;
 
       case "output_audio_buffer.stopped":
-        this.setSpeaking(false);
+      case "output_audio_buffer.cleared":
+        this.playbackActive = false;
+        this.updateStatus();
+        this.flushQueuedResponse();
         break;
 
-      case "error":
+      case "error": {
         console.error("Realtime API error:", event);
+        this.responseCreatePending = false;
+        if (this.responseCreateTimeout) clearTimeout(this.responseCreateTimeout);
+        this.responseCreateTimeout = null;
+        const error = event.error as { message?: string } | undefined;
+        this.callbacks?.onError(error?.message ?? "Realtime coach request failed.");
+        this.updateStatus();
+        this.flushQueuedResponse();
         break;
+      }
     }
   }
 
@@ -561,6 +703,9 @@ export class RealtimeCoachSession {
   private async handleResponseDone(event: {
     type: string;
     response?: {
+      id?: string;
+      status?: string;
+      status_details?: { reason?: string; error?: { message?: string } };
       output?: FunctionCallItem[];
       usage?: {
         input_tokens?: number;
@@ -576,13 +721,17 @@ export class RealtimeCoachSession {
         };
       };
     };
-  }): Promise<void> {
-    if (this.cancelledShortSpeech) {
-      this.cancelledShortSpeech = false;
-      this.setSpeaking(false);
-      return;
+  }, generation: number): Promise<void> {
+    const response = event.response;
+    if (!this.activeResponseId || response?.id === this.activeResponseId) {
+      this.generationActive = false;
+      this.activeResponseId = null;
     }
-
+    if (response?.status === "failed" || response?.status_details?.error?.message) {
+      this.callbacks?.onError(
+        response.status_details?.error?.message ?? "Coach could not finish that response."
+      );
+    }
     this.usageTracker?.addResponseUsage(event.response?.usage);
     const totals = this.usageTracker?.snapshot() ?? {
       model: this.model,
@@ -613,23 +762,38 @@ export class RealtimeCoachSession {
 
     if (functionCalls.length > 0) {
       this.toolBusy = true;
+      this.updateStatus();
+      let shouldConfirm = false;
       try {
         for (const call of functionCalls) {
-          await this.executeToolCall(call);
+          shouldConfirm = (await this.executeToolCall(call, generation)) || shouldConfirm;
         }
       } finally {
-        this.toolBusy = false;
-        this.setSpeaking(false);
+        if (generation === this.connectionGeneration) {
+          this.toolBusy = false;
+          this.updateStatus();
+        }
+      }
+      if (generation !== this.connectionGeneration) return;
+      if (shouldConfirm) {
+        this.requestResponse(
+          "Give one short, natural spoken confirmation of the completed actions. Never mention tools, internal state, context, JSON, or refreshes."
+        );
+      } else {
+        this.flushQueuedResponse();
       }
       return;
     }
 
-    this.setSpeaking(false);
+    this.updateStatus();
+    this.flushQueuedResponse();
   }
 
-  private async executeToolCall(call: FunctionCallItem): Promise<void> {
-    if (!this.dayId || !this.sessionKey) return;
-    if (this.handledToolCalls.has(call.call_id)) return;
+  private async executeToolCall(call: FunctionCallItem, generation: number): Promise<boolean> {
+    const dayId = this.dayId;
+    const sessionKey = this.sessionKey;
+    if (!dayId || !sessionKey || generation !== this.connectionGeneration) return false;
+    if (this.handledToolCalls.has(call.call_id)) return false;
     this.handledToolCalls.add(call.call_id);
 
     let args: Record<string, unknown> = {};
@@ -652,11 +816,12 @@ export class RealtimeCoachSession {
         skip_model_response?: boolean;
         deduplicated?: boolean;
         updated_context?: string | null;
+        updated_instructions?: string | null;
         error?: string;
       }>("coach-tools", {
         body: {
-          day_id: this.dayId,
-          session_key: this.sessionKey,
+          day_id: dayId,
+          session_key: sessionKey,
           tool_name: call.name,
           arguments: args,
         },
@@ -672,18 +837,23 @@ export class RealtimeCoachSession {
       if (data.db_changed) {
         emitWorkoutUpdated();
       }
+      if (generation !== this.connectionGeneration) return false;
+      if (data.updated_instructions) {
+        this.sendEvent({
+          type: "session.update",
+          session: {
+            type: "realtime",
+            instructions: data.updated_instructions,
+          },
+        });
+      }
 
       this.sendEvent({
         type: "conversation.item.create",
         item: {
           type: "function_call_output",
           call_id: call.call_id,
-          output: JSON.stringify({
-            action_result: data.result,
-            updated_workout_state: data.updated_context ? JSON.parse(data.updated_context) : null,
-            response_instruction:
-              "Use updated_workout_state internally. Speak only a short, natural confirmation of action_result; never mention the state update or raw JSON.",
-          }),
+          output: data.result,
         },
       });
 
@@ -695,20 +865,10 @@ export class RealtimeCoachSession {
         this.callbacks?.onConversationSummary?.(this.conversationSummary);
       }
 
-      if (!data.skip_model_response && !this.pendingResponseCreate) {
-        this.pendingResponseCreate = true;
-        await new Promise((r) => setTimeout(r, 120));
-        this.sendEvent({
-          type: "response.create",
-          response: {
-            instructions:
-              "Reply only with a short, natural spoken confirmation of action_result. Never mention updated_workout_state, internal state, alignment, refreshes, context, JSON, or tool execution.",
-          },
-        });
-        this.pendingResponseCreate = false;
-      }
+      return !data.skip_model_response;
     } catch (err) {
       console.error(`Tool ${call.name} failed:`, err);
+      if (generation !== this.connectionGeneration) return false;
       this.sendEvent({
         type: "conversation.item.create",
         item: {
@@ -717,12 +877,7 @@ export class RealtimeCoachSession {
           output: `Error: ${err instanceof Error ? err.message : "tool failed"}`,
         },
       });
-      if (!this.pendingResponseCreate) {
-        this.pendingResponseCreate = true;
-        await new Promise((r) => setTimeout(r, 120));
-        this.sendEvent({ type: "response.create" });
-        this.pendingResponseCreate = false;
-      }
+      return true;
     }
   }
 }
