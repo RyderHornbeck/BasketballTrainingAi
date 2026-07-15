@@ -19,7 +19,7 @@ import { parseDrillDescription } from "@/lib/drillDescription";
 import { WorkoutExerciseWithClip } from "@/types/plan";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { CaretLeftIcon, CaretRightIcon, TimerIcon } from "phosphor-react-native";
+import { CaretLeftIcon, CaretRightIcon, TimerIcon, XIcon } from "phosphor-react-native";
 import { useRouter } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Linking, Pressable, StyleSheet, TextInput as RNTextInput, View } from "react-native";
@@ -30,6 +30,8 @@ import { Text } from "./Text";
 interface ExerciseCardProps {
   exercise: WorkoutExerciseWithClip;
   readOnly?: boolean;
+  editMode?: boolean;
+  onDelete?: () => void;
   onLogChange: (log: ExerciseLogInput) => void;
 }
 
@@ -204,14 +206,17 @@ function DrillDescriptionView({
           </Text>
         </View>
       ))}
-      {parsed.repeat ? (
-        <Text style={[styles.drillRepeat, { color: colors.textMuted }]}>{parsed.repeat}.</Text>
-      ) : null}
     </View>
   );
 }
 
-export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardProps) {
+export function ExerciseCard({
+  exercise,
+  readOnly,
+  editMode = false,
+  onDelete,
+  onLogChange,
+}: ExerciseCardProps) {
   const { colors, scheme } = useTheme();
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
@@ -474,17 +479,27 @@ export function ExerciseCard({ exercise, readOnly, onLogChange }: ExerciseCardPr
         </Pressable>
 
         <View style={styles.headerActions}>
-          <Pressable onPress={toggleExpand} hitSlop={8}>
+          <Pressable onPress={editMode ? onDelete : toggleExpand} hitSlop={8}>
             <View
               style={[
                 styles.headerCheck,
                 {
-                  backgroundColor: completed ? colors.accent : "transparent",
-                  borderColor: completed ? colors.accent : colors.border,
+                  backgroundColor: editMode
+                    ? "#DC2626"
+                    : completed
+                      ? colors.accent
+                      : "transparent",
+                  borderColor: editMode
+                    ? "#DC2626"
+                    : completed
+                      ? colors.accent
+                      : colors.border,
                 },
               ]}
             >
-              {completed ? (
+              {editMode ? (
+                <XIcon size={16} color="#FFFFFF" weight="bold" />
+              ) : completed ? (
                 <Ionicons name="checkmark" size={16} color="#FFFFFF" />
               ) : null}
             </View>
@@ -749,12 +764,6 @@ const styles = StyleSheet.create({
   },
   drillStepText: {
     fontWeight: "400",
-  },
-  drillRepeat: {
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "600",
-    marginTop: 4,
   },
   expandedContent: {
     marginTop: 14,

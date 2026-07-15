@@ -2,7 +2,7 @@ import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { useTimerAudioCues } from "@/hooks/useTimerAudioCues";
 import { parseDrillDescription } from "@/lib/drillDescription";
-import { ArrowLeftIcon, ArrowCounterClockwiseIcon, PauseIcon, PlayIcon, StopIcon } from "phosphor-react-native";
+import { ArrowLeftIcon, ArrowCounterClockwiseIcon, PauseIcon, PlayIcon } from "phosphor-react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
@@ -135,12 +135,6 @@ export default function DrillTimerScreen() {
             ))}
           </View>
         ) : null}
-        {parsed.repeat ? <Text style={[styles.repeat, { color: colors.textSecondary }]}>{parsed.repeat}</Text> : null}
-
-        <Pressable onPress={reset} style={styles.stopLink}>
-          <StopIcon size={16} color={colors.textMuted} weight="fill" />
-          <Text style={[styles.stopLinkText, { color: colors.textMuted }]}>Stop and reset timer</Text>
-        </Pressable>
       </ScrollView>
     </View>
   );
@@ -170,7 +164,4 @@ const styles = StyleSheet.create({
   stepNumber: { width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   stepNumberText: { fontSize: 14, fontWeight: "800" },
   stepText: { flex: 1, fontSize: 15, lineHeight: 22 },
-  repeat: { marginTop: 22, fontSize: 15, lineHeight: 22, fontWeight: "600" },
-  stopLink: { marginTop: 32, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7 },
-  stopLinkText: { fontSize: 14, fontWeight: "700" },
 });

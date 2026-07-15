@@ -7,6 +7,11 @@ import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { calculateDayPerformance, getPerformanceColor } from "@/lib/dayPerformance";
+import {
+  buildSetPlan,
+  decodeExerciseLogMeta,
+  hydrateSetLogs,
+} from "@/lib/exerciseSetLogs";
 import { sortWorkoutExercisesForDisplay } from "@/lib/workoutOrder";
 import {
   ExerciseLogInput,
@@ -15,6 +20,7 @@ import {
   getWorkoutDayWithExercises,
   getWeeklyWorkoutStats,
   isDayUnlocked,
+  removeExerciseFromWorkout,
   requestNextBlockGeneration,
   saveExerciseLog,
   WeeklyWorkoutStats,
@@ -27,12 +33,20 @@ import {
   BasketballIcon,
   FireIcon,
   PercentIcon,
+  MagicWandIcon,
+  LockIcon,
+  PlusIcon,
   PlayCircleIcon,
+  FloppyDiskIcon,
+  PencilSimpleIcon,
+  TargetIcon,
   TimerIcon,
 } from "phosphor-react-native";
+import { useRouter } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -45,6 +59,7 @@ type DaysViewMode = "overview" | "workout";
 
 export default function DaysScreen() {
   const { colors } = useTheme();
+  const router = useRouter();
   const {
     plan,
     days,
@@ -67,11 +82,13 @@ export default function DaysScreen() {
   const logsRef = useRef<Map<string, ExerciseLogInput>>(new Map());
   const finishingRef = useRef(false);
   const [retryingBlock, setRetryingBlock] = useState(false);
+  const [editingWorkout, setEditingWorkout] = useState(false);
+  const [clockNow, setClockNow] = useState(() => Date.now());
 
   const defaultDayNumber = useMemo(() => {
     if (days.length === 0) return null;
     const sorted = [...days].sort((a, b) => (a.day_number ?? 0) - (b.day_number ?? 0));
-    const nextUp = sorted.find((d) => !d.completed && isDayUnlocked(d));
+    const nextUp = sorted.find((d) => !d.completed && isDayUnlocked(d, sorted));
     if (nextUp) return nextUp.day_number;
     const lastCompleted = [...sorted].reverse().find((d) => d.completed);
     if (lastCompleted) return lastCompleted.day_number;
@@ -91,7 +108,6 @@ export default function DaysScreen() {
     const next = days.find(
       (day) =>
         !day.completed &&
-        isDayUnlocked(day) &&
         (day.day_number ?? 0) > selectedDayNumber
     );
     if (isCurrent && selected?.completed && next?.day_number != null) {
@@ -158,7 +174,13 @@ export default function DaysScreen() {
   }, [loadCurrentStreak]);
 
   useEffect(() => {
+    const interval = setInterval(() => setClockNow(Date.now()), 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
     setViewMode("overview");
+    setEditingWorkout(false);
   }, [selectedDayNumber]);
 
   useEffect(() => {
@@ -223,6 +245,30 @@ export default function DaysScreen() {
     setSelectedDayNumber(dayNumber);
   }, []);
 
+  const confirmDeleteExercise = useCallback(
+    (exerciseId: string, exerciseName: string | null) => {
+      if (!dayDetail) return;
+      Alert.alert(
+        "Delete exercise?",
+        `Are you sure you want to delete ${exerciseName ?? "this exercise"}? Its logged results will also be removed from analytics.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: () => {
+              void removeExerciseFromWorkout(dayDetail.id, exerciseId).catch((err) => {
+                console.error("Failed to delete exercise:", err);
+                Alert.alert("Could not delete exercise", err instanceof Error ? err.message : "Try again.");
+              });
+            },
+          },
+        ]
+      );
+    },
+    [dayDetail]
+  );
+
   const exerciseStats = useMemo(() => {
     if (!dayDetail) return { completed: 0, total: 0, progress: 0 };
     const total = dayDetail.exercises.length;
@@ -240,6 +286,32 @@ export default function DaysScreen() {
   const dayPerformance = useMemo(() => {
     if (!dayDetail) return { score: 0, hasData: false };
     return calculateDayPerformance(dayDetail.exercises, logsRef.current);
+  }, [dayDetail, progressVersion]);
+
+  const dayShootingStats = useMemo(() => {
+    if (!dayDetail) return { shots: 0, makes: 0, accuracy: null as number | null };
+    let shots = 0;
+    let makes = 0;
+
+    for (const exercise of dayDetail.exercises) {
+      if (exercise.log_type !== "makes_attempts") continue;
+      const log = logsRef.current.get(exercise.id) ?? exercise.log;
+      if (!log) continue;
+      const plan = buildSetPlan(exercise);
+      const setLogs = hydrateSetLogs(plan, decodeExerciseLogMeta(log.notes), log);
+      for (const set of setLogs) {
+        if (!set.completed) continue;
+        const setMakes = set.makes ?? 0;
+        makes += setMakes;
+        shots += set.attempts ?? plan.perSetAttempts ?? setMakes;
+      }
+    }
+
+    return {
+      shots,
+      makes,
+      accuracy: shots > 0 ? Math.round((makes / shots) * 100) : null,
+    };
   }, [dayDetail, progressVersion]);
 
   const performanceColor = getPerformanceColor(dayPerformance.score, colors);
@@ -269,11 +341,24 @@ export default function DaysScreen() {
   }, [nextBlockIndex, plan, refreshPlan, retryingBlock]);
 
   const canViewDay = selectedDay
-    ? selectedDay.completed || isDayUnlocked(selectedDay)
+    ? selectedDay.completed || isDayUnlocked(selectedDay, days)
     : false;
   const isPastOrCompletedDay =
     selectedDay?.completed === true ||
     (defaultDayNumber != null && (selectedDayNumber ?? 0) < defaultDayNumber);
+  const lockedDayMessage = useMemo(() => {
+    if (!selectedDay?.scheduled_date || isDayUnlocked(selectedDay, days)) {
+      return "Complete today’s workout to unlock.";
+    }
+    const unlockAt = new Date(`${selectedDay.scheduled_date}T00:00:00`).getTime();
+    const remainingMinutes = Math.max(0, Math.ceil((unlockAt - clockNow) / 60_000));
+    const hours = Math.floor(remainingMinutes / 60);
+    const minutes = remainingMinutes % 60;
+    const previousDay = Math.max(1, (selectedDay.day_number ?? 1) - 1);
+    return `Workout from Day ${previousDay} completed. Day ${
+      selectedDay.day_number ?? ""
+    } unlocks in ${hours} hours and ${minutes} minutes.`;
+  }, [clockNow, days, selectedDay]);
 
   if (planLoading) {
     return (
@@ -358,9 +443,9 @@ export default function DaysScreen() {
       >
         {!selectedDay ? null : !canViewDay ? (
           <Card style={styles.lockedCard}>
-            <Text style={styles.lockedEmoji}>🔒</Text>
+            <LockIcon size={40} color={colors.textMuted} weight="duotone" />
             <Text style={[styles.lockedText, { color: colors.text }]}>
-              Complete today&apos;s workout to unlock.
+              {lockedDayMessage}
             </Text>
           </Card>
         ) : detailLoading || !dayDetail ? (
@@ -483,6 +568,88 @@ export default function DaysScreen() {
               <Text style={[styles.backText, { color: colors.accent }]}>Back to day overview</Text>
             </Pressable>
 
+            <Text style={[styles.dayWorkoutLabel, { color: colors.textMuted }]}>
+              Day {dayDetail.day_number} Workout
+            </Text>
+            <Card style={styles.workoutStatsCard}>
+              <View style={styles.weekStat}>
+                <BasketballIcon size={26} color={colors.accent} weight="duotone" />
+                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Shots</Text>
+                <Text style={[styles.weekStatValue, { color: colors.text }]}>
+                  {dayShootingStats.shots}
+                </Text>
+              </View>
+              <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
+              <View style={styles.weekStat}>
+                <TargetIcon size={26} color={colors.accent} weight="duotone" />
+                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Makes</Text>
+                <Text style={[styles.weekStatValue, { color: colors.text }]}>
+                  {dayShootingStats.makes}
+                </Text>
+              </View>
+              <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
+              <View style={styles.weekStat}>
+                <PercentIcon size={26} color={colors.accent} weight="duotone" />
+                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Accuracy</Text>
+                <Text style={[styles.weekStatValue, { color: colors.text }]}>
+                  {dayShootingStats.accuracy != null ? `${dayShootingStats.accuracy}%` : "--"}
+                </Text>
+              </View>
+            </Card>
+
+            <Pressable
+              onPress={() => setEditingWorkout((value) => !value)}
+              style={[
+                styles.editWorkoutButton,
+                {
+                  backgroundColor: editingWorkout ? colors.accent : colors.card,
+                  borderColor: colors.accent,
+                },
+              ]}
+            >
+              {editingWorkout ? (
+                <FloppyDiskIcon size={19} color="#FFFFFF" weight="bold" />
+              ) : (
+                <PencilSimpleIcon size={19} color={colors.accent} weight="bold" />
+              )}
+              <Text style={{ color: editingWorkout ? "#FFFFFF" : colors.accent, fontWeight: "800" }}>
+                {editingWorkout ? "Save changes" : "Edit workout"}
+              </Text>
+            </Pressable>
+
+            {editingWorkout ? (
+              <View style={styles.addWorkoutActions}>
+                <Pressable
+                  onPress={() =>
+                    router.push({
+                      pathname: "/workout-edit-ai",
+                      params: { dayId: dayDetail.id },
+                    })
+                  }
+                  style={[
+                    styles.addWorkoutButton,
+                    styles.addWorkoutAIButton,
+                    { backgroundColor: colors.accentMuted },
+                  ]}
+                >
+                  <MagicWandIcon size={18} color={colors.accent} weight="bold" />
+                  <Text style={[styles.addWorkoutButtonText, { color: colors.accent }]}>Add with AI</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() =>
+                    router.push({
+                      pathname: "/workout-edit-manual",
+                      params: { dayId: dayDetail.id },
+                    })
+                  }
+                  style={[styles.addWorkoutButton, { backgroundColor: colors.card, borderColor: colors.border }]}
+                >
+                  <PlusIcon size={18} color={colors.text} weight="bold" />
+                  <Text style={[styles.addWorkoutButtonText, { color: colors.text }]}>Add manually</Text>
+                </Pressable>
+              </View>
+            ) : null}
+
             <View style={styles.workoutHeader}>
               <Text style={[styles.workoutHeaderTitle, { color: colors.text }]}>
                 {dayDetail.exercises.length}{" "}
@@ -505,6 +672,8 @@ export default function DaysScreen() {
                   key={exercise.id}
                   exercise={exercise}
                   readOnly={false}
+                  editMode={editingWorkout}
+                  onDelete={() => confirmDeleteExercise(exercise.id, exercise.name)}
                   onLogChange={handleLogChange}
                 />
               ))}
@@ -588,14 +757,11 @@ const styles = StyleSheet.create({
     paddingVertical: 48,
     marginTop: 20,
   },
-  lockedEmoji: {
-    fontSize: 40,
-    marginBottom: 12,
-  },
   lockedText: {
     fontSize: 16,
     fontWeight: "600",
     textAlign: "center",
+    marginTop: 12,
   },
   dayLabel: {
     fontSize: 13,
@@ -712,8 +878,55 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   workoutHeader: {
-    marginBottom: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
     paddingHorizontal: 2,
+  },
+  dayWorkoutLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  workoutStatsCard: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    marginBottom: 18,
+  },
+  editWorkoutButton: {
+    minHeight: 48,
+    borderWidth: 1.5,
+    borderRadius: 16,
+    marginBottom: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  addWorkoutActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 18,
+  },
+  addWorkoutButton: {
+    flex: 1,
+    minHeight: 46,
+    borderWidth: 1,
+    borderRadius: 15,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+  },
+  addWorkoutAIButton: {
+    borderWidth: 0,
+  },
+  addWorkoutButtonText: {
+    fontSize: 13,
+    fontWeight: "800",
   },
   workoutHeaderTitle: {
     fontSize: 22,
@@ -728,7 +941,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    marginTop: 4,
   },
   drillsLabel: {
     fontSize: 12,

@@ -7,6 +7,15 @@
     "icon": "./assets/images/icon.png",
     "scheme": "hoopplan",
     "userInterfaceStyle": "automatic",
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "updates": {
+      "enabled": true,
+      "url": "https://u.expo.dev/2b536ebc-e798-403b-bc5c-26d472cbaa4f",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.hoopplan.app",

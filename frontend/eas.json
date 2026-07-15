@@ -7,21 +7,42 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "channel": "development",
+      "environment": "development",
       "ios": {
         "resourceClass": "m-medium"
       }
     },
-    "preview": {
+    "staging": {
       "distribution": "internal",
+      "channel": "staging",
+      "environment": "preview",
+      "ios": {
+        "resourceClass": "m-medium"
+      }
+    },
+    "testflight": {
+      "channel": "staging",
+      "environment": "preview",
+      "autoIncrement": true,
       "ios": {
         "resourceClass": "m-medium"
       }
     },
     "production": {
+      "channel": "production",
+      "environment": "production",
       "autoIncrement": true
     }
   },
   "submit": {
+    "testflight": {
+      "ios": {
+        "appleId": "hornbeck@yahoo.com",
+        "ascAppId": "6789691200",
+        "appleTeamId": "L43Q26N3RR"
+      }
+    },
     "production": {
       "ios": {
         "appleId": "hornbeck@yahoo.com",

@@ -24,7 +24,7 @@ import {
 import { SkillProfile } from "@/lib/skillRatings";
 import { CaretLeftIcon, CaretRightIcon } from "phosphor-react-native";
 import React, { useMemo, useState } from "react";
-import { Dimensions, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { Dimensions, Pressable, StyleSheet, View } from "react-native";
 import Svg, { Circle, Line, Polyline, Rect, Text as SvgText } from "react-native-svg";
 
 const CHART_HEIGHT = 180;
@@ -32,7 +32,7 @@ const SCREEN_WIDTH = Dimensions.get("window").width;
 const CHART_WIDTH = SCREEN_WIDTH - 76;
 const TICK_HEIGHT = 3;
 const TICK_GAP = 1;
-const WORKOUTS_PER_BATCH = 100;
+const DAYS_PER_BATCH = 100;
 
 const PERIOD_LABELS: Record<ShootingChartPeriod, string> = {
   weekly: "Weekly",
@@ -366,7 +366,20 @@ function ShootingBarChart({
   const maxTicks = Math.floor(plotHeight / tickUnit);
   // All bars share this whole-shot value. It is recalculated whenever the
   // active period changes and therefore gets a different Y-axis maximum.
-  const tickShotValue = Math.max(1, Math.ceil(chartMax / maxTicks));
+  let tickShotValue = Math.max(1, Math.ceil(chartMax / maxTicks));
+  // Makes and misses are rounded up independently so any remainder displays as
+  // one complete segment. Increase the shared value only when those two rounded
+  // stacks would otherwise extend beyond the plot.
+  while (
+    buckets.some(
+      (bucket) =>
+        Math.ceil(bucket.makes / tickShotValue) +
+          Math.ceil(bucket.misses / tickShotValue) >
+        maxTicks
+    )
+  ) {
+    tickShotValue += 1;
+  }
 
   return (
     <Svg width={width} height={CHART_HEIGHT}>
@@ -395,8 +408,8 @@ function ShootingBarChart({
         const baseY = plotHeight + 8;
         const ticks: React.ReactNode[] = [];
 
-        const makeTicks = Math.round(bucket.makes / tickShotValue);
-        const missTicks = Math.round(bucket.misses / tickShotValue);
+        const makeTicks = Math.ceil(bucket.makes / tickShotValue);
+        const missTicks = Math.ceil(bucket.misses / tickShotValue);
 
         for (let i = 0; i < makeTicks; i++) {
           const y = baseY - (i + 1) * tickUnit;
@@ -805,53 +818,92 @@ export function ShootingTrendLineChart({
 
 function heatColor(value: number, scheme: "light" | "dark", accent: string): string {
   if (value <= 0) return scheme === "dark" ? "#2A2A2D" : "#EBEBF0";
-  if (value < 30) return scheme === "dark" ? "#5C3D24" : "#FFD9BF";
-  if (value < 60) return scheme === "dark" ? "#B86E22" : "#FF8F3D";
+  if (value < 50) return scheme === "dark" ? "#5C3D24" : "#FFD9BF";
+  if (value < 100) return scheme === "dark" ? "#B86E22" : "#FF8F3D";
   return accent;
 }
 
 export function WorkoutActivityHeatmap({
   data,
-  totalWorkouts,
 }: {
   data: HeatmapPoint[];
-  totalWorkouts: number;
 }) {
   const { colors, scheme } = useTheme();
   const [batchIndex, setBatchIndex] = useState(0);
-  const cellSize = 10;
   const cellGap = 2;
-  const cols = 25;
-  const rows = Math.ceil(WORKOUTS_PER_BATCH / cols);
+  const rows = 7;
+  const cols = Math.ceil(DAYS_PER_BATCH / rows);
+  const labelWidth = 18;
+  const gridWidth = CHART_WIDTH - labelWidth;
+  const cellSize = (gridWidth - cellGap * (cols - 1)) / cols;
 
-  const sorted = useMemo(
-    () => [...data].sort((a, b) => a.date.localeCompare(b.date)),
-    [data]
+  const { activityStart, activityByDate, elapsedDays } = useMemo(() => {
+    const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date));
+    const firstDate = sorted[0]?.date
+      ? new Date(`${sorted[0].date}T00:00:00Z`)
+      : new Date();
+    firstDate.setUTCHours(0, 0, 0, 0);
+    const weekdayIndex = (firstDate.getUTCDay() + 6) % 7;
+    firstDate.setUTCDate(firstDate.getUTCDate() - weekdayIndex);
+
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const latestDataDate = sorted.at(-1)?.date
+      ? new Date(`${sorted.at(-1)!.date}T00:00:00Z`)
+      : today;
+    const rangeEnd = latestDataDate > today ? latestDataDate : today;
+
+    return {
+      activityStart: firstDate,
+      activityByDate: new Map(sorted.map((point) => [point.date, point.value])),
+      elapsedDays: Math.max(
+        1,
+        Math.floor((rangeEnd.getTime() - firstDate.getTime()) / 86_400_000) + 1
+      ),
+    };
+  }, [data]);
+
+  const batchCount = Math.max(1, Math.ceil(elapsedDays / DAYS_PER_BATCH));
+  const safeBatchIndex = Math.min(batchIndex, batchCount - 1);
+  const rangeStart = safeBatchIndex * DAYS_PER_BATCH;
+  const rangeEnd = rangeStart + DAYS_PER_BATCH;
+  const batchLabel = `${rangeStart}–${rangeEnd} days`;
+
+  const batchPoints = useMemo(
+    () =>
+      Array.from({ length: DAYS_PER_BATCH }, (_, index) => {
+        const date = new Date(activityStart);
+        date.setUTCDate(date.getUTCDate() + rangeStart + index);
+        const dateKey = date.toISOString().slice(0, 10);
+        return { date: dateKey, value: activityByDate.get(dateKey) ?? 0 };
+      }),
+    [activityByDate, activityStart, rangeStart]
   );
-
-  const batchCount = Math.max(1, Math.ceil(Math.max(totalWorkouts, sorted.length) / WORKOUTS_PER_BATCH));
-  const rangeStart = batchIndex * WORKOUTS_PER_BATCH;
-  const rangeEnd = rangeStart + WORKOUTS_PER_BATCH;
-  const batchLabel = `${rangeStart}–${rangeEnd} workouts`;
-
-  const batchPoints = useMemo(() => {
-    const slice = sorted.slice(rangeStart, rangeEnd);
-    const padded = Array.from({ length: WORKOUTS_PER_BATCH }, (_, index) => {
-      const point = slice[index];
-      return { date: point?.date ?? "", value: point?.value ?? 0 };
-    });
-    return padded;
-  }, [sorted, rangeStart]);
-
-  const gridWidth = cols * (cellSize + cellGap);
 
   return (
     <View style={styles.heatmapWrap}>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+      <View style={styles.heatmapCalendarRow}>
+        <View style={[styles.heatmapWeekdayLabels, { width: labelWidth }]}>
+          {["M", "T", "W", "T", "F", "S", "S"].map((label, index) => (
+            <Text
+              key={`${label}-${index}`}
+              style={[
+                styles.heatmapWeekdayLabel,
+                {
+                  color: colors.textMuted,
+                  height: cellSize,
+                  top: index * (cellSize + cellGap),
+                },
+              ]}
+            >
+              {label}
+            </Text>
+          ))}
+        </View>
         <View style={[styles.heatmapHorizontalGrid, { width: gridWidth, height: rows * (cellSize + cellGap) }]}>
           {batchPoints.map((point, index) => {
-            const row = Math.floor(index / cols);
-            const col = index % cols;
+            const row = index % rows;
+            const col = Math.floor(index / rows);
             return (
               <View
                 key={`${point.date}-${index}`}
@@ -870,16 +922,16 @@ export function WorkoutActivityHeatmap({
             );
           })}
         </View>
-      </ScrollView>
+      </View>
       <Text style={[styles.caption, { color: colors.textMuted }]}>
-        Darker orange = more training minutes per workout
+        Brighter orange = more exercises completed that day
       </Text>
       <ChartNavRow
         label={batchLabel}
         onPrev={() => setBatchIndex((v) => Math.max(0, v - 1))}
         onNext={() => setBatchIndex((v) => Math.min(batchCount - 1, v + 1))}
-        canPrev={batchIndex > 0}
-        canNext={batchIndex < batchCount - 1}
+        canPrev={safeBatchIndex > 0}
+        canNext={safeBatchIndex < batchCount - 1}
       />
     </View>
   );
@@ -913,6 +965,19 @@ const styles = StyleSheet.create({
   heatmapHorizontalGrid: {
     position: "relative",
     marginBottom: 4,
+  },
+  heatmapCalendarRow: {
+    flexDirection: "row",
+  },
+  heatmapWeekdayLabels: {
+    position: "relative",
+  },
+  heatmapWeekdayLabel: {
+    position: "absolute",
+    left: 0,
+    fontSize: 9,
+    fontWeight: "700",
+    textAlignVertical: "center",
   },
   heatmapCell: {
     borderRadius: 2,

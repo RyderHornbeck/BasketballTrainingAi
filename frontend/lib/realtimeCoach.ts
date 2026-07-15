@@ -806,6 +806,9 @@ export class RealtimeCoachSession {
     if (typeof args.client_request_id !== "string") {
       args.client_request_id = createClientRequestId(call.name);
     }
+    if (call.name === "finish_workout") {
+      args.timezone_offset_minutes = new Date().getTimezoneOffset();
+    }
 
     try {
       const { data, error } = await supabase.functions.invoke<{

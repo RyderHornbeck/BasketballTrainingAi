@@ -90,7 +90,7 @@ export function DaySelector({
         {daySlots.map((dayNumber) => {
           const day = dayByNumber.get(dayNumber);
           const generated = day != null;
-          const unlocked = generated && isDayUnlocked(day);
+          const unlocked = generated && isDayUnlocked(day, days);
           const selectable = generated && (unlocked || (day?.completed ?? false));
           const selected = dayNumber === selectedDayNumber;
           const isCurrent = dayNumber === currentDayNumber;

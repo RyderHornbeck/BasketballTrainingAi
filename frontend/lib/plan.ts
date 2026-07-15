@@ -1,5 +1,6 @@
 import {
   ExerciseLog,
+  ExerciseVideoClip,
   PlanGenerationRequest,
   WorkoutDay,
   WorkoutPlan,
@@ -48,31 +49,31 @@ export async function getCurrentWorkoutStreak(): Promise<number> {
   return streak;
 }
 
-function startOfCurrentWeek(): string {
-  const now = new Date();
-  const monday = new Date(now);
-  const daysSinceMonday = (now.getDay() + 6) % 7;
-  monday.setDate(now.getDate() - daysSinceMonday);
-  monday.setHours(0, 0, 0, 0);
-  return monday.toISOString();
-}
-
-/** Aggregates the current week's logged exercise activity, including an in-progress workout. */
+/** Aggregates logged activity from the current five-workout plan block. */
 export async function getWeeklyWorkoutStats(): Promise<WeeklyWorkoutStats> {
-  const { data: weekExerciseLogs, error } = await supabase
-    .from("exercise_logs")
-    .select("day_id, makes, attempts")
-    .gte("created_at", startOfCurrentWeek());
-
-  if (error) throw new Error(error.message);
-
-  const dayIds = [...new Set((weekExerciseLogs ?? []).map((log) => log.day_id))];
-  if (dayIds.length === 0) {
+  const activePlan = await getActivePlan();
+  if (!activePlan) {
     return { shots: 0, accuracy: null, averagePerformance: null };
   }
 
+  const planDays = await getWorkoutDays(activePlan.id);
+  const sortedDays = [...planDays].sort(
+    (a, b) => (a.day_number ?? 0) - (b.day_number ?? 0)
+  );
+  const currentDay =
+    sortedDays.find((day) => !day.completed && isDayUnlocked(day, sortedDays)) ??
+    [...sortedDays].reverse().find((day) => day.completed) ??
+    sortedDays[0];
+  if (!currentDay) {
+    return { shots: 0, accuracy: null, averagePerformance: null };
+  }
+
+  const currentBlockIndex = currentDay.block_index ?? 1;
+  const blockDays = sortedDays.filter(
+    (day) => (day.block_index ?? 1) === currentBlockIndex
+  );
   const workouts = (
-    await Promise.all(dayIds.map((dayId) => getWorkoutDayWithExercises(dayId)))
+    await Promise.all(blockDays.map((day) => getWorkoutDayWithExercises(day.id)))
   ).filter((day): day is WorkoutDayWithExercises => day != null);
   let makes = 0;
   let attempts = 0;
@@ -321,14 +322,116 @@ export async function getWorkoutDayWithExercises(
   return { ...(day as WorkoutDay), exercises: exercisesWithClip };
 }
 
+export async function getExerciseCatalog(): Promise<ExerciseVideoClip[]> {
+  const { data, error } = await supabase
+    .from("exercise_video_clips")
+    .select("*")
+    .eq("active", true)
+    .order("exercise_name", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data as ExerciseVideoClip[]) ?? [];
+}
+
+function catalogPrescription(clip: ExerciseVideoClip) {
+  const searchableText = `${clip.description ?? ""} ${clip.coaching_notes ?? ""}`;
+  const durationMatch = searchableText.match(/(\d+)\s*(?:to\s*\d+\s*)?(second|minute)/i);
+  const timed = durationMatch != null;
+  const durationMinutes = durationMatch
+    ? durationMatch[2].toLowerCase().startsWith("second")
+      ? Math.max(0.5, Number(durationMatch[1]) / 60)
+      : Math.max(0.5, Number(durationMatch[1]))
+    : null;
+  const shooting = clip.category === "shooting";
+  const finishing = clip.category === "finishing";
+  return {
+    sets: "2",
+    reps: null,
+    duration: timed ? `${durationMinutes} min` : "3 min",
+    target_makes: shooting ? 10 : finishing ? 8 : null,
+    target_attempts: shooting ? 20 : finishing ? 15 : null,
+    log_type: shooting || finishing ? "makes_attempts" : timed ? "minutes" : "checkbox",
+    set_side_labels: clip.requires_both_sides ? ["left side", "right side"] : null,
+  };
+}
+
+async function refreshWorkoutEstimate(dayId: string): Promise<void> {
+  const { data: exercises, error } = await supabase
+    .from("workout_exercises")
+    .select("sets, duration")
+    .eq("day_id", dayId);
+  if (error) throw new Error(error.message);
+  const activeMinutes = (exercises ?? []).reduce((total, exercise) => {
+    const sets = Math.max(1, Number.parseInt(exercise.sets ?? "1", 10) || 1);
+    const match = exercise.duration?.match(/(\d+(?:\.\d+)?)\s*min/i);
+    return total + (match ? Number.parseFloat(match[1]) : 3) * sets;
+  }, 0);
+  const estimate = Math.max(
+    5,
+    Math.round(activeMinutes + 5 + (exercises?.length ?? 0) * 1.5)
+  );
+  const { error: updateError } = await supabase
+    .from("workout_days")
+    .update({ estimated_minutes: estimate })
+    .eq("id", dayId);
+  if (updateError) throw new Error(updateError.message);
+}
+
+export async function addCatalogExerciseToWorkout(
+  dayId: string,
+  clip: ExerciseVideoClip
+): Promise<void> {
+  const { data: userData } = await supabase.auth.getUser();
+  const userId = userData.user?.id;
+  if (!userId) throw new Error("Not authenticated");
+  const { data: lastExercise } = await supabase
+    .from("workout_exercises")
+    .select("order_index")
+    .eq("day_id", dayId)
+    .order("order_index", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const { error } = await supabase.from("workout_exercises").insert({
+    day_id: dayId,
+    user_id: userId,
+    video_clip_id: clip.id,
+    order_index: (lastExercise?.order_index ?? 0) + 1,
+    name: clip.exercise_name,
+    category: clip.category,
+    instructions: clip.description ?? clip.coaching_notes,
+    ...catalogPrescription(clip),
+  });
+  if (error) throw new Error(error.message);
+  await refreshWorkoutEstimate(dayId);
+  emitWorkoutUpdated();
+}
+
+export async function removeExerciseFromWorkout(
+  dayId: string,
+  exerciseId: string
+): Promise<void> {
+  const { error } = await supabase.from("workout_exercises").delete().eq("id", exerciseId);
+  if (error) throw new Error(error.message);
+  await refreshWorkoutEstimate(dayId);
+  emitWorkoutUpdated();
+}
+
 /** Full adaptive plan length shown in the day selector strip. */
 export const PLAN_TOTAL_DAYS = 100;
 
 /** A day is unlocked if it isn't flagged locked, OR its scheduled date has arrived. */
-export function isDayUnlocked(day: WorkoutDay): boolean {
+export function isDayUnlocked(day: WorkoutDay, allDays?: readonly WorkoutDay[]): boolean {
+  if (allDays && day.day_number != null && day.day_number > 1) {
+    const previous = allDays.find(
+      (candidate) => candidate.day_number === (day.day_number ?? 1) - 1
+    );
+    if (previous && !previous.completed) return false;
+  }
   if (!day.locked) return true;
   if (day.scheduled_date) {
-    const today = new Date().toISOString().slice(0, 10);
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+      now.getDate()
+    ).padStart(2, "0")}`;
     if (day.scheduled_date <= today) return true;
   }
   return false;
@@ -407,9 +510,15 @@ export async function finishWorkoutDay(
   if (dayUpdateError) throw new Error(`Failed to mark day completed: ${dayUpdateError.message}`);
 
   if (day.day_number != null) {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowKey = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(
+      2,
+      "0"
+    )}-${String(tomorrow.getDate()).padStart(2, "0")}`;
     const { error: unlockError } = await supabase
       .from("workout_days")
-      .update({ locked: false })
+      .update({ locked: true, scheduled_date: tomorrowKey })
       .eq("plan_id", day.plan_id)
       .eq("day_number", day.day_number + 1);
     if (unlockError) console.error("Failed to unlock next day:", unlockError.message);

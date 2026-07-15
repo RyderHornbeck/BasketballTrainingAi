@@ -126,10 +126,7 @@ export default function AnalyticsScreen() {
 
         <Card style={styles.chartCard}>
           <Text style={[styles.chartTitle, { color: colors.text }]}>Training Activity</Text>
-          <WorkoutActivityHeatmap
-            data={summary.workoutHeatmap}
-            totalWorkouts={summary.totalWorkoutsCompleted}
-          />
+          <WorkoutActivityHeatmap data={summary.workoutHeatmap} />
         </Card>
       </ScrollView>
     </SafeAreaView>

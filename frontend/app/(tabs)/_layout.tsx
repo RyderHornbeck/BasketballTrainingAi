@@ -35,7 +35,7 @@ export default function TabsLayout() {
   const coachDay = useMemo(() => {
     if (days.length === 0) return null;
     const sorted = [...days].sort((a, b) => (a.day_number ?? 0) - (b.day_number ?? 0));
-    const nextUp = sorted.find((d) => !d.completed && isDayUnlocked(d));
+    const nextUp = sorted.find((d) => !d.completed && isDayUnlocked(d, sorted));
     if (nextUp) return nextUp;
     return [...sorted].reverse().find((d) => d.completed) ?? null;
   }, [days]);
