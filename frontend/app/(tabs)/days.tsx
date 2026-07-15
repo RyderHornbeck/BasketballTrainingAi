@@ -42,7 +42,7 @@ import {
   TargetIcon,
   TimerIcon,
 } from "phosphor-react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -182,6 +182,17 @@ export default function DaysScreen() {
     setViewMode("overview");
     setEditingWorkout(false);
   }, [selectedDayNumber]);
+
+  // Exercise additions and removals persist as they happen. Leaving this screen
+  // therefore only needs to close edit mode; there is no unsaved local draft.
+  useFocusEffect(
+    useCallback(
+      () => () => {
+        setEditingWorkout(false);
+      },
+      []
+    )
+  );
 
   useEffect(() => {
     return onWorkoutUpdated(() => {
@@ -560,7 +571,10 @@ export default function DaysScreen() {
         ) : (
           <View>
             <Pressable
-              onPress={() => setViewMode("overview")}
+              onPress={() => {
+                setEditingWorkout(false);
+                setViewMode("overview");
+              }}
               style={styles.backRow}
               hitSlop={8}
             >
@@ -568,9 +582,36 @@ export default function DaysScreen() {
               <Text style={[styles.backText, { color: colors.accent }]}>Back to day overview</Text>
             </Pressable>
 
-            <Text style={[styles.dayWorkoutLabel, { color: colors.textMuted }]}>
-              Day {dayDetail.day_number} Workout
-            </Text>
+            <View style={styles.dayWorkoutTopRow}>
+              <Text style={[styles.dayWorkoutLabel, { color: colors.textMuted }]}>
+                Day {dayDetail.day_number} Workout
+              </Text>
+              <Pressable
+                onPress={() => setEditingWorkout((value) => !value)}
+                style={({ pressed }) => [
+                  styles.editWorkoutButton,
+                  {
+                    backgroundColor: editingWorkout ? colors.accent : colors.card,
+                    borderColor: colors.accent,
+                    opacity: pressed ? 0.82 : 1,
+                  },
+                ]}
+              >
+                {editingWorkout ? (
+                  <FloppyDiskIcon size={15} color="#FFFFFF" weight="bold" />
+                ) : (
+                  <PencilSimpleIcon size={15} color={colors.accent} weight="bold" />
+                )}
+                <Text
+                  style={[
+                    styles.editWorkoutButtonText,
+                    { color: editingWorkout ? "#FFFFFF" : colors.accent },
+                  ]}
+                >
+                  {editingWorkout ? "Save changes" : "Edit"}
+                </Text>
+              </Pressable>
+            </View>
             <Card style={styles.workoutStatsCard}>
               <View style={styles.weekStat}>
                 <BasketballIcon size={26} color={colors.accent} weight="duotone" />
@@ -596,26 +637,6 @@ export default function DaysScreen() {
                 </Text>
               </View>
             </Card>
-
-            <Pressable
-              onPress={() => setEditingWorkout((value) => !value)}
-              style={[
-                styles.editWorkoutButton,
-                {
-                  backgroundColor: editingWorkout ? colors.accent : colors.card,
-                  borderColor: colors.accent,
-                },
-              ]}
-            >
-              {editingWorkout ? (
-                <FloppyDiskIcon size={19} color="#FFFFFF" weight="bold" />
-              ) : (
-                <PencilSimpleIcon size={19} color={colors.accent} weight="bold" />
-              )}
-              <Text style={{ color: editingWorkout ? "#FFFFFF" : colors.accent, fontWeight: "800" }}>
-                {editingWorkout ? "Save changes" : "Edit workout"}
-              </Text>
-            </Pressable>
 
             {editingWorkout ? (
               <View style={styles.addWorkoutActions}>
@@ -884,6 +905,11 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     paddingHorizontal: 2,
   },
+  dayWorkoutTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   dayWorkoutLabel: {
     fontSize: 12,
     fontWeight: "700",
@@ -897,14 +923,19 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   editWorkoutButton: {
-    minHeight: 48,
-    borderWidth: 1.5,
-    borderRadius: 16,
-    marginBottom: 10,
+    minHeight: 32,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    marginBottom: 8,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
+    gap: 5,
+  },
+  editWorkoutButtonText: {
+    fontSize: 12,
+    fontWeight: "800",
   },
   addWorkoutActions: {
     flexDirection: "row",
