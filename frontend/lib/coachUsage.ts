@@ -2,18 +2,10 @@
 
 import { supabase } from "@/lib/supabase";
 
-export const COACH_WORKOUT_BUDGET_USD = 0.5;
-export const COACH_DAILY_BUDGET_USD = 1;
+export const COACH_DAILY_BUDGET_USD = 0.75;
 
 export const COACH_LIMIT_MESSAGES = {
-  workoutBudgetExhausted:
-    "Coach time used up for this workout. Your assistant refills on your next workout.",
-  dailyBudgetExhausted:
-    "Daily coach limit reached. Your assistant refills tomorrow.",
-  dailyResponseLimit:
-    "Daily coach response limit reached. Your assistant refills tomorrow.",
-  workoutResponseLimit:
-    "Coach response limit reached for this workout. Open your next workout for more.",
+  dailyBudgetExhausted: "Today's 75¢ coach credit is used up. It refills tomorrow.",
 } as const;
 
 export function isCoachLimitMessage(msg: string): boolean {
@@ -21,55 +13,72 @@ export function isCoachLimitMessage(msg: string): boolean {
   return values.includes(msg as (typeof values)[number]) || msg.toLowerCase().includes("limit reached");
 }
 
-export interface CoachWorkoutBudget {
+export interface CoachDailyBudget {
   spentUsd: number;
   budgetUsd: number;
   remainingUsd: number;
   exhausted: boolean;
 }
 
-export function isWorkoutBudgetExhausted(
+export function isDailyBudgetExhausted(
   spentUsd: number,
-  budgetUsd = COACH_WORKOUT_BUDGET_USD
+  budgetUsd = COACH_DAILY_BUDGET_USD
 ): boolean {
   return spentUsd >= budgetUsd;
 }
 
-export function remainingWorkoutBudgetUsd(
+export function remainingDailyBudgetUsd(
   spentUsd: number,
-  budgetUsd = COACH_WORKOUT_BUDGET_USD
+  budgetUsd = COACH_DAILY_BUDGET_USD
 ): number {
   return Math.max(0, budgetUsd - spentUsd);
 }
 
-export function coachWorkoutBudgetFromUsage(
+export function coachDailyBudgetFromUsage(
   spentUsd: number,
-  budgetUsd = COACH_WORKOUT_BUDGET_USD
-): CoachWorkoutBudget {
-  const remainingUsd = remainingWorkoutBudgetUsd(spentUsd, budgetUsd);
+  budgetUsd = COACH_DAILY_BUDGET_USD
+): CoachDailyBudget {
+  const remainingUsd = remainingDailyBudgetUsd(spentUsd, budgetUsd);
   return {
     spentUsd,
     budgetUsd,
     remainingUsd,
-    exhausted: isWorkoutBudgetExhausted(spentUsd, budgetUsd),
+    exhausted: isDailyBudgetExhausted(spentUsd, budgetUsd),
   };
 }
 
-export async function fetchWorkoutCoachBudget(dayId: string): Promise<CoachWorkoutBudget> {
-  const budgetUsd = COACH_WORKOUT_BUDGET_USD;
+export async function fetchDailyCoachBudget(): Promise<CoachDailyBudget> {
+  const budgetUsd = COACH_DAILY_BUDGET_USD;
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError || !userData.user) throw new Error("Not authenticated");
 
-  const { data, error } = await supabase
-    .from("coach_usage_logs")
-    .select("estimated_cost_usd")
-    .eq("user_id", userData.user.id)
-    .eq("day_id", dayId);
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("timezone")
+    .eq("id", userData.user.id)
+    .maybeSingle();
 
+  if (profileError) throw new Error(profileError.message);
+  const timezone = profile?.timezone ?? "UTC";
+  const dateFormatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = dateFormatter.formatToParts(new Date());
+  const localDate = `${parts.find((part) => part.type === "year")?.value}-${parts.find(
+    (part) => part.type === "month"
+  )?.value}-${parts.find((part) => part.type === "day")?.value}`;
+  const { data, error } = await supabase
+    .from("coach_daily_usage")
+    .select("spent_usd")
+    .eq("user_id", userData.user.id)
+    .eq("usage_date", localDate)
+    .maybeSingle();
   if (error) throw new Error(error.message);
 
-  const spentUsd = (data ?? []).reduce((sum, row) => sum + Number(row.estimated_cost_usd ?? 0), 0);
-  return coachWorkoutBudgetFromUsage(spentUsd, budgetUsd);
+  return coachDailyBudgetFromUsage(Number(data?.spent_usd ?? 0), budgetUsd);
 }
 
 export function formatCoachBudgetCents(usd: number): string {
@@ -205,9 +214,11 @@ export async function logCoachUsage(params: {
   dayId: string | null;
   sessionKey: string;
   totals: CoachUsageTotals;
-}): Promise<void> {
+}): Promise<{ spentUsd: number; budgetUsd: number; remainingUsd: number } | null> {
   try {
-    await supabase.functions.invoke("coach-usage", {
+    const { data, error } = await supabase.functions.invoke<{
+      daily_usage?: { spent_usd: number; budget_usd: number; remaining_usd: number };
+    }>("coach-usage", {
       body: {
         day_id: params.dayId,
         session_key: params.sessionKey,
@@ -222,8 +233,18 @@ export async function logCoachUsage(params: {
         output_audio_tokens: params.totals.outputAudioTokens,
       },
     });
+    if (error) throw error;
+    const daily = data?.daily_usage;
+    return daily
+      ? {
+          spentUsd: Number(daily.spent_usd),
+          budgetUsd: Number(daily.budget_usd),
+          remainingUsd: Number(daily.remaining_usd),
+        }
+      : null;
   } catch (err) {
     console.warn("Failed to log coach usage:", err);
+    return null;
   }
 }
 

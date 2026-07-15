@@ -1,7 +1,14 @@
 import { supabase } from "@/lib/supabase";
 import { Profile } from "@/types/database";
+import * as AppleAuthentication from "expo-apple-authentication";
+import * as Crypto from "expo-crypto";
+import * as Linking from "expo-linking";
+import * as WebBrowser from "expo-web-browser";
 import { Session, User } from "@supabase/supabase-js";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { Platform } from "react-native";
+
+WebBrowser.maybeCompleteAuthSession();
 
 interface AuthContextValue {
   session: Session | null;
@@ -9,16 +16,24 @@ interface AuthContextValue {
   profile: Profile | null;
   loading: boolean;
   startupError: string | null;
-  signUp: (email: string, password: string) => Promise<void>;
-  signIn: (email: string, password: string) => Promise<void>;
+  signInWithGoogle: () => Promise<User | null>;
+  signInWithApple: () => Promise<User | null>;
   signOut: () => Promise<void>;
-  resetPassword: (email: string) => Promise<void>;
   refreshProfile: () => Promise<void>;
   retryStartup: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
-const STARTUP_TIMEOUT_MS = 10_000;
+const STARTUP_TIMEOUT_MS = 3_000;
+const STARTUP_RETRY_ATTEMPTS = 2;
+
+function getDeviceTimezone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
 
 function withTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -39,6 +54,26 @@ function withTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T> {
   });
 }
 
+function formatAppleName(
+  name: AppleAuthentication.AppleAuthenticationFullName | null
+): string | null {
+  if (!name) return null;
+  const fullName = [name.givenName, name.middleName, name.familyName]
+    .filter((part): part is string => Boolean(part?.trim()))
+    .join(" ")
+    .trim();
+  return fullName || null;
+}
+
+function isCanceledAuth(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: string }).code === "ERR_REQUEST_CANCELED"
+  );
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -57,6 +92,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return data as Profile | null;
   }, []);
 
+  const syncTimezone = useCallback(async (userId: string, currentTimezone: string | null) => {
+    const deviceTimezone = getDeviceTimezone();
+    if (!deviceTimezone || deviceTimezone === currentTimezone) return currentTimezone;
+    const { error } = await supabase
+      .from("profiles")
+      .update({ timezone: deviceTimezone })
+      .eq("id", userId);
+    if (error) {
+      console.warn("Unable to sync device timezone:", error.message);
+      return currentTimezone;
+    }
+    return deviceTimezone;
+  }, []);
+
+  const ensureProfile = useCallback(async (user: User, appleName?: string | null) => {
+    const metadataName =
+      typeof user.user_metadata?.full_name === "string"
+        ? user.user_metadata.full_name.trim()
+        : typeof user.user_metadata?.name === "string"
+          ? user.user_metadata.name.trim()
+          : null;
+    const fullName = appleName?.trim() || metadataName || null;
+    const profileValues: Record<string, string> = { id: user.id };
+    if (user.email) profileValues.email = user.email;
+    if (fullName) profileValues.full_name = fullName;
+
+    const { error } = await supabase
+      .from("profiles")
+      .upsert(profileValues, { onConflict: "id" });
+    if (error) throw error;
+  }, []);
+
   useEffect(() => {
     let mounted = true;
 
@@ -64,18 +131,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(true);
       setStartupError(null);
       try {
-        const { data, error } = await withTimeout(supabase.auth.getSession(), "Session loading");
-        if (error) throw error;
-        if (!mounted) return;
+        let lastError: unknown;
 
-        setSession(data.session);
-        if (data.session?.user) {
-          const nextProfile = await loadProfile(data.session.user.id);
-          if (!mounted) return;
-          setProfile(nextProfile);
-        } else {
-          setProfile(null);
+        for (let attempt = 1; attempt <= STARTUP_RETRY_ATTEMPTS; attempt += 1) {
+          try {
+            const { data, error } = await withTimeout(
+              supabase.auth.getSession(),
+              "Session loading"
+            );
+            if (error) throw error;
+            if (!mounted) return;
+
+            let nextProfile = data.session?.user
+              ? await loadProfile(data.session.user.id)
+              : null;
+            if (!mounted) return;
+            if (data.session?.user && nextProfile) {
+              const timezone = await syncTimezone(data.session.user.id, nextProfile.timezone);
+              if (!mounted) return;
+              nextProfile = { ...nextProfile, timezone };
+            }
+
+            setSession(data.session);
+            setProfile(nextProfile);
+            return;
+          } catch (error) {
+            lastError = error;
+            const timedOut = error instanceof Error && error.message.includes("timed out");
+            if (!timedOut || attempt === STARTUP_RETRY_ATTEMPTS) break;
+            console.warn("App startup timed out; retrying immediately.");
+          }
         }
+
+        throw lastError;
       } catch (error) {
         if (!mounted) return;
         console.warn("App startup failed:", error);
@@ -90,16 +178,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     void init();
 
-    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+    const syncSessionProfile = async (newSession: Session | null) => {
       if (!mounted) return;
-      setSession(newSession);
       if (newSession?.user) {
         try {
-          const nextProfile = await loadProfile(newSession.user.id);
-          if (mounted) {
-            setProfile(nextProfile);
-            setStartupError(null);
+          let nextProfile = await loadProfile(newSession.user.id);
+          if (!mounted) return;
+          if (nextProfile) {
+            const timezone = await syncTimezone(newSession.user.id, nextProfile.timezone);
+            if (!mounted) return;
+            nextProfile = { ...nextProfile, timezone };
           }
+          setProfile(nextProfile);
+          setStartupError(null);
         } catch (error) {
           if (mounted) {
             setProfile(null);
@@ -112,13 +203,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setProfile(null);
         setStartupError(null);
       }
+    };
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      if (!mounted) return;
+      setSession(newSession);
+      // Defer Supabase queries until after the auth callback releases its lock.
+      setTimeout(() => {
+        void syncSessionProfile(newSession);
+      }, 0);
     });
 
     return () => {
       mounted = false;
       listener.subscription.unsubscribe();
     };
-  }, [loadProfile, startupAttempt]);
+  }, [loadProfile, startupAttempt, syncTimezone]);
 
   const retryStartup = useCallback(() => {
     setStartupError(null);
@@ -126,29 +226,100 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setStartupAttempt((attempt) => attempt + 1);
   }, []);
 
-  const signUp = useCallback(async (email: string, password: string) => {
-    const { error } = await supabase.auth.signUp({ email, password });
+  const signInWithGoogle = useCallback(async (): Promise<User | null> => {
+    const redirectTo = Linking.createURL("auth/callback");
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo,
+        skipBrowserRedirect: true,
+      },
+    });
     if (error) throw error;
-  }, []);
+    if (!data.url) throw new Error("Google sign-in could not be started.");
 
-  const signIn = useCallback(async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-  }, []);
+    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+    if (result.type === "cancel" || result.type === "dismiss") return null;
+    if (result.type !== "success" || !result.url) {
+      throw new Error("Google sign-in did not complete. Please try again.");
+    }
+
+    const callbackUrl = new URL(result.url);
+    const callbackError = callbackUrl.searchParams.get("error");
+    if (callbackError === "access_denied") return null;
+    if (callbackError) {
+      throw new Error(
+        callbackUrl.searchParams.get("error_description") || "Google sign-in was not completed."
+      );
+    }
+    const code = callbackUrl.searchParams.get("code");
+    if (!code) throw new Error("Google did not return a valid authorization code.");
+
+    const { data: sessionData, error: exchangeError } =
+      await supabase.auth.exchangeCodeForSession(code);
+    if (exchangeError) throw exchangeError;
+    if (!sessionData.user) throw new Error("Google sign-in did not return a user.");
+    await ensureProfile(sessionData.user);
+    return sessionData.user;
+  }, [ensureProfile]);
+
+  const signInWithApple = useCallback(async (): Promise<User | null> => {
+    if (Platform.OS !== "ios") {
+      throw new Error("Apple sign-in is available on iPhone and iPad only.");
+    }
+    if (!(await AppleAuthentication.isAvailableAsync())) {
+      throw new Error("Apple sign-in is not available on this device.");
+    }
+
+    try {
+      const nonceBytes = await Crypto.getRandomBytesAsync(32);
+      const rawNonce = Array.from(nonceBytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+      const hashedNonce = await Crypto.digestStringAsync(
+        Crypto.CryptoDigestAlgorithm.SHA256,
+        rawNonce
+      );
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+        nonce: hashedNonce,
+      });
+      if (!credential.identityToken) {
+        throw new Error("Apple did not return an identity token.");
+      }
+
+      const { data, error } = await supabase.auth.signInWithIdToken({
+        provider: "apple",
+        token: credential.identityToken,
+        nonce: rawNonce,
+      });
+      if (error) throw error;
+      if (!data.user) throw new Error("Apple sign-in did not return a user.");
+
+      // Apple may return the person's name only on the first authorization.
+      await ensureProfile(data.user, formatAppleName(credential.fullName));
+      return data.user;
+    } catch (error) {
+      if (isCanceledAuth(error)) return null;
+      throw error;
+    }
+  }, [ensureProfile]);
 
   const signOut = useCallback(async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
   }, []);
 
-  const resetPassword = useCallback(async (email: string) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
-    if (error) throw error;
-  }, []);
-
   const refreshProfile = useCallback(async () => {
-    if (session?.user) await loadProfile(session.user.id);
-  }, [session, loadProfile]);
+    const { data, error } = await supabase.auth.getUser();
+    if (error) throw error;
+    if (!data.user) {
+      setProfile(null);
+      return;
+    }
+    setProfile(await loadProfile(data.user.id));
+  }, [loadProfile]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -157,10 +328,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       profile,
       loading,
       startupError,
-      signUp,
-      signIn,
+      signInWithGoogle,
+      signInWithApple,
       signOut,
-      resetPassword,
       refreshProfile,
       retryStartup,
     }),
@@ -169,10 +339,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       profile,
       loading,
       startupError,
-      signUp,
-      signIn,
+      signInWithGoogle,
+      signInWithApple,
       signOut,
-      resetPassword,
       refreshProfile,
       retryStartup,
     ]

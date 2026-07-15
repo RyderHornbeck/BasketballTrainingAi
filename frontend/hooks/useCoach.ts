@@ -2,10 +2,10 @@
 
 import {
   type CoachUsageTotals,
-  type CoachWorkoutBudget,
   COACH_LIMIT_MESSAGES,
-  coachWorkoutBudgetFromUsage,
-  fetchWorkoutCoachBudget,
+  type CoachDailyBudget,
+  coachDailyBudgetFromUsage,
+  fetchDailyCoachBudget,
   isCoachLimitMessage,
 } from "@/lib/coachUsage";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
@@ -28,7 +28,7 @@ export interface UseCoachResult {
   elapsedSeconds: number;
   timerDurationSeconds: number | null;
   lastUsage: CoachUsageTotals | null;
-  workoutBudget: CoachWorkoutBudget | null;
+  dailyBudget: CoachDailyBudget | null;
   startSession: () => Promise<void>;
   stopSession: () => Promise<void>;
   toggleMute: () => void;
@@ -51,7 +51,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const overlayOpenRef = useRef(true);
   const mountedRef = useRef(true);
   const limitBlockedRef = useRef(false);
-  const workoutSpentBaselineRef = useRef(0);
+  const dailySpentBaselineRef = useRef(0);
   const startSessionRef = useRef<() => Promise<void>>(async () => {});
   const teardownRef = useRef<Promise<void>>(Promise.resolve());
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -62,7 +62,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [timerDurationSeconds, setTimerDurationSeconds] = useState<number | null>(null);
   const [lastUsage, setLastUsage] = useState<CoachUsageTotals | null>(null);
-  const [workoutBudget, setWorkoutBudget] = useState<CoachWorkoutBudget | null>(null);
+  const [dailyBudget, setDailyBudget] = useState<CoachDailyBudget | null>(null);
   const [muted, setMuted] = useState(false);
   const timerAudio = useTimerAudioCues();
 
@@ -72,22 +72,21 @@ export function useCoach(dayId: string | null): UseCoachResult {
     setError(msg);
   }, []);
 
-  const refreshWorkoutBudget = useCallback(async () => {
-    if (!dayId) return null;
+  const refreshDailyBudget = useCallback(async () => {
     try {
-      const budget = await fetchWorkoutCoachBudget(dayId);
+      const budget = await fetchDailyCoachBudget();
       if (!mountedRef.current) return budget;
-      workoutSpentBaselineRef.current = budget.spentUsd;
+      dailySpentBaselineRef.current = budget.spentUsd;
       if (budget.exhausted) {
-        markLimitReached(COACH_LIMIT_MESSAGES.workoutBudgetExhausted);
+        markLimitReached(COACH_LIMIT_MESSAGES.dailyBudgetExhausted);
       }
-      setWorkoutBudget(budget);
+      setDailyBudget(budget);
       return budget;
     } catch (err) {
       console.warn("Failed to load coach budget:", err);
       return null;
     }
-  }, [dayId, markLimitReached]);
+  }, [markLimitReached]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -202,7 +201,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
     }
     if (connectingRef.current) return;
 
-    const budget = (await refreshWorkoutBudget()) ?? workoutBudget;
+    const budget = (await refreshDailyBudget()) ?? dailyBudget;
     if (budget?.exhausted || limitBlockedRef.current) {
       return;
     }
@@ -242,21 +241,20 @@ export function useCoach(dayId: string | null): UseCoachResult {
           onUsage: (totals) => {
             if (!mountedRef.current) return;
             setLastUsage(totals);
-            const spentUsd = workoutSpentBaselineRef.current + totals.estimatedCostUsd;
-            setWorkoutBudget(coachWorkoutBudgetFromUsage(spentUsd));
+            const spentUsd = dailySpentBaselineRef.current + totals.estimatedCostUsd;
+            setDailyBudget(coachDailyBudgetFromUsage(spentUsd));
           },
           onBudgetUpdate: (spentUsd, budgetUsd) => {
             if (!mountedRef.current) return;
-            const nextBudget = coachWorkoutBudgetFromUsage(spentUsd, budgetUsd);
-            setWorkoutBudget(nextBudget);
+            const nextBudget = coachDailyBudgetFromUsage(spentUsd, budgetUsd);
+            setDailyBudget(nextBudget);
             if (nextBudget.exhausted) {
-              markLimitReached(COACH_LIMIT_MESSAGES.workoutBudgetExhausted);
+              markLimitReached(COACH_LIMIT_MESSAGES.dailyBudgetExhausted);
             }
           },
           onSessionEnded: (reason) => {
             if (!mountedRef.current || !overlayOpenRef.current || limitBlockedRef.current) return;
             if (
-              reason === "workout_budget" ||
               reason === "daily_budget" ||
               reason === "connect_failed" ||
               reason === "response_limit"
@@ -276,8 +274,8 @@ export function useCoach(dayId: string | null): UseCoachResult {
           },
         },
         {
-          workoutSpentUsd: budget?.spentUsd ?? workoutSpentBaselineRef.current,
-          workoutBudgetUsd: budget?.budgetUsd,
+          dailySpentUsd: budget?.spentUsd ?? dailySpentBaselineRef.current,
+          dailyBudgetUsd: budget?.budgetUsd,
         }
       );
       if (muted) session.mute();
@@ -288,12 +286,12 @@ export function useCoach(dayId: string | null): UseCoachResult {
     }
   }, [
     dayId,
-    workoutBudget,
+    dailyBudget,
     ensureSession,
     getTimerState,
     applyTimerAction,
     muted,
-    refreshWorkoutBudget,
+    refreshDailyBudget,
     markLimitReached,
   ]);
 
@@ -382,7 +380,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
     elapsedSeconds,
     timerDurationSeconds,
     lastUsage,
-    workoutBudget,
+    dailyBudget,
     startSession,
     stopSession,
     toggleMute,

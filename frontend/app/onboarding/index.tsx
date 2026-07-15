@@ -1,6 +1,5 @@
 import { OnboardingStep } from "@/components/OnboardingStep";
 import { SkillSlider } from "@/components/SkillSlider";
-import { TextInput } from "@/components/TextInput";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { loadOnboardingDraft, saveOnboardingDraft } from "@/lib/onboardingDraft";
@@ -8,7 +7,41 @@ import { requestPlanGeneration, submitOnboardingAnswers } from "@/lib/plan";
 import { OnboardingFormData } from "@/types/plan";
 import { Text } from "@/components/Text";
 import { router } from "expo-router";
-import { CheckCircleIcon } from "phosphor-react-native";
+import {
+  BasketballIcon,
+  BarbellIcon,
+  AlarmIcon,
+  ArrowsOutIcon,
+  ArrowsOutLineHorizontalIcon,
+  CalendarCheckIcon,
+  CheckCircleIcon,
+  ClockIcon,
+  CrownIcon,
+  FootprintsIcon,
+  HandIcon,
+  HeartIcon,
+  HourglassLowIcon,
+  LightningIcon,
+  MedalIcon,
+  NumberFiveIcon,
+  NumberFourIcon,
+  NumberOneIcon,
+  NumberSevenIcon,
+  NumberSixIcon,
+  NumberThreeIcon,
+  NumberTwoIcon,
+  PersonSimpleRunIcon,
+  PersonSimpleWalkIcon,
+  QuestionIcon,
+  ShieldIcon,
+  StarIcon,
+  TargetIcon,
+  TimerIcon,
+  TrendUpIcon,
+  TrophyIcon,
+  UserCircleIcon,
+  WatchIcon,
+} from "phosphor-react-native";
 import React, { useEffect, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 
@@ -34,12 +67,20 @@ const WEAKNESS_OPTIONS = [
   "Conditioning",
   "Strength",
 ];
-const EQUIPMENT_OPTIONS = ["Basketball", "Cones", "Resistance bands", "Weights", "None"];
+const STRENGTH_OPTIONS = [
+  "Shooting",
+  "Ball handling",
+  "Finishing",
+  "Defense",
+  "Footwork",
+  "Conditioning",
+  "Strength",
+];
 const INTENSITY_OPTIONS = ["Light", "Medium", "Hard", "Extremely hard"];
 const DAYS_PER_WEEK_OPTIONS = [1, 2, 3, 4, 5, 6, 7];
 const MINUTES_OPTIONS = [15, 30, 45, 60, 75, 90];
 
-const TOTAL_STEPS = 8;
+const TOTAL_STEPS = 9;
 
 const initialForm: OnboardingFormData = {
   overall_skill_level: "",
@@ -84,7 +125,9 @@ export default function OnboardingScreen() {
   useEffect(() => {
     if (user) return;
     loadOnboardingDraft().then((draft) => {
-      if (draft) setForm(draft);
+      if (draft) {
+        setForm({ ...draft, has_court_access: true, equipment: ["Basketball"] });
+      }
     });
   }, [user]);
 
@@ -92,32 +135,21 @@ export default function OnboardingScreen() {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
-  const toggleEquipment = (option: string) => {
+  const toggleTextSelection = (field: "main_goal" | "strengths" | "weaknesses", option: string) => {
     setForm((prev) => {
-      if (option === "None") {
-        return { ...prev, equipment: prev.equipment.includes("None") ? [] : ["None"] };
-      }
-      const withoutNone = prev.equipment.filter((e) => e !== "None");
-      const has = withoutNone.includes(option);
-      return {
-        ...prev,
-        equipment: has ? withoutNone.filter((e) => e !== option) : [...withoutNone, option],
-      };
-    });
-  };
-
-  const toggleWeakness = (option: string) => {
-    setForm((prev) => {
-      const selected = prev.weaknesses
+      const selected = prev[field]
         .split(",")
         .map((value) => value.trim())
         .filter(Boolean);
       const next = selected.includes(option)
         ? selected.filter((value) => value !== option)
         : [...selected, option];
-      return { ...prev, weaknesses: next.join(", ") };
+      return { ...prev, [field]: next.join(", ") };
     });
   };
+
+  const selectedTextValues = (value: string) =>
+    value.split(",").map((item) => item.trim()).filter(Boolean);
 
   const canGoNext = (): boolean => {
     switch (step) {
@@ -134,8 +166,10 @@ export default function OnboardingScreen() {
       case 6:
         return true;
       case 7:
-        return form.equipment.length > 0;
+        return true;
       case 8:
+        return true;
+      case 9:
         return !!form.preferred_intensity;
       default:
         return true;
@@ -179,7 +213,11 @@ export default function OnboardingScreen() {
   };
 
   const handleBack = () => {
-    if (step > 1) setStep(step - 1);
+    if (step > 1) {
+      setStep(step - 1);
+      return;
+    }
+    router.replace("/welcome");
   };
 
   return (
@@ -189,7 +227,7 @@ export default function OnboardingScreen() {
       step={step}
       totalSteps={TOTAL_STEPS}
       onNext={handleNext}
-      onBack={step > 1 ? handleBack : undefined}
+      onBack={handleBack}
       nextDisabled={!canGoNext()}
       nextLoading={submitting}
       nextLabel={step === TOTAL_STEPS ? (user ? "Build My Plan" : "Create Account") : "Continue"}
@@ -198,7 +236,11 @@ export default function OnboardingScreen() {
 
       {step === 1 && (
         <ChipGroup
-          options={SKILL_LEVELS.map((l) => ({ label: capitalize(l), value: l }))}
+          options={SKILL_LEVELS.map((level) => ({
+            label: capitalize(level),
+            value: level,
+            icon: skillLevelIcon(level),
+          }))}
           selected={[form.overall_skill_level]}
           onToggle={(v) => update("overall_skill_level", v)}
         />
@@ -206,16 +248,19 @@ export default function OnboardingScreen() {
 
       {step === 2 && (
         <ChipGroup
-          options={GOALS.map((g) => ({ label: g, value: g }))}
-          selected={[form.main_goal]}
-          onToggle={(v) => update("main_goal", v)}
-          vertical
+          options={GOALS.map((goal) => ({ label: goal, value: goal, icon: goalIcon(goal) }))}
+          selected={selectedTextValues(form.main_goal)}
+          onToggle={(value) => toggleTextSelection("main_goal", value)}
         />
       )}
 
       {step === 3 && (
         <ChipGroup
-          options={POSITIONS.map((p) => ({ label: p, value: p }))}
+          options={POSITIONS.map((position) => ({
+            label: position,
+            value: position,
+            icon: positionIcon(position),
+          }))}
           selected={[form.position]}
           onToggle={(v) => update("position", v)}
         />
@@ -223,36 +268,41 @@ export default function OnboardingScreen() {
 
       {step === 4 && (
         <View>
-          <TextInput
-            label="Your strengths"
-            placeholder="e.g. Quick first step, good court vision"
-            value={form.strengths}
-            onChangeText={(v) => update("strengths", v)}
-            multiline
-            style={styles.multiline}
-          />
-          <Text style={[styles.groupLabel, styles.weaknessLabel, { color: colors.text }]}>
-            What do you want to improve?
-          </Text>
           <Text style={[styles.helperText, { color: colors.textSecondary }]}>
-            Select every area that needs extra work.
+            Choose every area you feel confident in.
           </Text>
           <ChipGroup
-            options={WEAKNESS_OPTIONS.map((weakness) => ({
-              label: weakness,
-              value: weakness,
+            options={STRENGTH_OPTIONS.map((strength) => ({
+              label: strength,
+              value: strength,
+              icon: skillIcon(strength),
             }))}
-            selected={form.weaknesses
-              .split(",")
-              .map((value) => value.trim())
-              .filter(Boolean)}
-            onToggle={toggleWeakness}
+            selected={selectedTextValues(form.strengths)}
+            onToggle={(value) => toggleTextSelection("strengths", value)}
             multi
           />
         </View>
       )}
 
       {step === 5 && (
+        <View>
+          <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+            Choose every area that needs extra work.
+          </Text>
+          <ChipGroup
+            options={WEAKNESS_OPTIONS.map((weakness) => ({
+              label: weakness,
+              value: weakness,
+              icon: skillIcon(weakness),
+            }))}
+            selected={selectedTextValues(form.weaknesses)}
+            onToggle={(value) => toggleTextSelection("weaknesses", value)}
+            multi
+          />
+        </View>
+      )}
+
+      {step === 6 && (
         <View>
           <SkillSlider label="Shooting" value={Number(form.shooting_level)} onChange={(v) => update("shooting_level", String(v))} />
           <SkillSlider label="Ball Handling" value={Number(form.ball_handling_level)} onChange={(v) => update("ball_handling_level", String(v))} />
@@ -264,54 +314,37 @@ export default function OnboardingScreen() {
         </View>
       )}
 
-      {step === 6 && (
+      {step === 7 && (
         <View>
           <Text style={[styles.groupLabel, { color: colors.text }]}>Days per week you can train</Text>
           <ChipGroup
-            options={DAYS_PER_WEEK_OPTIONS.map((d) => ({ label: String(d), value: String(d) }))}
+            options={DAYS_PER_WEEK_OPTIONS.map((day) => dayOption(day))}
             selected={[String(form.days_per_week)]}
             onToggle={(v) => update("days_per_week", Number(v))}
-          />
-          <Text style={[styles.groupLabel, { color: colors.text, marginTop: 24 }]}>Minutes per workout</Text>
-          <ChipGroup
-            options={MINUTES_OPTIONS.map((m) => ({ label: `${m} min`, value: String(m) }))}
-            selected={[String(form.minutes_per_workout)]}
-            onToggle={(v) => update("minutes_per_workout", Number(v))}
-          />
-        </View>
-      )}
-
-      {step === 7 && (
-        <View>
-          <Text style={[styles.groupLabel, { color: colors.text }]}>Do you have access to a hoop/court?</Text>
-          <ChipGroup
-            options={[{ label: "Yes", value: "yes" }, { label: "No", value: "no" }]}
-            selected={[form.has_court_access ? "yes" : "no"]}
-            onToggle={(v) => update("has_court_access", v === "yes")}
-          />
-          <Text style={[styles.groupLabel, { color: colors.text, marginTop: 24 }]}>Equipment available</Text>
-          <ChipGroup
-            options={EQUIPMENT_OPTIONS.map((e) => ({ label: e, value: e }))}
-            selected={form.equipment}
-            onToggle={toggleEquipment}
-            multi
           />
         </View>
       )}
 
       {step === 8 && (
         <View>
-          <TextInput
-            label="Injuries or limitations (optional)"
-            placeholder="e.g. Recovering from ankle sprain"
-            value={form.injuries_limitations}
-            onChangeText={(v) => update("injuries_limitations", v)}
-            multiline
-            style={styles.multiline}
-          />
-          <Text style={[styles.groupLabel, { color: colors.text, marginTop: 24 }]}>Preferred workout intensity</Text>
+          <Text style={[styles.groupLabel, { color: colors.text }]}>Minutes per workout</Text>
           <ChipGroup
-            options={INTENSITY_OPTIONS.map((i) => ({ label: i, value: i }))}
+            options={MINUTES_OPTIONS.map((minutes) => minuteOption(minutes))}
+            selected={[String(form.minutes_per_workout)]}
+            onToggle={(v) => update("minutes_per_workout", Number(v))}
+          />
+        </View>
+      )}
+
+      {step === 9 && (
+        <View>
+          <Text style={[styles.groupLabel, { color: colors.text }]}>Preferred workout intensity</Text>
+          <ChipGroup
+            options={INTENSITY_OPTIONS.map((intensity) => ({
+              label: intensity,
+              value: intensity,
+              icon: intensityIcon(intensity),
+            }))}
             selected={[form.preferred_intensity]}
             onToggle={(v) => update("preferred_intensity", v)}
           />
@@ -323,13 +356,14 @@ export default function OnboardingScreen() {
 
 const STEP_TITLES = [
   { title: "What's your skill level?", subtitle: "Be honest -- this shapes your entire plan." },
-  { title: "What's your main goal?", subtitle: "We'll build your plan around this." },
+  { title: "What's your main goal?", subtitle: "Choose every goal that matters to you." },
   { title: "What position do you play?", subtitle: "Helps us pick position-relevant drills." },
-  { title: "Strengths & weaknesses", subtitle: "Tell us what's working and what needs work." },
+  { title: "Your strengths", subtitle: "Choose every area you feel confident in." },
+  { title: "Your weaknesses", subtitle: "Choose every area you want to improve." },
   { title: "Rate your skills", subtitle: "A quick self-assessment, 0 to 10." },
-  { title: "Your training schedule", subtitle: "How often and how long can you train?" },
-  { title: "Court access & equipment", subtitle: "We'll adapt drills to what you have." },
-  { title: "Injuries & intensity", subtitle: "Last step -- let's dial in the difficulty." },
+  { title: "Training days", subtitle: "How often can you train each week?" },
+  { title: "Workout length", subtitle: "How much time do you have per workout?" },
+  { title: "Workout intensity", subtitle: "Last step -- choose how challenging you want it to feel." },
 ];
 
 function capitalize(s: string) {
@@ -339,6 +373,7 @@ function capitalize(s: string) {
 interface ChipOption {
   label: string;
   value: string;
+  icon?: React.ReactElement;
 }
 
 function ChipGroup({
@@ -346,27 +381,26 @@ function ChipGroup({
   selected,
   onToggle,
   multi,
-  vertical,
 }: {
   options: ChipOption[];
   selected: string[];
   onToggle: (value: string) => void;
   multi?: boolean;
-  vertical?: boolean;
 }) {
   const { colors, scheme } = useTheme();
 
   return (
-    <View style={[styles.chipGroup, vertical && styles.chipGroupVertical]}>
+    <View style={styles.chipGroup}>
       {options.map((opt) => {
         const active = selected.includes(opt.value);
+        const icon = opt.icon ?? <StarIcon />;
         return (
           <Pressable
             key={opt.value}
             onPress={() => onToggle(opt.value)}
             style={({ pressed }) => [
               styles.chip,
-              vertical && styles.chipVertical,
+              styles.chipVertical,
               {
                 backgroundColor: active ? colors.accent : colors.cardAlt,
                 borderColor: active ? colors.accent : colors.border,
@@ -381,6 +415,12 @@ function ChipGroup({
               },
             ]}
           >
+            <View style={styles.chipLabel}>
+              {React.cloneElement(icon, {
+                size: 21,
+                color: active ? "#FFFFFF" : colors.accent,
+                weight: "duotone",
+              })}
             <Text
               style={[
                 styles.chipText,
@@ -389,7 +429,8 @@ function ChipGroup({
             >
               {opt.label}
             </Text>
-            {vertical && active ? (
+            </View>
+            {active ? (
               <CheckCircleIcon size={20} color="#FFFFFF" weight="fill" />
             ) : null}
           </Pressable>
@@ -397,6 +438,112 @@ function ChipGroup({
       })}
     </View>
   );
+}
+
+function skillLevelIcon(level: string) {
+  switch (level) {
+    case "beginner":
+      return <StarIcon />;
+    case "intermediate":
+      return <TrendUpIcon />;
+    case "advanced":
+      return <MedalIcon />;
+    default:
+      return <CrownIcon />;
+  }
+}
+
+function goalIcon(goal: string) {
+  switch (goal) {
+    case "Make the team":
+      return <TrophyIcon />;
+    case "Improve shooting":
+      return <TargetIcon />;
+    case "Improve handles":
+      return <HandIcon />;
+    case "Improve finishing":
+      return <StarIcon />;
+    case "Improve defense":
+      return <ShieldIcon />;
+    case "Get faster":
+      return <PersonSimpleRunIcon />;
+    case "Improve conditioning":
+      return <HeartIcon />;
+    case "Become stronger":
+      return <BarbellIcon />;
+    default:
+      return <MedalIcon />;
+  }
+}
+
+function skillIcon(skill: string) {
+  switch (skill) {
+    case "Shooting":
+      return <TargetIcon />;
+    case "Ball handling":
+      return <BasketballIcon />;
+    case "Finishing":
+      return <StarIcon />;
+    case "Defense":
+      return <ShieldIcon />;
+    case "Footwork":
+      return <FootprintsIcon />;
+    case "Conditioning":
+      return <LightningIcon />;
+    default:
+      return <BarbellIcon />;
+  }
+}
+
+function positionIcon(position: string) {
+  switch (position) {
+    case "Guard":
+      return <UserCircleIcon />;
+    case "Wing":
+      return <ArrowsOutLineHorizontalIcon />;
+    case "Big":
+      return <ArrowsOutIcon />;
+    default:
+      return <QuestionIcon />;
+  }
+}
+
+function dayOption(day: number): ChipOption {
+  const icons = [
+    <NumberOneIcon />,
+    <NumberTwoIcon />,
+    <NumberThreeIcon />,
+    <NumberFourIcon />,
+    <NumberFiveIcon />,
+    <NumberSixIcon />,
+    <NumberSevenIcon />,
+  ];
+  return { label: String(day), value: String(day), icon: icons[day - 1] };
+}
+
+function minuteOption(minutes: number): ChipOption {
+  const icons = [
+    <AlarmIcon />,
+    <ClockIcon />,
+    <TimerIcon />,
+    <WatchIcon />,
+    <HourglassLowIcon />,
+    <CalendarCheckIcon />,
+  ];
+  return { label: `${minutes} min`, value: String(minutes), icon: icons[MINUTES_OPTIONS.indexOf(minutes)] };
+}
+
+function intensityIcon(intensity: string) {
+  switch (intensity) {
+    case "Light":
+      return <PersonSimpleWalkIcon />;
+    case "Medium":
+      return <TrophyIcon />;
+    case "Hard":
+      return <LightningIcon />;
+    default:
+      return <CrownIcon />;
+  }
 }
 
 const styles = StyleSheet.create({
@@ -420,11 +567,6 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   chipGroup: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-  },
-  chipGroupVertical: {
     flexDirection: "column",
     gap: 12,
   },
@@ -441,12 +583,14 @@ const styles = StyleSheet.create({
     width: "100%",
     justifyContent: "space-between",
   },
+  chipLabel: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    flex: 1,
+  },
   chipText: {
     fontWeight: "600",
     fontSize: 15,
-  },
-  multiline: {
-    minHeight: 90,
-    textAlignVertical: "top",
   },
 });

@@ -28,6 +28,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     autoRefreshToken: !isSSR,
     persistSession: true,
     detectSessionInUrl: false,
+    flowType: "pkce",
   },
 });
 

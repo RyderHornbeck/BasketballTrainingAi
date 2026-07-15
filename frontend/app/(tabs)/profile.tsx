@@ -13,7 +13,6 @@ import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, View } fro
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
-  { label: "System", value: "system" },
   { label: "Light", value: "light" },
   { label: "Dark", value: "dark" },
 ];

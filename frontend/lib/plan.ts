@@ -29,20 +29,21 @@ export interface WeeklyWorkoutStats {
 export async function getCurrentWorkoutStreak(): Promise<number> {
   const { data: logs, error } = await supabase
     .from("workout_day_logs")
-    .select("completed_at")
+    .select("completed_at, activity_date")
     .order("completed_at", { ascending: false });
 
   if (error) throw new Error(error.message);
   const completedDays = new Set(
-    (logs ?? []).map((log) => new Date(log.completed_at).toISOString().slice(0, 10))
+    (logs ?? []).map((log) =>
+      log.activity_date ?? new Date(log.completed_at).toISOString().slice(0, 10)
+    )
   );
   const cursor = new Date();
-  if (!completedDays.has(cursor.toISOString().slice(0, 10))) {
-    cursor.setDate(cursor.getDate() - 1);
-  }
+  cursor.setHours(12, 0, 0, 0);
+  if (!completedDays.has(`${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`)) cursor.setDate(cursor.getDate() - 1);
 
   let streak = 0;
-  while (completedDays.has(cursor.toISOString().slice(0, 10))) {
+  while (completedDays.has(`${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`)) {
     streak += 1;
     cursor.setDate(cursor.getDate() - 1);
   }
@@ -115,28 +116,31 @@ export async function submitOnboardingAnswers(
   userId: string,
   form: OnboardingFormData
 ): Promise<void> {
-  const { error: insertError } = await supabase.from("onboarding_answers").insert({
-    user_id: userId,
-    overall_skill_level: form.overall_skill_level,
-    main_goal: form.main_goal,
-    position: form.position,
-    strengths: form.strengths,
-    weaknesses: form.weaknesses,
-    shooting_level: form.shooting_level,
-    ball_handling_level: form.ball_handling_level,
-    finishing_level: form.finishing_level,
-    defense_level: form.defense_level,
-    basketball_iq_level: form.basketball_iq_level,
-    conditioning_level: form.conditioning_level,
-    athleticism_level: form.athleticism_level,
-    strength_level: form.strength_level,
-    days_per_week: form.days_per_week,
-    minutes_per_workout: form.minutes_per_workout,
-    has_court_access: form.has_court_access,
-    equipment: form.equipment,
-    injuries_limitations: form.injuries_limitations,
-    preferred_intensity: form.preferred_intensity,
-  });
+  const { error: insertError } = await supabase.from("onboarding_answers").upsert(
+    {
+      user_id: userId,
+      overall_skill_level: form.overall_skill_level,
+      main_goal: form.main_goal,
+      position: form.position,
+      strengths: form.strengths,
+      weaknesses: form.weaknesses,
+      shooting_level: form.shooting_level,
+      ball_handling_level: form.ball_handling_level,
+      finishing_level: form.finishing_level,
+      defense_level: form.defense_level,
+      basketball_iq_level: form.basketball_iq_level,
+      conditioning_level: form.conditioning_level,
+      athleticism_level: form.athleticism_level,
+      strength_level: form.strength_level,
+      days_per_week: form.days_per_week,
+      minutes_per_workout: form.minutes_per_workout,
+      has_court_access: true,
+      equipment: ["Basketball"],
+      injuries_limitations: "",
+      preferred_intensity: form.preferred_intensity,
+    },
+    { onConflict: "user_id" }
+  );
   if (insertError) throw new Error(insertError.message);
 
   const { error: profileError } = await supabase
@@ -418,7 +422,7 @@ export async function removeExerciseFromWorkout(
 /** Full adaptive plan length shown in the day selector strip. */
 export const PLAN_TOTAL_DAYS = 100;
 
-/** A day is unlocked if it isn't flagged locked, OR its scheduled date has arrived. */
+/** Workouts unlock sequentially: complete Day N to open Day N+1 immediately. */
 export function isDayUnlocked(day: WorkoutDay, allDays?: readonly WorkoutDay[]): boolean {
   if (allDays && day.day_number != null && day.day_number > 1) {
     const previous = allDays.find(
@@ -426,15 +430,7 @@ export function isDayUnlocked(day: WorkoutDay, allDays?: readonly WorkoutDay[]):
     );
     if (previous && !previous.completed) return false;
   }
-  if (!day.locked) return true;
-  if (day.scheduled_date) {
-    const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
-      now.getDate()
-    ).padStart(2, "0")}`;
-    if (day.scheduled_date <= today) return true;
-  }
-  return false;
+  return !day.locked;
 }
 
 export interface ExerciseLogInput {
@@ -475,7 +471,9 @@ export async function saveExerciseLog(
 
 /**
  * Persists all exercise logs for a day, creates a workout_day_log, marks the
- * day completed, and unlocks the next day in the plan (if any).
+ * day completed, and unlocks the next day in the plan (if any). A workout can
+ * be finished before every drill is complete; in that case it is recorded as
+ * partial and only its logged drill data affects analytics.
  */
 export async function finishWorkoutDay(
   day: WorkoutDay,
@@ -492,6 +490,10 @@ export async function finishWorkoutDay(
   }
 
   const totalMinutes = logs.reduce((sum, l) => sum + (l.minutes_completed ?? 0), 0);
+  const completionKind =
+    logs.length > 0 && logs.every((log) => log.completed)
+      ? "full"
+      : "partial";
 
   const { error: dayLogError } = await supabase.from("workout_day_logs").upsert(
     {
@@ -505,20 +507,19 @@ export async function finishWorkoutDay(
 
   const { error: dayUpdateError } = await supabase
     .from("workout_days")
-    .update({ completed: true, locked: false })
+    .update({
+      completed: true,
+      locked: false,
+      completion_kind: completionKind,
+      finalized_at: new Date().toISOString(),
+    })
     .eq("id", day.id);
   if (dayUpdateError) throw new Error(`Failed to mark day completed: ${dayUpdateError.message}`);
 
   if (day.day_number != null) {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowKey = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(
-      2,
-      "0"
-    )}-${String(tomorrow.getDate()).padStart(2, "0")}`;
     const { error: unlockError } = await supabase
       .from("workout_days")
-      .update({ locked: true, scheduled_date: tomorrowKey })
+      .update({ locked: false, scheduled_date: null })
       .eq("plan_id", day.plan_id)
       .eq("day_number", day.day_number + 1);
     if (unlockError) console.error("Failed to unlock next day:", unlockError.message);

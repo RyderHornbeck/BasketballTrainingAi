@@ -18,6 +18,7 @@
     },
     "ios": {
       "supportsTablet": true,
+      "usesAppleSignIn": true,
       "bundleIdentifier": "com.hoopplan.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
@@ -73,7 +74,8 @@
       ],
       "expo-config-plugin-incall-manager",
       "expo-audio",
-      "expo-asset"
+      "expo-asset",
+      "expo-apple-authentication"
     ],
     "extra": {
       "eas": {

@@ -1,6 +1,8 @@
 import { useTheme } from "@/hooks/useTheme";
+import { LinearGradient } from "expo-linear-gradient";
+import { ArrowLeftIcon } from "phosphor-react-native";
 import React, { useEffect } from "react";
-import { ScrollView, StyleSheet, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   useAnimatedStyle,
@@ -49,14 +51,23 @@ export function OnboardingStep({
   }));
 
   return (
-    <View style={styles.container}>
+    <LinearGradient
+      colors={["rgba(247,179,121,0.30)", colors.background, colors.background]}
+      locations={[0, 0.42, 1]}
+      style={styles.container}
+    >
       <View style={[styles.progressWrapper, { paddingTop: insets.top + 18 }]}>
-        <View style={styles.progressHeaderRow}>
-          <Text style={[styles.stepLabel, { color: colors.textMuted }]}>
-            Step {step} of {totalSteps}
-          </Text>
-        </View>
-        <View style={[styles.progressTrack, { backgroundColor: colors.progressTrack }]}>
+        <View style={styles.progressRow}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+            hitSlop={10}
+            onPress={onBack}
+            style={({ pressed }) => [styles.backArrow, { opacity: pressed ? 0.65 : 1 }]}
+          >
+            <ArrowLeftIcon size={21} color={colors.text} weight="bold" />
+          </Pressable>
+          <View style={[styles.progressTrack, { backgroundColor: colors.progressTrack }]}>
           <Animated.View
             style={[
               styles.progressFill,
@@ -67,6 +78,7 @@ export function OnboardingStep({
               },
             ]}
           />
+          </View>
         </View>
       </View>
 
@@ -90,9 +102,6 @@ export function OnboardingStep({
           { borderTopColor: colors.border, backgroundColor: "transparent" },
         ]}
       >
-        {onBack ? (
-          <Button title="Back" variant="outline" onPress={onBack} style={styles.backButton} />
-        ) : null}
         <Button
           title={nextLabel}
           onPress={onNext}
@@ -101,7 +110,7 @@ export function OnboardingStep({
           style={styles.nextButton}
         />
       </View>
-    </View>
+    </LinearGradient>
   );
 }
 
@@ -113,16 +122,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 4,
   },
-  progressHeaderRow: {
-    marginBottom: 10,
+  progressRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
   },
-  stepLabel: {
-    fontSize: 12,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
+  backArrow: {
+    width: 24,
+    height: 24,
+    alignItems: "center",
+    justifyContent: "center",
   },
   progressTrack: {
+    flex: 1,
     height: 8,
     borderRadius: 999,
     overflow: "hidden",
@@ -156,15 +168,10 @@ const styles = StyleSheet.create({
     marginTop: 24,
   },
   footer: {
-    flexDirection: "row",
-    gap: 12,
     padding: 20,
     borderTopWidth: 1,
   },
-  backButton: {
-    flex: 1,
-  },
   nextButton: {
-    flex: 2,
+    width: "100%",
   },
 });

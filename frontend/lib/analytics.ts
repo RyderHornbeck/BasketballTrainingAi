@@ -85,6 +85,20 @@ interface CompletedShotTotals {
   attempts: number;
 }
 
+function workoutActivityTimestamp(log: { activity_date?: string | null; completed_at: string }): string {
+  return log.activity_date ? `${log.activity_date}T12:00:00` : log.completed_at;
+}
+
+function localDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+    date.getDate()
+  ).padStart(2, "0")}`;
+}
+
+function workoutActivityDate(log: { activity_date?: string | null; completed_at: string }): string {
+  return log.activity_date ?? localDateKey(new Date(log.completed_at));
+}
+
 /**
  * Match the Shot Map's source of truth: only completed per-set results count.
  * Legacy logs without set metadata retain their recorded aggregate result.
@@ -148,8 +162,12 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
   const workoutActivityDates = new Map<string, string>(
     logs
       .filter((log: any) => log.day_id && log.completed_at)
-      .map((log: any) => [log.day_id as string, log.completed_at as string])
+      .map((log: any) => [log.day_id as string, workoutActivityTimestamp(log)])
   );
+  const analyticsExerciseLogs = (exerciseLogs ?? []).map((log: any) => ({
+    ...log,
+    activity_at: workoutActivityDates.get(log.day_id as string) ?? log.created_at,
+  }));
   const workoutDayIds = (allDays ?? []).map((day: any) => day.id).filter(Boolean);
   const { data: workoutExercises } = workoutDayIds.length
     ? await supabase
@@ -164,7 +182,7 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
   const completedDays = allDays?.filter((d: any) => d.completed).length ?? 0;
   const completionRate = totalDays > 0 ? Math.round((completedDays / totalDays) * 100) : 0;
 
-  const currentStreak = computeStreak(logs.map((l: any) => l.completed_at));
+  const currentStreak = computeStreak(logs.map((l: any) => workoutActivityDate(l)));
 
   let totalMakes = 0;
   let totalAttempts = 0;
@@ -231,9 +249,9 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
   }
 
   const weeklyProgress = computeWeeklyProgress(logs);
-  const weeklyShooting = computeWeeklyShooting(exerciseLogs ?? []);
-  const weeklyPctTrend = computeWeeklyPctTrend(exerciseLogs ?? []);
-  const shootingLogs = (exerciseLogs ?? []).flatMap((log) => {
+  const weeklyShooting = computeWeeklyShooting(analyticsExerciseLogs);
+  const weeklyPctTrend = computeWeeklyPctTrend(analyticsExerciseLogs);
+  const shootingLogs = analyticsExerciseLogs.flatMap((log) => {
     const totals = completedShotTotals(log);
     return totals
       ? [
@@ -260,12 +278,12 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
       : (onboarding as { created_at?: string } | null)?.created_at ?? null;
   const completionTrend = computeCompletionTrend(allDays ?? [], logs);
   const workoutHeatmap = computeWorkoutHeatmap(logs, workoutExercises ?? []);
-  const shotMapLogs = (exerciseLogs ?? []) as ShotMapLogEntry[];
+  const shotMapLogs = analyticsExerciseLogs as ShotMapLogEntry[];
 
   const recentWorkouts = logs.slice(0, 8).map((l: any) => ({
     id: l.id,
     title: l.workout_days?.title ?? "Workout",
-    completedAt: l.completed_at,
+    completedAt: workoutActivityTimestamp(l),
     totalMinutes: l.total_minutes,
   }));
   type NestedExerciseLog = { completed?: boolean } | { completed?: boolean }[] | null;
@@ -287,13 +305,13 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     return {
       completedExercises,
       totalExercises: exercises.length,
-      timestamp: new Date(workout.completed_at).getTime(),
+      timestamp: new Date(workoutActivityTimestamp(workout)).getTime(),
     };
   });
 
   const skillProfile = computeSkillProfile(
     (onboarding as OnboardingAnswers | null) ?? null,
-    exerciseLogs ?? [],
+    analyticsExerciseLogs,
     disciplineWorkouts
   );
 
@@ -323,16 +341,14 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
 
 function computeStreak(completedDates: string[]): number {
   if (completedDates.length === 0) return 0;
-  const days = new Set(completedDates.map((d) => new Date(d).toISOString().slice(0, 10)));
+  const days = new Set(completedDates);
   let streak = 0;
   const cursor = new Date();
+  cursor.setHours(12, 0, 0, 0);
 
-  const todayStr = cursor.toISOString().slice(0, 10);
-  if (!days.has(todayStr)) {
-    cursor.setDate(cursor.getDate() - 1);
-  }
+  if (!days.has(localDateKey(cursor))) cursor.setDate(cursor.getDate() - 1);
 
-  while (days.has(cursor.toISOString().slice(0, 10))) {
+  while (days.has(localDateKey(cursor))) {
     streak += 1;
     cursor.setDate(cursor.getDate() - 1);
   }
@@ -351,7 +367,7 @@ function computeWeeklyProgress(logs: any[]): { label: string; minutes: number }[
   }
 
   for (const log of logs) {
-    const date = new Date(log.completed_at);
+    const date = new Date(workoutActivityTimestamp(log));
     for (let i = buckets.length - 1; i >= 0; i--) {
       if (date >= buckets[i].start) {
         buckets[i].minutes += log.total_minutes ?? 0;
@@ -408,7 +424,7 @@ function computeWeeklyPctTrend(
     const shotTotals = completedShotTotals(log);
     if (!shotTotals) continue;
     const category = log.workout_exercises?.category ?? "";
-    const date = new Date(log.created_at);
+    const date = new Date(log.activity_at ?? log.created_at);
     for (const bucket of buckets) {
       if (date >= bucket.start && date <= bucket.end) {
         const { makes, attempts } = shotTotals;
@@ -473,7 +489,7 @@ function computeWeeklyShooting(
   for (const log of exerciseLogs) {
     const shotTotals = completedShotTotals(log);
     if (!shotTotals) continue;
-    const date = new Date(log.created_at);
+    const date = new Date(log.activity_at ?? log.created_at);
     for (const bucket of buckets) {
       if (date >= bucket.start && date <= bucket.end) {
         bucket.makes += shotTotals.makes;
@@ -492,7 +508,7 @@ function computeWeeklyShooting(
 }
 
 function toDateKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  return localDateKey(date);
 }
 
 function computeCompletionTrend(
@@ -504,7 +520,7 @@ function computeCompletionTrend(
 
   const completedByWeek = new Map<string, number>();
   for (const log of dayLogs) {
-    const date = new Date(log.completed_at);
+    const date = new Date(workoutActivityTimestamp(log));
     const weekStart = new Date(date);
     weekStart.setDate(date.getDate() - date.getDay());
     weekStart.setHours(0, 0, 0, 0);
@@ -541,7 +557,7 @@ function computeWorkoutHeatmap(dayLogs: any[], workoutExercises: any[]): Heatmap
 
   const byDate = new Map<string, { completed: number; total: number }>();
   for (const log of dayLogs) {
-    const key = toDateKey(new Date(log.completed_at));
+    const key = toDateKey(new Date(workoutActivityTimestamp(log)));
     const exercises = exercisesByDay.get(String(log.day_id)) ?? [];
     const completed = exercises.filter((exercise) => {
       const nestedLog = exercise.exercise_logs;

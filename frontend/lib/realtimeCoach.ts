@@ -4,12 +4,10 @@ import { emitWorkoutUpdated } from "@/lib/coachEvents";
 import {
   appendConversationSummary,
   COACH_LIMIT_MESSAGES,
-  COACH_WORKOUT_BUDGET_USD,
   createClientRequestId,
   createSessionKey,
   createUsageTracker,
   isCoachLimitMessage,
-  isWorkoutBudgetExhausted,
   logCoachUsage,
 } from "@/lib/coachUsage";
 import { supabase } from "@/lib/supabase";
@@ -31,15 +29,6 @@ async function edgeFunctionErrorMessage(error: {
         detail?: string;
         code?: string;
       };
-      if (body.code === "daily_response_limit") {
-        return COACH_LIMIT_MESSAGES.dailyResponseLimit;
-      }
-      if (body.code === "workout_response_limit") {
-        return COACH_LIMIT_MESSAGES.workoutResponseLimit;
-      }
-      if (body.code === "workout_budget_exhausted") {
-        return COACH_LIMIT_MESSAGES.workoutBudgetExhausted;
-      }
       if (body.code === "daily_budget_exhausted") {
         return COACH_LIMIT_MESSAGES.dailyBudgetExhausted;
       }
@@ -158,8 +147,8 @@ export class RealtimeCoachSession {
   private contextRefreshPromise: Promise<void> | null = null;
   private responseDoneQueue: Promise<void> = Promise.resolve();
   private connectionGeneration = 0;
-  private workoutSpentBaseline = 0;
-  private workoutBudgetUsd = COACH_WORKOUT_BUDGET_USD;
+  private dailySpentBaseline = 0;
+  private dailyBudgetUsd = 0.75;
   private usageTracker: ReturnType<typeof createUsageTracker> | null = null;
   private handledToolCalls = new Set<string>();
   private loggedUsageSessionKeys = new Set<string>();
@@ -173,7 +162,7 @@ export class RealtimeCoachSession {
     timer: TimerState,
     conversationSummary: string,
     callbacks: RealtimeCoachCallbacks,
-    options?: { workoutSpentUsd?: number; workoutBudgetUsd?: number }
+    options?: { dailySpentUsd?: number; dailyBudgetUsd?: number }
   ): Promise<void> {
     if (this.disconnectPromise) await this.disconnectPromise;
     if (this.connecting) return;
@@ -183,12 +172,12 @@ export class RealtimeCoachSession {
     const generation = ++this.connectionGeneration;
     this.connecting = true;
     this.callbacks = callbacks;
-    this.workoutSpentBaseline = options?.workoutSpentUsd ?? 0;
-    this.workoutBudgetUsd = options?.workoutBudgetUsd ?? COACH_WORKOUT_BUDGET_USD;
+    this.dailySpentBaseline = options?.dailySpentUsd ?? 0;
+    this.dailyBudgetUsd = options?.dailyBudgetUsd ?? 0.75;
 
-    if (isWorkoutBudgetExhausted(this.workoutSpentBaseline, this.workoutBudgetUsd)) {
+    if (this.dailySpentBaseline >= this.dailyBudgetUsd) {
       this.connecting = false;
-      this.callbacks.onError(COACH_LIMIT_MESSAGES.workoutBudgetExhausted);
+      this.callbacks.onError(COACH_LIMIT_MESSAGES.dailyBudgetExhausted);
       this.callbacks.onStatus("budget_exhausted");
       return;
     }
@@ -323,19 +312,16 @@ export class RealtimeCoachSession {
       if (generation !== this.connectionGeneration || !this.active) return;
       if (error) throw new Error(await edgeFunctionErrorMessage(error));
       if (!data?.sdp) {
-        if (data?.code === "workout_budget_exhausted") {
-          throw new Error(COACH_LIMIT_MESSAGES.workoutBudgetExhausted);
-        }
         if (data?.code === "daily_budget_exhausted") {
           throw new Error(COACH_LIMIT_MESSAGES.dailyBudgetExhausted);
         }
         throw new Error(data?.error ?? "No SDP answer from coach-realtime.");
       }
 
-      if (data.workout_usage) {
-        this.workoutSpentBaseline = data.workout_usage.spent_usd;
-        this.workoutBudgetUsd = data.workout_usage.budget_usd;
-        this.callbacks?.onBudgetUpdate?.(this.workoutSpentBaseline, this.workoutBudgetUsd);
+      if (data.daily_usage) {
+        this.dailySpentBaseline = data.daily_usage.spent_usd;
+        this.dailyBudgetUsd = data.daily_usage.budget_usd;
+        this.callbacks?.onBudgetUpdate?.(this.dailySpentBaseline, this.dailyBudgetUsd);
       }
 
       this.model = data.model ?? this.model;
@@ -508,7 +494,7 @@ export class RealtimeCoachSession {
       this.sessionKey = null;
       this.usageTracker = null;
       this.handledToolCalls.clear();
-      if (reason === "workout_budget" || reason === "daily_budget") {
+      if (reason === "daily_budget") {
         callbacks?.onStatus("budget_exhausted");
       } else if (reason !== "connect_failed" && reason !== "connection_lost") {
         callbacks?.onStatus("idle");
@@ -747,11 +733,25 @@ export class RealtimeCoachSession {
     };
     this.callbacks?.onUsage?.(totals);
 
-    const totalSpentUsd = this.workoutSpentBaseline + totals.estimatedCostUsd;
-    this.callbacks?.onBudgetUpdate?.(totalSpentUsd, this.workoutBudgetUsd);
-    if (isWorkoutBudgetExhausted(totalSpentUsd, this.workoutBudgetUsd)) {
-      this.callbacks?.onError(COACH_LIMIT_MESSAGES.workoutBudgetExhausted);
-      void this.disconnect("workout_budget");
+    const totalSpentUsd = this.dailySpentBaseline + totals.estimatedCostUsd;
+    this.callbacks?.onBudgetUpdate?.(totalSpentUsd, this.dailyBudgetUsd);
+    const sessionKey = this.sessionKey;
+    if (sessionKey) {
+      const daily = await logCoachUsage({ dayId: this.dayId, sessionKey, totals });
+      if (daily) {
+        this.dailySpentBaseline = daily.spentUsd;
+        this.dailyBudgetUsd = daily.budgetUsd;
+        this.callbacks?.onBudgetUpdate?.(daily.spentUsd, daily.budgetUsd);
+        if (daily.remainingUsd <= 0) {
+          this.callbacks?.onError(COACH_LIMIT_MESSAGES.dailyBudgetExhausted);
+          void this.disconnect("daily_budget");
+          return;
+        }
+      }
+    }
+    if (totalSpentUsd >= this.dailyBudgetUsd) {
+      this.callbacks?.onError(COACH_LIMIT_MESSAGES.dailyBudgetExhausted);
+      void this.disconnect("daily_budget");
       return;
     }
 

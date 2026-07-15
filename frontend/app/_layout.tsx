@@ -35,7 +35,7 @@ function RootNavigator() {
   useEffect(() => {
     if (!profile || syncedFromProfile.current) return;
     syncedFromProfile.current = true;
-    if (profile.theme === "light" || profile.theme === "dark" || profile.theme === "system") {
+    if (profile.theme === "light" || profile.theme === "dark") {
       setMode(profile.theme as ThemeMode);
     }
   }, [profile, setMode]);
@@ -55,7 +55,6 @@ function RootNavigator() {
           <Stack.Screen name="welcome" />
           <Stack.Screen name="auth/login" />
           <Stack.Screen name="auth/signup" />
-          <Stack.Screen name="auth/forgot-password" />
           <Stack.Screen name="onboarding/index" />
           <Stack.Screen name="generating" />
           <Stack.Screen name="drill-timer" />

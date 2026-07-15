@@ -1,8 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { useColorScheme } from "react-native";
 
-export type ThemeMode = "system" | "light" | "dark";
+export type ThemeMode = "light" | "dark";
 export type ResolvedScheme = "light" | "dark";
 
 export interface ThemeColors {
@@ -77,12 +76,11 @@ const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 const STORAGE_KEY = "hoopplan-theme-mode";
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const systemScheme = useColorScheme();
-  const [mode, setModeState] = useState<ThemeMode>("system");
+  const [mode, setModeState] = useState<ThemeMode>("light");
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY).then((stored) => {
-      if (stored === "light" || stored === "dark" || stored === "system") {
+      if (stored === "light" || stored === "dark") {
         setModeState(stored);
       }
     });
@@ -93,8 +91,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     AsyncStorage.setItem(STORAGE_KEY, next).catch(() => {});
   };
 
-  const scheme: ResolvedScheme =
-    mode === "system" ? (systemScheme === "dark" ? "dark" : "light") : mode;
+  const scheme: ResolvedScheme = mode;
   const colors = scheme === "dark" ? darkColors : lightColors;
 
   const value = useMemo<ThemeContextValue>(

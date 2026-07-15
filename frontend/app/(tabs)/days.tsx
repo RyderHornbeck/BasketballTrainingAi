@@ -83,7 +83,6 @@ export default function DaysScreen() {
   const finishingRef = useRef(false);
   const [retryingBlock, setRetryingBlock] = useState(false);
   const [editingWorkout, setEditingWorkout] = useState(false);
-  const [clockNow, setClockNow] = useState(() => Date.now());
 
   const defaultDayNumber = useMemo(() => {
     if (days.length === 0) return null;
@@ -100,20 +99,6 @@ export default function DaysScreen() {
       setSelectedDayNumber(defaultDayNumber);
     }
   }, [defaultDayNumber, selectedDayNumber]);
-
-  useEffect(() => {
-    if (selectedDayNumber == null) return;
-    const selected = days.find((day) => day.day_number === selectedDayNumber);
-    const isCurrent = selectedDayNumber === defaultDayNumber;
-    const next = days.find(
-      (day) =>
-        !day.completed &&
-        (day.day_number ?? 0) > selectedDayNumber
-    );
-    if (isCurrent && selected?.completed && next?.day_number != null) {
-      setSelectedDayNumber(next.day_number);
-    }
-  }, [days, selectedDayNumber, defaultDayNumber]);
 
   const selectedDay = days.find((d) => d.day_number === selectedDayNumber) ?? null;
   const selectedDayId = selectedDay?.id ?? null;
@@ -149,6 +134,10 @@ export default function DaysScreen() {
     loadDetail();
   }, [loadDetail]);
 
+  useEffect(() => {
+    if (selectedDayId) void loadDetail(false);
+  }, [days, selectedDayId, loadDetail]);
+
   const loadWeeklyStats = useCallback(async () => {
     try {
       setWeeklyStats(await getWeeklyWorkoutStats());
@@ -174,23 +163,45 @@ export default function DaysScreen() {
   }, [loadCurrentStreak]);
 
   useEffect(() => {
-    const interval = setInterval(() => setClockNow(Date.now()), 30_000);
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
     setViewMode("overview");
     setEditingWorkout(false);
   }, [selectedDayNumber]);
 
-  // Exercise additions and removals persist as they happen. Leaving this screen
-  // therefore only needs to close edit mode; there is no unsaved local draft.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const moveToCurrentWorkoutAfterMidnight = () => {
+      const now = new Date();
+      const nextMidnight = new Date(now);
+      nextMidnight.setHours(24, 0, 15, 0);
+      timer = setTimeout(() => {
+        setSelectedDayNumber(null);
+        setViewMode("overview");
+        void refreshPlan();
+        moveToCurrentWorkoutAfterMidnight();
+      }, Math.max(1_000, nextMidnight.getTime() - now.getTime()));
+    };
+
+    moveToCurrentWorkoutAfterMidnight();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [refreshPlan]);
+
   useFocusEffect(
     useCallback(
-      () => () => {
-        setEditingWorkout(false);
+      () => {
+        void refreshPlan();
+        void loadDetail(false);
+        void loadWeeklyStats();
+        void loadCurrentStreak();
+        return () => {
+          // Exercise additions and removals persist immediately; leaving only
+          // closes edit mode and never discards a draft.
+          setEditingWorkout(false);
+        };
       },
-      []
+      [refreshPlan, loadDetail, loadWeeklyStats, loadCurrentStreak]
     )
   );
 
@@ -233,6 +244,51 @@ export default function DaysScreen() {
     },
     [refreshPlan, loadDetail]
   );
+
+  const confirmFinishWorkout = useCallback(() => {
+    if (!dayDetail || dayDetail.completed || finishingRef.current) return;
+
+    const logs = dayDetail.exercises.map(
+      (exercise) =>
+        logsRef.current.get(exercise.id) ?? {
+          exercise_id: exercise.id,
+          completed: false,
+        }
+    );
+    const incompleteCount = logs.filter((log) => !log.completed).length;
+    const message =
+      incompleteCount > 0
+        ? `${incompleteCount} ${incompleteCount === 1 ? "drill is" : "drills are"} unfinished. Finish anyway? Completed drill data will be saved, and the next workout will unlock.`
+        : "Finish this workout and unlock the next one?";
+
+    Alert.alert("Finish workout?", message, [
+      { text: "Keep working", style: "cancel" },
+      {
+        text: "Finish workout",
+        onPress: () => {
+          void (async () => {
+            finishingRef.current = true;
+            try {
+              await finishWorkoutDay(dayDetail, logs);
+              await Promise.all([
+                refreshPlan(),
+                loadDetail(false),
+                loadWeeklyStats(),
+                loadCurrentStreak(),
+              ]);
+            } catch (err) {
+              Alert.alert(
+                "Could not finish workout",
+                err instanceof Error ? err.message : "Please try again."
+              );
+            } finally {
+              finishingRef.current = false;
+            }
+          })();
+        },
+      },
+    ]);
+  }, [dayDetail, loadCurrentStreak, loadDetail, loadWeeklyStats, refreshPlan]);
 
   const handleLogChange = useCallback(
     async (log: ExerciseLogInput) => {
@@ -358,18 +414,12 @@ export default function DaysScreen() {
     selectedDay?.completed === true ||
     (defaultDayNumber != null && (selectedDayNumber ?? 0) < defaultDayNumber);
   const lockedDayMessage = useMemo(() => {
-    if (!selectedDay?.scheduled_date || isDayUnlocked(selectedDay, days)) {
+    if (!selectedDay || isDayUnlocked(selectedDay, days)) {
       return "Complete today’s workout to unlock.";
     }
-    const unlockAt = new Date(`${selectedDay.scheduled_date}T00:00:00`).getTime();
-    const remainingMinutes = Math.max(0, Math.ceil((unlockAt - clockNow) / 60_000));
-    const hours = Math.floor(remainingMinutes / 60);
-    const minutes = remainingMinutes % 60;
     const previousDay = Math.max(1, (selectedDay.day_number ?? 1) - 1);
-    return `Workout from Day ${previousDay} completed. Day ${
-      selectedDay.day_number ?? ""
-    } unlocks in ${hours} hours and ${minutes} minutes.`;
-  }, [clockNow, days, selectedDay]);
+    return `Complete the previous workout to unlock Day ${selectedDay.day_number ?? ""}.`;
+  }, [days, selectedDay]);
 
   if (planLoading) {
     return (
@@ -563,7 +613,7 @@ export default function DaysScreen() {
               <View style={[styles.completedBanner, { backgroundColor: colors.accentMuted }]}>
                 <CheckCircleIcon size={16} color={colors.accent} weight="fill" />
                 <Text style={[styles.completedBannerText, { color: colors.accent }]}>
-                  Workout completed
+                  Workout complete
                 </Text>
               </View>
             )}
@@ -699,13 +749,28 @@ export default function DaysScreen() {
                 />
               ))}
 
-            {dayDetail.completed && (
+            {dayDetail.completed ? (
               <View style={[styles.completedBanner, { backgroundColor: colors.accentMuted }]}>
                 <CheckCircleIcon size={16} color={colors.accent} weight="fill" />
                 <Text style={[styles.completedBannerText, { color: colors.accent }]}>
-                  Workout completed
+                  Workout complete
                 </Text>
               </View>
+            ) : (
+              <Pressable
+                onPress={confirmFinishWorkout}
+                style={({ pressed }) => [
+                  styles.finishWorkoutButton,
+                  {
+                    backgroundColor: colors.accent,
+                    opacity: pressed ? 0.86 : 1,
+                    shadowColor: colors.accent,
+                  },
+                ]}
+              >
+                <CheckCircleIcon size={20} color="#FFFFFF" weight="fill" />
+                <Text style={styles.finishWorkoutButtonText}>Finish workout</Text>
+              </Pressable>
             )}
           </View>
         )}
@@ -995,5 +1060,24 @@ const styles = StyleSheet.create({
   completedBannerText: {
     fontWeight: "800",
     fontSize: 15,
+  },
+  finishWorkoutButton: {
+    marginTop: 18,
+    minHeight: 54,
+    borderRadius: 16,
+    paddingHorizontal: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.24,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  finishWorkoutButtonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "800",
   },
 });

@@ -51,10 +51,12 @@ export type GenerationType = "initial" | "extend";
 export interface Profile {
   id: string;
   email: string | null;
+  full_name: string | null;
   created_at: string;
   onboarding_completed: boolean;
   push_token: string | null;
-  theme: "system" | "light" | "dark";
+  theme: "light" | "dark";
+  timezone: string | null;
 }
 
 export interface OnboardingAnswers {
@@ -140,6 +142,9 @@ export interface WorkoutDay {
   coach_notes: string | null;
   locked: boolean;
   completed: boolean;
+  completion_kind: "full" | "partial" | null;
+  last_activity_at: string | null;
+  finalized_at: string | null;
   scheduled_date: string | null;
   created_at: string;
 }
@@ -175,6 +180,7 @@ export interface ExerciseLog {
   difficulty: number | null;
   notes: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export interface WorkoutDayLog {
@@ -182,5 +188,6 @@ export interface WorkoutDayLog {
   day_id: string;
   user_id: string;
   completed_at: string;
+  activity_date: string | null;
   total_minutes: number | null;
 }

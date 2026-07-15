@@ -33,7 +33,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     timerRunning,
     elapsedSeconds,
     timerDurationSeconds,
-    workoutBudget,
+    dailyBudget,
     startSession,
     stopSession,
     toggleMute,
@@ -46,8 +46,8 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
       ? elapsedSeconds
       : Math.max(0, timerDurationSeconds - elapsedSeconds);
   const budgetProgress =
-    workoutBudget && workoutBudget.budgetUsd > 0
-      ? Math.min(1, workoutBudget.spentUsd / workoutBudget.budgetUsd)
+    dailyBudget && dailyBudget.budgetUsd > 0
+      ? Math.min(1, dailyBudget.spentUsd / dailyBudget.budgetUsd)
       : 0;
 
   useEffect(() => {
@@ -118,13 +118,13 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     budgetExhausted || status === "connecting" || status === "disconnecting" || status === "thinking";
 
   const hint = budgetExhausted
-    ? "Your assistant refills on your next workout. You can still use the timer and log drills manually."
+    ? "Your 75¢ coach credit refills tomorrow. You can still use the timer and log drills manually."
     : status === "muted"
       ? "Tap the circle to turn the mic back on"
       : status === "error"
         ? "Tap the circle to reconnect"
-        : workoutBudget
-          ? `${formatCoachBudgetCents(workoutBudget.remainingUsd)} of coach time left this workout`
+        : dailyBudget
+          ? `${formatCoachBudgetCents(dailyBudget.remainingUsd)} coach credit left today`
           : "Just talk — your coach is listening";
 
   return (
@@ -164,7 +164,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
           </Pressable>
         </View>
 
-        {workoutBudget ? (
+        {dailyBudget ? (
           <View style={styles.budgetRow}>
             <View style={[styles.budgetTrack, { backgroundColor: colors.card }]}>
               <View
@@ -179,8 +179,8 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
             </View>
             <Text style={[styles.budgetLabel, { color: colors.textSecondary }]}>
               {budgetExhausted
-                ? "Coach limit reached for this workout"
-                : `${formatCoachBudgetCents(workoutBudget.remainingUsd)} left this workout`}
+                ? "Today's coach credit is used up"
+                : `${formatCoachBudgetCents(dailyBudget.remainingUsd)} left today`}
             </Text>
           </View>
         ) : null}

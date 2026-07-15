@@ -91,7 +91,7 @@ export function DaySelector({
           const day = dayByNumber.get(dayNumber);
           const generated = day != null;
           const unlocked = generated && isDayUnlocked(day, days);
-          const selectable = generated && (unlocked || (day?.completed ?? false));
+          const selectable = generated;
           const selected = dayNumber === selectedDayNumber;
           const isCurrent = dayNumber === currentDayNumber;
           const completed = day?.completed ?? false;
@@ -117,7 +117,7 @@ export function DaySelector({
           return (
             <Pressable
               key={dayNumber}
-              disabled={!selectable}
+              disabled={!generated}
               onPress={() => onSelect(dayNumber)}
               hitSlop={6}
               style={[

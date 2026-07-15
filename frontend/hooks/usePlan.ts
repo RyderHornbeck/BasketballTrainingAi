@@ -7,6 +7,7 @@ import {
 import { PlanGenerationRequest, WorkoutDay, WorkoutPlan } from "@/types/database";
 import { AppState } from "@/types/plan";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AppState as NativeAppState } from "react-native";
 import { useAuth } from "./useAuth";
 
 interface UsePlanResult {
@@ -92,6 +93,32 @@ export function usePlan(): UsePlanResult {
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  useEffect(() => {
+    const subscription = NativeAppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") void load();
+    });
+    return () => subscription.remove();
+  }, [load]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const refreshAtNextMidnight = () => {
+      const now = new Date();
+      const nextMidnight = new Date(now);
+      nextMidnight.setHours(24, 0, 2, 0);
+      timer = setTimeout(() => {
+        void load();
+        refreshAtNextMidnight();
+      }, Math.max(1_000, nextMidnight.getTime() - now.getTime()));
+    };
+
+    refreshAtNextMidnight();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
   }, [load]);
 
   const isGenerating = generationRequest?.status === "pending" || generationRequest?.status === "generating";
