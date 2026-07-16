@@ -314,6 +314,15 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     analyticsExerciseLogs,
     disciplineWorkouts
   );
+  // The client is the canonical implementation of the adaptive skill formula.
+  // Persist its resulting overall so achievement evaluation can use the same
+  // number displayed on the analytics radar.
+  const { error: overallSyncError } = await supabase.rpc("sync_my_overall_skill_rating", {
+    p_overall_rating: skillProfile.overall,
+  });
+  if (overallSyncError) {
+    console.warn("Unable to sync overall achievement rating:", overallSyncError.message);
+  }
 
   return {
     totalWorkoutsCompleted,

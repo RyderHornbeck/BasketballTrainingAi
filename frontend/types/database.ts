@@ -191,3 +191,10 @@ export interface WorkoutDayLog {
   activity_date: string | null;
   total_minutes: number | null;
 }
+
+export interface UserAchievement {
+  user_id: string;
+  achievement_key: string;
+  unlocked_at: string;
+  metric_value: number;
+}

@@ -224,6 +224,9 @@ export function useCoach(dayId: string | null): UseCoachResult {
           onStatus: (next) => {
             if (!mountedRef.current || limitBlockedRef.current) return;
             setStatus(next);
+            if (next === "listening" || next === "thinking" || next === "speaking") {
+              setError(null);
+            }
           },
           onError: (msg) => {
             if (!mountedRef.current) return;

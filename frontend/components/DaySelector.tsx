@@ -75,7 +75,7 @@ export function DaySelector({
           { color: scheme === "light" ? colors.accent : colors.text },
         ]}
       >
-        HoopPlan
+        Court Coach
       </Text>
       <ScrollView
         ref={scrollRef}

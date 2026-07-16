@@ -3,7 +3,6 @@
 import { Text } from "@/components/Text";
 import { useCoach } from "@/hooks/useCoach";
 import { useTheme } from "@/hooks/useTheme";
-import { formatCoachBudgetCents } from "@/lib/coachUsage";
 import { Ionicons } from "@expo/vector-icons";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import React, { useEffect, useRef } from "react";
@@ -45,10 +44,11 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     timerDurationSeconds == null
       ? elapsedSeconds
       : Math.max(0, timerDurationSeconds - elapsedSeconds);
-  const budgetProgress =
+  const remainingBudgetProgress =
     dailyBudget && dailyBudget.budgetUsd > 0
-      ? Math.min(1, dailyBudget.spentUsd / dailyBudget.budgetUsd)
+      ? Math.max(0, Math.min(1, dailyBudget.remainingUsd / dailyBudget.budgetUsd))
       : 0;
+  const remainingBudgetPercent = Math.round(remainingBudgetProgress * 100);
 
   useEffect(() => {
     void activateKeepAwakeAsync("coach-overlay");
@@ -123,9 +123,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
       ? "Tap the circle to turn the mic back on"
       : status === "error"
         ? "Tap the circle to reconnect"
-        : dailyBudget
-          ? `${formatCoachBudgetCents(dailyBudget.remainingUsd)} coach credit left today`
-          : "Just talk — your coach is listening";
+        : "Just talk — your coach is listening";
 
   return (
     <Modal visible animationType="slide" onRequestClose={handleClose}>
@@ -171,8 +169,8 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
                 style={[
                   styles.budgetFill,
                   {
-                    backgroundColor: budgetExhausted ? colors.danger : colors.accent,
-                    width: `${Math.max(4, budgetProgress * 100)}%`,
+                    backgroundColor: budgetExhausted ? colors.textMuted : colors.accent,
+                    width: `${remainingBudgetPercent}%`,
                   },
                 ]}
               />
@@ -180,22 +178,12 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
             <Text style={[styles.budgetLabel, { color: colors.textSecondary }]}>
               {budgetExhausted
                 ? "Today's coach credit is used up"
-                : `${formatCoachBudgetCents(dailyBudget.remainingUsd)} left today`}
+                : `${remainingBudgetPercent}% left today`}
             </Text>
           </View>
         ) : null}
 
         <View style={styles.center}>
-          {error ? (
-            <Text
-              style={[
-                styles.errorText,
-                { color: budgetExhausted ? colors.textSecondary : colors.danger },
-              ]}
-            >
-              {error}
-            </Text>
-          ) : null}
           <Text style={[styles.statusLabel, { color: colors.text }]}>{statusLabel}</Text>
 
           <Pressable
@@ -301,12 +289,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 32,
-  },
-  errorText: {
-    fontSize: 13,
-    marginBottom: 12,
-    textAlign: "center",
-    lineHeight: 18,
   },
   statusLabel: {
     fontSize: 22,

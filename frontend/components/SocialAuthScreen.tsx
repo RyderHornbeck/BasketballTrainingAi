@@ -89,7 +89,7 @@ export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
 
       <View style={styles.footer}>
         <Text style={[styles.footerText, { color: colors.textSecondary }]}>
-          {mode === "login" ? "New to HoopPlan?" : "Already use HoopPlan?"}
+          {mode === "login" ? "New to Court Coach?" : "Already use Court Coach?"}
         </Text>
         <Link href={mode === "login" ? "/onboarding" : "/auth/login"}>
           <Text style={[styles.footerLink, { color: colors.accent }]}>

@@ -157,7 +157,15 @@ export default function WorkoutEditManualScreen() {
             ).map((zone) => ZONE_LABELS[zone] ?? zone);
             return (
               <View style={[styles.resultCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <View style={styles.resultCopy}>
+                <Pressable
+                  onPress={() =>
+                    router.push({
+                      pathname: "/drill-detail",
+                      params: { clipId: item.id },
+                    })
+                  }
+                  style={styles.resultCopy}
+                >
                   <Text style={[styles.resultName, { color: colors.text }]}>{item.exercise_name}</Text>
                   <Text style={[styles.resultMeta, { color: colors.accent }]}>
                     {item.category.replace(/_/g, " ")}
@@ -168,7 +176,7 @@ export default function WorkoutEditManualScreen() {
                       {item.description}
                     </Text>
                   ) : null}
-                </View>
+                </Pressable>
                 <Pressable
                   disabled={added || addingId != null}
                   onPress={() => void addExercise(item)}

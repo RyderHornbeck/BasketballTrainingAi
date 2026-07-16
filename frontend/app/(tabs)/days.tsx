@@ -446,17 +446,25 @@ export default function DaysScreen() {
           currentDayNumber={defaultDayNumber ?? 1}
           onSelect={handleSelectDay}
         />
-        <View style={styles.streakBadge}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`View achievements. Current streak ${currentStreak} days`}
+          onPress={() => router.push("/achievements")}
+          style={({ pressed }) => [
+            styles.streakBadge,
+            { opacity: pressed ? 0.82 : 1, shadowColor: colors.shadow },
+          ]}
+        >
           <FireIcon size={23} color="#F7B379" weight="fill" />
           <Text
             style={[
               styles.streakValue,
-              { color: currentStreak > 0 ? colors.text : colors.textMuted },
+              { color: currentStreak > 0 ? "#111113" : "#8E8E93" },
             ]}
           >
             {currentStreak}
           </Text>
-        </View>
+        </Pressable>
       </View>
       {plan &&
       generationRequest?.generation_type === "extend" &&
@@ -788,12 +796,22 @@ const styles = StyleSheet.create({
   },
   streakBadge: {
     position: "absolute",
-    top: 14,
-    right: 28,
+    top: 6,
+    right: 12,
     zIndex: 30,
+    minWidth: 62,
+    height: 38,
+    paddingHorizontal: 11,
+    borderRadius: 14,
+    backgroundColor: "#FFFFFF",
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     gap: 5,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.14,
+    shadowRadius: 8,
+    elevation: 3,
   },
   streakValue: {
     fontSize: 18,

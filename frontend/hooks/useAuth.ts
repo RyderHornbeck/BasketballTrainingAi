@@ -2,13 +2,13 @@ import { supabase } from "@/lib/supabase";
 import { Profile } from "@/types/database";
 import * as AppleAuthentication from "expo-apple-authentication";
 import * as Crypto from "expo-crypto";
-import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { Session, User } from "@supabase/supabase-js";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Platform } from "react-native";
 
 WebBrowser.maybeCompleteAuthSession();
+const GOOGLE_REDIRECT_URL = "hoopplan://auth/callback";
 
 interface AuthContextValue {
   session: Session | null;
@@ -227,18 +227,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signInWithGoogle = useCallback(async (): Promise<User | null> => {
-    const redirectTo = Linking.createURL("auth/callback");
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo,
+        redirectTo: GOOGLE_REDIRECT_URL,
         skipBrowserRedirect: true,
       },
     });
     if (error) throw error;
     if (!data.url) throw new Error("Google sign-in could not be started.");
 
-    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+    const result = await WebBrowser.openAuthSessionAsync(data.url, GOOGLE_REDIRECT_URL);
     if (result.type === "cancel" || result.type === "dismiss") return null;
     if (result.type !== "success" || !result.url) {
       throw new Error("Google sign-in did not complete. Please try again.");

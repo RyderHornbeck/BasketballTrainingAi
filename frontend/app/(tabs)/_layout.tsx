@@ -1,3 +1,5 @@
+import { AchievementUnlockQueue } from "@/components/AchievementUnlockQueue";
+import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
 import { isDayUnlocked } from "@/lib/plan";
@@ -23,6 +25,7 @@ const COACH_GAP = 12;
 
 export default function TabsLayout() {
   const { colors, scheme } = useTheme();
+  const { user } = useAuth();
   const insets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
   const { days } = usePlan();
@@ -170,6 +173,7 @@ export default function TabsLayout() {
           dayTitle={coachDay?.title ?? null}
         />
       ) : null}
+      <AchievementUnlockQueue userId={user?.id} coachOpen={coachOpen} />
     </>
   );
 }

@@ -336,6 +336,16 @@ export async function getExerciseCatalog(): Promise<ExerciseVideoClip[]> {
   return (data as ExerciseVideoClip[]) ?? [];
 }
 
+export async function getExerciseCatalogItem(id: string): Promise<ExerciseVideoClip | null> {
+  const { data, error } = await supabase
+    .from("exercise_video_clips")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as ExerciseVideoClip | null) ?? null;
+}
+
 function catalogPrescription(clip: ExerciseVideoClip) {
   const searchableText = `${clip.description ?? ""} ${clip.coaching_notes ?? ""}`;
   const durationMatch = searchableText.match(/(\d+)\s*(?:to\s*\d+\s*)?(second|minute)/i);

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "HoopPlan",
+    "name": "Court Coach",
     "slug": "basketballtrainerai",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -22,8 +22,8 @@
       "bundleIdentifier": "com.hoopplan.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSMicrophoneUsageDescription": "HoopPlan uses the microphone for live coach conversations during workouts.",
-        "NSPhotoLibraryUsageDescription": "HoopPlan does not access your photo library. This notice is required by third-party audio libraries included in the app."
+        "NSMicrophoneUsageDescription": "Court Coach uses the microphone for live coach conversations during workouts.",
+        "NSPhotoLibraryUsageDescription": "Court Coach does not access your photo library. This notice is required by third-party audio libraries included in the app."
       }
     },
     "android": {
@@ -69,7 +69,7 @@
       [
         "@config-plugins/react-native-webrtc",
         {
-          "microphonePermission": "HoopPlan uses the microphone so you can talk to your AI basketball coach during workouts."
+          "microphonePermission": "Court Coach uses the microphone so you can talk to your AI basketball coach during workouts."
         }
       ],
       "expo-config-plugin-incall-manager",

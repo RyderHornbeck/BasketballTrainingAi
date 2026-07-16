@@ -15,7 +15,7 @@ export default function WelcomeScreen() {
       <View style={styles.content}>
         <View style={styles.brand}>
           <BasketballIcon size={72} color={colors.accent} weight="duotone" />
-          <Text style={[styles.appName, { color: colors.text }]}>HoopPlan</Text>
+          <Text style={[styles.appName, { color: colors.text }]}>Court Coach</Text>
           <Text style={[styles.tagline, { color: colors.textSecondary }]}>
             Personalized basketball training plans, built for your game.
           </Text>

@@ -15,7 +15,7 @@ export default function Index() {
   if (startupError) {
     return (
       <View style={[styles.center, { backgroundColor: "transparent", paddingHorizontal: 32 }]}>
-        <Text style={[styles.errorTitle, { color: colors.text }]}>Couldn&apos;t open HoopPlan</Text>
+        <Text style={[styles.errorTitle, { color: colors.text }]}>Couldn&apos;t open Court Coach</Text>
         <Text style={[styles.errorMessage, { color: colors.textSecondary }]}>{startupError}</Text>
         <Button title="Try Again" onPress={retryStartup} style={styles.retryButton} />
       </View>
