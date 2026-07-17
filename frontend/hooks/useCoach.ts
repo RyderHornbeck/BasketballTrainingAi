@@ -47,6 +47,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
   });
   const timerRunIdRef = useRef(0);
   const conversationSummaryRef = useRef("");
+  const conversationDayIdRef = useRef<string | null>(null);
   const connectingRef = useRef(false);
   const overlayOpenRef = useRef(true);
   const mountedRef = useRef(true);
@@ -244,11 +245,10 @@ export function useCoach(dayId: string | null): UseCoachResult {
           onUsage: (totals) => {
             if (!mountedRef.current) return;
             setLastUsage(totals);
-            const spentUsd = dailySpentBaselineRef.current + totals.estimatedCostUsd;
-            setDailyBudget(coachDailyBudgetFromUsage(spentUsd));
           },
           onBudgetUpdate: (spentUsd, budgetUsd) => {
             if (!mountedRef.current) return;
+            dailySpentBaselineRef.current = spentUsd;
             const nextBudget = coachDailyBudgetFromUsage(spentUsd, budgetUsd);
             setDailyBudget(nextBudget);
             if (nextBudget.exhausted) {
@@ -311,7 +311,8 @@ export function useCoach(dayId: string | null): UseCoachResult {
     sessionRef.current = null;
     teardownRef.current = session?.disconnect("overlay_closed") ?? Promise.resolve();
     await teardownRef.current;
-  }, []);
+    await refreshDailyBudget();
+  }, [refreshDailyBudget]);
 
   const toggleMute = useCallback(() => {
     const session = sessionRef.current;
@@ -328,6 +329,10 @@ export function useCoach(dayId: string | null): UseCoachResult {
   useEffect(() => {
     if (!dayId) return;
 
+    if (conversationDayIdRef.current !== dayId) {
+      conversationDayIdRef.current = dayId;
+      conversationSummaryRef.current = "";
+    }
     overlayOpenRef.current = true;
     limitBlockedRef.current = false;
     setError(null);
@@ -361,7 +366,10 @@ export function useCoach(dayId: string | null): UseCoachResult {
 
   useEffect(() => {
     const onAppStateChange = (next: AppStateStatus) => {
-      if (next === "background" || next === "inactive") {
+      // iOS enters "inactive" while the microphone permission sheet and
+      // certain audio-route dialogs are visible. Disconnecting there tears
+      // down WebRTC before the first connection can finish on a new build.
+      if (next === "background") {
         const session = sessionRef.current;
         sessionRef.current = null;
         teardownRef.current = session?.disconnect("background") ?? Promise.resolve();

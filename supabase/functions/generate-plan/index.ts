@@ -147,7 +147,9 @@ function scoreClip(
 ): number {
   let score = 0;
 
-  const goalCategories = GOAL_CATEGORY_MAP[(answers.main_goal ?? "").toLowerCase()] ?? [];
+  const goalCategories = (answers.main_goal ?? "")
+    .split(",")
+    .flatMap((goal) => GOAL_CATEGORY_MAP[goal.trim().toLowerCase()] ?? []);
   if (goalCategories.includes(clip.category)) score += 3;
 
   const weaknessText = (answers.weaknesses ?? "").toLowerCase();
@@ -780,6 +782,12 @@ async function runGeneration(
   context: GenerationContext
 ): Promise<void> {
   try {
+    // Onboarding always assumes a standard court and one basketball.
+    const trainingAnswers: OnboardingAnswers = {
+      ...answers,
+      has_court_access: true,
+      equipment: ["Basketball"],
+    };
     const { data: allClips, error: clipsError } = await supabase
       .from("exercise_video_clips")
       .select(
@@ -792,7 +800,7 @@ async function runGeneration(
       return;
     }
 
-    const pool = buildClipPool(allClips as VideoClip[], answers, context.adaptiveProfile).map(
+    const pool = buildClipPool(allClips as VideoClip[], trainingAnswers, context.adaptiveProfile).map(
       (clip) => ({
         ...clip,
         requires_both_sides: clip.requires_both_sides ?? false,
@@ -812,7 +820,7 @@ async function runGeneration(
       composition: context.composition,
       daysPerWeek: answers.days_per_week ?? 3,
       mainGoal: answers.main_goal,
-      hasCourtAccess: answers.has_court_access ?? false,
+      hasCourtAccess: true,
       samples: context.samples,
     });
 
@@ -826,12 +834,12 @@ async function runGeneration(
       composition: context.composition,
       daysPerWeek: answers.days_per_week ?? 3,
       mainGoal: answers.main_goal,
-      hasCourtAccess: answers.has_court_access ?? false,
+      hasCourtAccess: true,
       samples: context.samples,
     };
     plan = repairSmartPlan(plan, repairPool, planInput);
 
-    const sanityError = sanityCheckPlan(plan, clipById, context, answers);
+    const sanityError = sanityCheckPlan(plan, clipById, context, trainingAnswers);
     if (sanityError) {
       await markRequestFailed(supabase, requestId, `Plan generation failed: ${sanityError}`);
       return;
@@ -883,11 +891,8 @@ async function runGeneration(
     const daysPerWeek = answers.days_per_week || plan.days_per_week || 3;
 
     for (const day of sortedDays) {
-      const scheduledDate = computeScheduledDate(
-        day.day_number - 1,
-        daysPerWeek,
-        String(planRow.created_at ?? "")
-      );
+      const isFirstGeneratedDay = day.day_number === context.startDayNumber;
+      const isInitialFirstDay = context.generationType === "initial" && isFirstGeneratedDay;
 
       const { data: dayRow, error: dayInsertError } = await supabase
         .from("workout_days")
@@ -900,9 +905,9 @@ async function runGeneration(
           focus: day.focus,
           estimated_minutes: day.estimated_minutes,
           coach_notes: day.coach_notes,
-          locked: day.day_number !== context.startDayNumber,
+          locked: !isInitialFirstDay,
           completed: false,
-          scheduled_date: scheduledDate,
+          scheduled_date: null,
         })
         .select()
         .single();
@@ -968,7 +973,7 @@ async function runGeneration(
         context.generationType === "extend"
           ? "Your next five adaptive workouts are ready."
           : "Your first five basketball workouts are ready.";
-      await sendExpoPushNotification(profile.push_token, "HoopPlan", message, {
+      await sendExpoPushNotification(profile.push_token, "Court Coach", message, {
         plan_id: planId,
         screen: "days",
       });

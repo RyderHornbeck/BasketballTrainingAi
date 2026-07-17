@@ -348,6 +348,12 @@ export class RealtimeCoachSession {
         this.callbacks?.onStatus("error");
       }
       await this.disconnect("connect_failed");
+      // disconnect() performs cleanup and briefly reports "disconnecting".
+      // Restore the meaningful terminal state so setup failures are visible
+      // and retryable instead of looking like unexplained auto-disconnects.
+      this.callbacks?.onStatus(
+        isCoachLimitMessage(msg) ? "budget_exhausted" : "error"
+      );
       throw err;
     } finally {
       if (generation === this.connectionGeneration) this.connecting = false;
@@ -486,9 +492,18 @@ export class RealtimeCoachSession {
         this.loggedUsageSessionKeys.add(sessionKey);
         const totals = usageTracker.snapshot();
         callbacks?.onUsage?.(totals);
-        await logCoachUsage({ dayId, sessionKey, totals }).catch((err) => {
+        const daily = await logCoachUsage({
+          dayId,
+          sessionKey,
+          totals,
+          finalizeSession: true,
+        }).catch((err) => {
           console.warn("Failed to persist coach usage:", err);
+          return null;
         });
+        if (daily) {
+          callbacks?.onBudgetUpdate?.(daily.spentUsd, daily.budgetUsd);
+        }
       }
 
       this.sessionKey = null;
@@ -600,6 +615,10 @@ export class RealtimeCoachSession {
         // With WebRTC and interrupt_response enabled, OpenAI automatically
         // cancels and truncates any unplayed assistant audio.
         this.sendTimerContext();
+        // Rebuild instructions from the database for every user turn. Workout
+        // events normally refresh this eagerly; this catches changes from
+        // another screen/device before the next response.
+        void this.refreshWorkoutContext();
         this.callbacks?.onStatus("listening");
         break;
       }

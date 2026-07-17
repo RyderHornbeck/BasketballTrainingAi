@@ -891,6 +891,10 @@ function buildDay(
     (total, exercise) => total + parseExerciseMinutes(exercise),
     0
   );
+  // Exercise durations cover active reps only. Account for setup, water, and
+  // transitions so a 75-minute preference does not appear as a 52-minute plan.
+  const transitionMinutes = 5 + exercises.length * 1.5;
+  const estimatedMinutes = plannedMinutes + transitionMinutes;
 
   const focusCategories = [
     ...new Set(
@@ -904,7 +908,7 @@ function buildDay(
     day_number: dayNumber,
     title: isBenchmarkDay ? `Day ${dayNumber} · Benchmark` : `Day ${dayNumber}`,
     focus: focusCategories.join(", ") || "Balanced skills",
-    estimated_minutes: Math.min(composition.minutes, Math.max(10, Math.round(plannedMinutes))),
+    estimated_minutes: Math.min(composition.minutes, Math.max(10, Math.round(estimatedMinutes))),
     coach_notes: isBenchmarkDay
       ? "Benchmark session: repeat your baseline drills and try to beat your previous numbers."
       : `Emphasis on ${adaptiveProfile.weaknesses.join(" and ")}; keep ${adaptiveProfile.strengths.join(" and ")} sharp.`,

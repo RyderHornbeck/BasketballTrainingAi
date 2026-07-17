@@ -86,13 +86,14 @@ export interface WorkoutContext {
   logs: Map<string, LogRow>;
 }
 
-export const COACH_SYSTEM_PROMPT = `You are HoopPlan's live basketball coach. Be as concise as possible. Keep every reply as short as you can while still fully answering the athlete's question — one short sentence is ideal; two at most unless they asked for detail.
+export const COACH_SYSTEM_PROMPT = `You are Court Coach's live basketball coach. Be as concise as possible. Keep every reply as short as you can while still fully answering the athlete's question — one short sentence is ideal; two at most unless they asked for detail.
 
 Rules:
 - Replies are spoken aloud. No emojis or markdown. No filler, preamble, or repetition. Say only what they need.
 - Workout context contains one category-grouped drill sequence plus authoritative navigation. You MUST read and use this data. When asked about drills, name them in a brief spoken answer.
 - Do not dump the entire workout unprompted or read raw JSON. Listing drill names when asked is allowed and expected.
-- When the athlete asks about a drill or the current exercise, give the shortest answer that includes: sets, and per-set targets (makes and attempts for shooting drills, or minutes per set for timed drills).
+- Shooting and finishing drills are NEVER time-based; describe them only with sets, makes, and attempts. Only ball-handling and conditioning drills may use minutes per set.
+- When the athlete asks about a drill or the current exercise, give the shortest answer that includes its sets and authoritative per-set target.
 - "What's next?" always means navigation.next_work_item: the first incomplete set of the current drill. Do not move to another drill until every set in the current drill is complete.
 - "What drill/exercise comes after this?" means navigation.next_exercise_after_current. Never treat this as the answer to "what's next?"
 - For progress, location, sequence, or next-action questions, call get_workout_position. Never infer a drill number; use the returned drill_position.
@@ -100,19 +101,21 @@ Rules:
 - Context includes has_video_demo per drill. Video drills have an in-app demo on the exercise card; text-only drills do not. For text-only drills, use drill_description and coaching_notes from context instead of telling them to watch a video.
 - For video drills, if they seem confused by your verbal description, briefly tell them to watch the video demo on that exercise card.
 - For drill-list questions, call list_workout_drills with an optional category (e.g. shooting) if helpful.
+- When the athlete asks to add or remove workout exercises, use search_exercise_catalog, add_workout_exercise, and remove_workout_exercise. Search before adding. After editing, briefly name every exercise added or removed; never answer with only "workout updated."
 - When they want to remember something about a drill, call save_note with exercise_id and note.
-- When the athlete reports shooting results, call save_shooting_results with exercise_id, makes, attempts, and set_number when mentioned.
+- When the athlete reports shooting results, call save_shooting_results with exercise_id, makes, attempts, and set_number when mentioned. If they say only how many shots they made (for example, "I made 8") and do not state attempts, use the saved attempts for that specific set from workout context. Do not ask a follow-up just for attempts.
 - When they complete or reopen one specific set, call set_set_completion. This includes timed ball-handling sets.
 - Call complete_drill only when they explicitly finish the entire drill. Call uncomplete_drill when they want to reopen the entire drill. When they want to skip, call skip_drill.
 - Use get_workout_position or get_progress when you need fresh workout state.
 - Use extend_workout or shorten_workout to change remaining workout time.
-- start_timer can use a requested number of minutes; otherwise it starts a countdown for the workout's estimated duration. Use resume_timer for a paused timer, and stop_timer to reset it.
+- start_timer can use a requested number of minutes; The requested duration is usually the duration for the set of the user's current drill. If that set doesn't have use time, like finishing or shooting ask the user for clarification. Use resume_timer for a paused timer, and stop_timer to reset it.
 - Tool results can contain internal updated_workout_state data. Never mention, summarize, or paraphrase internal state, context, alignment, refreshes, JSON, or tool execution. After a tool runs, say only a brief natural confirmation of the action result (e.g. "Saved 8 of 10 for set one.").`;
 
 const REALTIME_TOOL_DEFS = [
   {
     name: "save_shooting_results",
-    description: "Save makes and attempts for the current shooting drill.",
+    description:
+      "Save makes and attempts for the current shooting drill. If the athlete reports makes without attempts, use the saved attempts for that specific set from workout context.",
     parameters: {
       type: "object",
       properties: {
@@ -186,6 +189,44 @@ const REALTIME_TOOL_DEFS = [
     },
   },
   {
+    name: "search_exercise_catalog",
+    description:
+      "Search active exercises that can be added to this workout. Call before add_workout_exercise.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Natural search such as corner threes, easier ball handling, or conditioning.",
+        },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "add_workout_exercise",
+    description: "Add one catalog exercise returned by search_exercise_catalog to today's workout.",
+    parameters: {
+      type: "object",
+      properties: {
+        catalog_exercise_id: { type: "string" },
+      },
+      required: ["catalog_exercise_id"],
+    },
+  },
+  {
+    name: "remove_workout_exercise",
+    description:
+      "Remove one exercise from today's workout, including its logged analytics. Use the exercise_id from workout context.",
+    parameters: {
+      type: "object",
+      properties: {
+        exercise_id: { type: "string" },
+      },
+      required: ["exercise_id"],
+    },
+  },
+  {
     name: "list_workout_drills",
     description:
       "List drills in today's workout. Use when the athlete asks what drills they have, e.g. all shooting drills.",
@@ -246,7 +287,7 @@ const REALTIME_TOOL_DEFS = [
   },
   {
     name: "finish_workout",
-    description: "Finish the entire workout only when the athlete explicitly says the whole workout is done.",
+    description: "Finish the workout when the athlete explicitly says they are done, even if they leave drills unfinished. This unlocks the next workout.",
     parameters: { type: "object", properties: {} },
   },
   {
@@ -281,7 +322,7 @@ const TOOL_DEFS = [
   {
     name: "save_shooting_results",
     description:
-      "Save makes and attempts for a shooting drill after the user reports results (e.g. 'I made 7 out of 10 on set 2').",
+      "Save shooting results after the athlete reports them (e.g. 'I made 7 out of 10 on set 2'). If they report only makes, use the saved attempts for that specific set from workout context.",
     parameters: {
       type: "object",
       properties: {
@@ -364,7 +405,7 @@ const TOOL_DEFS = [
   },
   {
     name: "finish_workout",
-    description: "Finish and close out today's workout when the user says they're done or ends the session.",
+    description: "Finish and close out today's workout when the user says they're done, even if drills remain unfinished.",
     parameters: { type: "object", properties: {} },
   },
   {
@@ -468,6 +509,13 @@ function effectivePlanForExercise(ex: ExerciseRow, log?: LogRow) {
   return applyMinutesOverride(applyAttemptsOverride(plan, attemptsOverride), minutesOverride);
 }
 
+function isTimedExercise(ex: ExerciseRow): boolean {
+  return (
+    ex.log_type === "minutes" &&
+    (ex.category === "ball_handling" || ex.category === "conditioning")
+  );
+}
+
 export function buildContextSummary(
   ctx: WorkoutContext,
   profile: Record<string, unknown> | null,
@@ -488,16 +536,18 @@ export function buildContextSummary(
       category: ex.category,
       sets: ex.sets,
       reps: ex.reps,
-      duration: ex.duration,
+      duration: isTimedExercise(ex) ? ex.duration : null,
       target_makes: ex.target_makes,
       target_attempts: ex.target_attempts,
       log_type: ex.log_type,
       sets_total: plan.setCount,
       per_set_target_makes: plan.perSetMakes,
       per_set_target_attempts: plan.perSetAttempts,
-      per_set_minutes: plan.perSetMinutes,
+      per_set_minutes: isTimedExercise(ex) ? plan.perSetMinutes : null,
       per_set_attempts_override: meta.per_set_attempts_override ?? null,
-      per_set_minutes_override: meta.per_set_minutes_override ?? null,
+      per_set_minutes_override: isTimedExercise(ex)
+        ? meta.per_set_minutes_override ?? null
+        : null,
       completed: totals.completed,
       logged_makes: totals.makes,
       logged_attempts: totals.attempts,
@@ -569,7 +619,7 @@ function drillPlanFields(ex: ExerciseRow, log?: LogRow) {
     sets_total: plan.setCount,
     per_set_target_makes: plan.perSetMakes,
     per_set_target_attempts: plan.perSetAttempts,
-    per_set_minutes: plan.perSetMinutes,
+    per_set_minutes: isTimedExercise(ex) ? plan.perSetMinutes : null,
     log_type: ex.log_type,
     has_video_demo: video.has_video_demo,
     drill_description: video.drill_description,
@@ -609,7 +659,7 @@ function summarizeDrill(
     completed: totals.completed,
     target_makes: plan.perSetMakes,
     target_attempts: plan.perSetAttempts,
-    per_set_minutes: plan.perSetMinutes,
+    per_set_minutes: isTimedExercise(ex) ? plan.perSetMinutes : null,
     log_type: ex.log_type,
     has_video_demo: video.has_video_demo,
     drill_description: video.drill_description,
@@ -696,7 +746,7 @@ function drillContext(state: OrderedDrillState) {
     target: {
       makes: plan.perSetMakes,
       attempts: plan.perSetAttempts,
-      minutes: plan.perSetMinutes,
+      minutes: isTimedExercise(exercise) ? plan.perSetMinutes : null,
     },
     log_type: exercise.log_type,
     instructions: (exercise.instructions ?? "").slice(0, 240),
@@ -910,6 +960,24 @@ export async function executeCoachTool(
 ): Promise<ToolOutcome> {
   const validExercise = (id: unknown): string | null =>
     typeof id === "string" && ctx.exercises.some((e) => e.id === id) ? id : null;
+  const refreshEstimate = async (): Promise<void> => {
+    const { data: rows } = await supabase
+      .from("workout_exercises")
+      .select("sets, duration")
+      .eq("day_id", dayId)
+      .eq("user_id", userId);
+    const plannedMinutes = (rows ?? []).reduce((sum: number, row: any) => {
+      const sets = Math.max(1, Number.parseInt(String(row.sets ?? "1"), 10) || 1);
+      const duration = String(row.duration ?? "").match(/(\d+(?:\.\d+)?)\s*min/i);
+      return sum + (duration ? Number.parseFloat(duration[1]) : 3) * sets;
+    }, 0);
+    const estimate = Math.max(5, Math.round(plannedMinutes + 5 + (rows?.length ?? 0) * 1.5));
+    await supabase
+      .from("workout_days")
+      .update({ estimated_minutes: estimate })
+      .eq("id", dayId)
+      .eq("user_id", userId);
+  };
 
   switch (name) {
     case "save_shooting_results": {
@@ -1092,6 +1160,152 @@ export async function executeCoachTool(
       };
     }
 
+    case "search_exercise_catalog": {
+      const rawQuery = String(args.query ?? "").trim();
+      if (!rawQuery) return { result: "Error: search query required", dbChanged: false };
+      const normalize = (value: string) =>
+        value
+          .toLowerCase()
+          .replace(/\b3(?:s|'s)?\b/g, " three ")
+          .replace(/\bthree[- ]pointer(?:s)?\b/g, " three ")
+          .replace(/mid[- ]range/g, " midrange ")
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim();
+      const query = normalize(rawQuery);
+      const tokens = query.split(/\s+/).filter(Boolean);
+      const { data: catalog, error } = await supabase
+        .from("exercise_video_clips")
+        .select(
+          "id, exercise_name, category, difficulty_level, description, coaching_notes, requires_both_sides"
+        )
+        .eq("active", true);
+      if (error) return { result: `Error searching: ${error.message}`, dbChanged: false };
+      const matches = (catalog ?? [])
+        .map((clip: any) => {
+          const exerciseName = normalize(String(clip.exercise_name ?? ""));
+          const text = normalize(
+            `${clip.exercise_name ?? ""} ${clip.category ?? ""} ${clip.difficulty_level ?? ""} ${clip.description ?? ""} ${clip.coaching_notes ?? ""}`
+          );
+          const score = tokens.reduce(
+            (total, token) =>
+              total + (exerciseName.includes(token) ? 8 : text.includes(token) ? 2 : 0),
+            0
+          );
+          return { clip, score };
+        })
+        .filter(({ score }: { score: number }) => score > 0)
+        .sort((a: any, b: any) => b.score - a.score)
+        .slice(0, 8);
+      if (!matches.length) {
+        return { result: `No catalog exercises matched "${rawQuery}".`, dbChanged: false };
+      }
+      return {
+        result: matches
+          .map(
+            ({ clip }: any) =>
+              `${clip.exercise_name} [catalog_exercise_id=${clip.id}; ${clip.category}; ${clip.difficulty_level}]`
+          )
+          .join("\n"),
+        dbChanged: false,
+      };
+    }
+
+    case "add_workout_exercise": {
+      const catalogId =
+        typeof args.catalog_exercise_id === "string" ? args.catalog_exercise_id : null;
+      if (!catalogId) {
+        return { result: "Error: catalog_exercise_id required", dbChanged: false };
+      }
+      const { data: clip, error: clipError } = await supabase
+        .from("exercise_video_clips")
+        .select(
+          "id, exercise_name, category, description, coaching_notes, requires_both_sides"
+        )
+        .eq("id", catalogId)
+        .eq("active", true)
+        .maybeSingle();
+      if (clipError || !clip) {
+        return { result: "Error: catalog exercise not found", dbChanged: false };
+      }
+      const { data: duplicate } = await supabase
+        .from("workout_exercises")
+        .select("id")
+        .eq("day_id", dayId)
+        .eq("user_id", userId)
+        .eq("video_clip_id", catalogId)
+        .limit(1)
+        .maybeSingle();
+      if (duplicate) {
+        return { result: `${clip.exercise_name} is already in this workout.`, dbChanged: false };
+      }
+      const [{ data: lastExercise }, durationMatch] = await Promise.all([
+        supabase
+          .from("workout_exercises")
+          .select("order_index")
+          .eq("day_id", dayId)
+          .eq("user_id", userId)
+          .order("order_index", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        Promise.resolve(
+          `${clip.description ?? ""} ${clip.coaching_notes ?? ""}`.match(
+            /(\d+)\s*(?:to\s*\d+\s*)?(second|minute)/i
+          )
+        ),
+      ]);
+      const shooting = clip.category === "shooting";
+      const finishing = clip.category === "finishing";
+      const duration = durationMatch
+        ? durationMatch[2].toLowerCase().startsWith("second")
+          ? `${Math.max(0.5, Number(durationMatch[1]) / 60)} min`
+          : `${Math.max(0.5, Number(durationMatch[1]))} min`
+        : "3 min";
+      const { error } = await supabase.from("workout_exercises").insert({
+        day_id: dayId,
+        user_id: userId,
+        video_clip_id: clip.id,
+        order_index: (lastExercise?.order_index ?? -1) + 1,
+        name: clip.exercise_name,
+        category: clip.category,
+        instructions: clip.description ?? clip.coaching_notes,
+        sets: "2",
+        reps: null,
+        duration,
+        target_makes: shooting ? 10 : finishing ? 8 : null,
+        target_attempts: shooting ? 20 : finishing ? 15 : null,
+        log_type: shooting || finishing ? "makes_attempts" : durationMatch ? "minutes" : "checkbox",
+        set_side_labels: clip.requires_both_sides ? ["left side", "right side"] : null,
+      });
+      if (error) return { result: `Error adding: ${error.message}`, dbChanged: false };
+      await refreshEstimate();
+      return { result: `Added ${clip.exercise_name}.`, dbChanged: true };
+    }
+
+    case "remove_workout_exercise": {
+      const exerciseId = validExercise(args.exercise_id);
+      if (!exerciseId) return { result: "Error: unknown exercise_id", dbChanged: false };
+      const exercise = ctx.exercises.find((candidate) => candidate.id === exerciseId);
+      const exerciseName = exercise?.name ?? "the exercise";
+      const { error } = await supabase
+        .from("workout_exercises")
+        .delete()
+        .eq("id", exerciseId)
+        .eq("day_id", dayId)
+        .eq("user_id", userId);
+      if (error) return { result: `Error removing: ${error.message}`, dbChanged: false };
+      await supabase
+        .from("workout_days")
+        .update({ active_exercise_id: null })
+        .eq("id", dayId)
+        .eq("user_id", userId)
+        .eq("active_exercise_id", exerciseId);
+      await refreshEstimate();
+      return {
+        result: `Removed ${exerciseName}; its logged results no longer count in analytics.`,
+        dbChanged: true,
+      };
+    }
+
     case "list_workout_drills": {
       const category =
         typeof args.category === "string" && args.category.trim() ? args.category.trim() : null;
@@ -1256,12 +1470,21 @@ export async function executeCoachTool(
 
     case "finish_workout": {
       if (ctx.day.completed) return { result: "Workout already finished.", dbChanged: false };
+      const completionKind =
+        ctx.exercises.length > 0 &&
+        ctx.exercises.every((exercise) => ctx.logs.get(exercise.id)?.completed === true)
+          ? "full"
+          : "partial";
+      const completedMinutes = [...ctx.logs.values()].reduce(
+        (total, log) => total + (log.minutes_completed ?? 0),
+        0
+      );
 
       const { error: logError } = await supabase.from("workout_day_logs").upsert(
         {
           day_id: dayId,
           user_id: userId,
-          total_minutes: ctx.day.estimated_minutes ?? null,
+          total_minutes: completedMinutes || ctx.day.estimated_minutes || null,
         },
         { onConflict: "day_id" }
       );
@@ -1269,7 +1492,12 @@ export async function executeCoachTool(
 
       await supabase
         .from("workout_days")
-        .update({ completed: true, locked: false })
+        .update({
+          completed: true,
+          locked: false,
+          completion_kind: completionKind,
+          finalized_at: new Date().toISOString(),
+        })
         .eq("id", dayId)
         .eq("user_id", userId);
 
@@ -1281,11 +1509,14 @@ export async function executeCoachTool(
       if (dayRow?.day_number != null) {
         await supabase
           .from("workout_days")
-          .update({ locked: false })
+          .update({ locked: false, scheduled_date: null })
           .eq("plan_id", dayRow.plan_id)
           .eq("day_number", dayRow.day_number + 1);
       }
-      return { result: "Workout finished and saved. Next day unlocked.", dbChanged: true };
+      return {
+        result: "Workout finished and saved. Your next workout is unlocked.",
+        dbChanged: true,
+      };
     }
 
     case "start_timer": {

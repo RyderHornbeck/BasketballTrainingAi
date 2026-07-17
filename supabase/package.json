@@ -7,7 +7,10 @@
     "seed:videos": "tsx seed/import-videos.ts",
     "seed:metadata": "tsx seed/apply-exercise-metadata.ts",
     "seed:advanced": "tsx seed/seed-advanced-drills.ts",
-    "seed:shot-zones": "tsx seed/seed-shot-zone-drills.ts"
+    "seed:shot-zones": "tsx seed/seed-shot-zone-drills.ts",
+    "export:catalog": "tsx seed/export-exercise-catalog.ts",
+    "catalog:apply-first-21-descriptions": "tsx seed/apply-first-21-catalog-descriptions.ts",
+    "catalog:strip-prescriptions": "tsx seed/strip-catalog-prescriptions.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

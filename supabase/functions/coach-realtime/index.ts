@@ -13,7 +13,6 @@ import {
 import {
   COACH_LIMITS,
   DEFAULT_REALTIME_MODEL,
-  utcDayStart,
 } from "../_shared/coachUsage.ts";
 
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
@@ -31,42 +30,36 @@ function jsonResponse(body: unknown, status = 200) {
 
 async function getDailyUsageTotals(
   supabase: ReturnType<typeof createClient>,
-  userId: string
-) {
-  const dayStart = utcDayStart();
-  const { data } = await supabase
-    .from("coach_usage_logs")
-    .select("response_count, estimated_cost_usd")
-    .eq("user_id", userId)
-    .gte("created_at", dayStart);
-
-  let responses = 0;
-  let cost = 0;
-  for (const row of data ?? []) {
-    responses += row.response_count ?? 0;
-    cost += Number(row.estimated_cost_usd ?? 0);
-  }
-  return { responses, cost };
-}
-
-async function getWorkoutUsageTotals(
-  supabase: ReturnType<typeof createClient>,
   userId: string,
-  dayId: string
+  timezone: string | null
 ) {
-  const { data } = await supabase
-    .from("coach_usage_logs")
-    .select("response_count, estimated_cost_usd")
-    .eq("user_id", userId)
-    .eq("day_id", dayId);
-
-  let responses = 0;
-  let cost = 0;
-  for (const row of data ?? []) {
-    responses += row.response_count ?? 0;
-    cost += Number(row.estimated_cost_usd ?? 0);
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone || "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+  } catch {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
   }
-  return { responses, cost };
+  const parts = formatter.formatToParts(new Date());
+  const localDate = `${parts.find((part) => part.type === "year")?.value}-${parts.find(
+    (part) => part.type === "month"
+  )?.value}-${parts.find((part) => part.type === "day")?.value}`;
+  const { data } = await supabase
+    .from("coach_daily_usage")
+    .select("spent_usd")
+    .eq("user_id", userId)
+    .eq("usage_date", localDate)
+    .maybeSingle();
+  return Number(data?.spent_usd ?? 0);
 }
 
 Deno.serve(async (req: Request) => {
@@ -106,49 +99,20 @@ Deno.serve(async (req: Request) => {
     if (!body.sdp) return jsonResponse({ error: "sdp is required" }, 400);
     if (!body.session_key) return jsonResponse({ error: "session_key is required" }, 400);
 
-    const daily = await getDailyUsageTotals(supabase, userId);
-    if (daily.responses >= COACH_LIMITS.maxResponsesPerDay) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("timezone")
+      .eq("id", userId)
+      .maybeSingle();
+    const dailySpent = await getDailyUsageTotals(supabase, userId, profile?.timezone ?? null);
+    if (dailySpent >= COACH_LIMITS.maxDailyCostUsd) {
       return jsonResponse(
         {
-          error: "Daily coach response limit reached.",
-          code: "daily_response_limit",
-        },
-        429
-      );
-    }
-    if (daily.cost >= COACH_LIMITS.maxDailyCostUsd) {
-      return jsonResponse(
-        {
-          error: "Daily coach cost limit reached.",
+          error: "Daily coach credit is used up.",
           code: "daily_budget_exhausted",
           daily_usage: {
-            spent_usd: daily.cost,
+            spent_usd: dailySpent,
             budget_usd: COACH_LIMITS.maxDailyCostUsd,
-            remaining_usd: 0,
-          },
-        },
-        429
-      );
-    }
-
-    const workout = await getWorkoutUsageTotals(supabase, userId, body.day_id);
-    if (workout.responses >= COACH_LIMITS.maxResponsesPerWorkout) {
-      return jsonResponse(
-        {
-          error: "Workout coach response limit reached.",
-          code: "workout_response_limit",
-        },
-        429
-      );
-    }
-    if (workout.cost >= COACH_LIMITS.maxWorkoutCostUsd) {
-      return jsonResponse(
-        {
-          error: "Workout coach cost limit reached.",
-          code: "workout_budget_exhausted",
-          workout_usage: {
-            spent_usd: workout.cost,
-            budget_usd: COACH_LIMITS.maxWorkoutCostUsd,
             remaining_usd: 0,
           },
         },
@@ -197,7 +161,7 @@ Deno.serve(async (req: Request) => {
         session_key: body.session_key,
         model: REALTIME_MODEL,
         response_count: existingSession?.response_count ?? 0,
-        workout_response_count: workout.responses,
+        workout_response_count: 0,
         started_at: new Date().toISOString(),
         expires_at: expiresAt,
         ended_at: null,
@@ -244,15 +208,10 @@ Deno.serve(async (req: Request) => {
       model: REALTIME_MODEL,
       workout_context: contextJson,
       limits: COACH_LIMITS,
-      workout_usage: {
-        spent_usd: workout.cost,
-        budget_usd: COACH_LIMITS.maxWorkoutCostUsd,
-        remaining_usd: Math.max(0, COACH_LIMITS.maxWorkoutCostUsd - workout.cost),
-      },
       daily_usage: {
-        spent_usd: daily.cost,
+        spent_usd: dailySpent,
         budget_usd: COACH_LIMITS.maxDailyCostUsd,
-        remaining_usd: Math.max(0, COACH_LIMITS.maxDailyCostUsd - daily.cost),
+        remaining_usd: Math.max(0, COACH_LIMITS.maxDailyCostUsd - dailySpent),
       },
     });
   } catch (err) {

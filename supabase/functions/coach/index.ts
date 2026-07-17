@@ -368,7 +368,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "finish_workout",
-      description: "Finish and close out today's workout when the user says they're done or ends the session.",
+      description: "Finish and close out today's workout when the user says they're done, even if drills remain unfinished.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -566,17 +566,34 @@ async function executeTool(
 
     case "finish_workout": {
       if (ctx.day.completed) return { result: "Workout already finished.", dbChanged: false };
+      const completionKind =
+        ctx.exercises.length > 0 &&
+        ctx.exercises.every((exercise) => ctx.logs.get(exercise.id)?.completed === true)
+          ? "full"
+          : "partial";
+      const completedMinutes = [...ctx.logs.values()].reduce(
+        (total, log) => total + (log.minutes_completed ?? 0),
+        0
+      );
 
-      const { error: logError } = await supabase.from("workout_day_logs").insert({
-        day_id: dayId,
-        user_id: userId,
-        total_minutes: ctx.day.estimated_minutes ?? null,
-      });
+      const { error: logError } = await supabase.from("workout_day_logs").upsert(
+        {
+          day_id: dayId,
+          user_id: userId,
+          total_minutes: completedMinutes || ctx.day.estimated_minutes || null,
+        },
+        { onConflict: "day_id" }
+      );
       if (logError) return { result: `Error: ${logError.message}`, dbChanged: false };
 
       await supabase
         .from("workout_days")
-        .update({ completed: true, locked: false })
+        .update({
+          completed: true,
+          locked: false,
+          completion_kind: completionKind,
+          finalized_at: new Date().toISOString(),
+        })
         .eq("id", dayId)
         .eq("user_id", userId);
 
@@ -588,11 +605,17 @@ async function executeTool(
       if (dayRow?.day_number != null) {
         await supabase
           .from("workout_days")
-          .update({ locked: false })
+          .update({
+            locked: false,
+            scheduled_date: null,
+          })
           .eq("plan_id", dayRow.plan_id)
           .eq("day_number", dayRow.day_number + 1);
       }
-      return { result: "Workout finished and saved. Next day unlocked.", dbChanged: true };
+      return {
+        result: "Workout finished and saved. Your next workout is unlocked.",
+        dbChanged: true,
+      };
     }
 
     case "start_timer":

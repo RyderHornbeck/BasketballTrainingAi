@@ -188,6 +188,7 @@ export async function logCoachUsage(params: {
   dayId: string | null;
   sessionKey: string;
   totals: CoachUsageTotals;
+  finalizeSession?: boolean;
 }): Promise<{ spentUsd: number; budgetUsd: number; remainingUsd: number } | null> {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
@@ -206,6 +207,7 @@ export async function logCoachUsage(params: {
           input_audio_tokens: params.totals.inputAudioTokens,
           output_text_tokens: params.totals.outputTextTokens,
           output_audio_tokens: params.totals.outputAudioTokens,
+          finalize_session: params.finalizeSession === true,
         },
       });
       if (error) throw error;

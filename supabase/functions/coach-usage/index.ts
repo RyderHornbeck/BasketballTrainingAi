@@ -49,6 +49,7 @@ Deno.serve(async (req: Request) => {
       input_audio_tokens?: number;
       output_text_tokens?: number;
       output_audio_tokens?: number;
+      finalize_session?: boolean;
     };
 
     if (!body.session_key) return jsonResponse({ error: "session_key is required" }, 400);
@@ -63,30 +64,28 @@ Deno.serve(async (req: Request) => {
     };
     const estimatedCost = estimateRealtimeCostUsd(usage);
 
-    const { error: usageError } = await supabase.from("coach_usage_logs").upsert(
-      {
-        user_id: userId,
-        day_id: body.day_id ?? null,
-        session_key: body.session_key,
-        model: body.model ?? null,
-        response_count: body.response_count ?? 0,
-        session_duration_ms: body.session_duration_ms ?? 0,
-        input_text_tokens: usage.input_text_tokens,
-        cached_input_tokens: usage.cached_text_tokens + usage.cached_audio_tokens,
-        input_audio_tokens: usage.input_audio_tokens,
-        output_text_tokens: usage.output_text_tokens,
-        output_audio_tokens: usage.output_audio_tokens,
-        estimated_cost_usd: estimatedCost,
-      },
-      { onConflict: "session_key" }
-    );
+    const { data: dailyUsage, error: usageError } = await supabase.rpc("record_coach_usage", {
+      p_user_id: userId,
+      p_session_key: body.session_key,
+      p_day_id: body.day_id ?? null,
+      p_model: body.model ?? null,
+      p_response_count: body.response_count ?? 0,
+      p_session_duration_ms: body.session_duration_ms ?? 0,
+      p_input_text_tokens: usage.input_text_tokens,
+      p_cached_input_tokens: usage.cached_text_tokens + usage.cached_audio_tokens,
+      p_input_audio_tokens: usage.input_audio_tokens,
+      p_output_text_tokens: usage.output_text_tokens,
+      p_output_audio_tokens: usage.output_audio_tokens,
+      p_estimated_cost_usd: estimatedCost,
+    });
     if (usageError) throw usageError;
+    const daily = Array.isArray(dailyUsage) ? dailyUsage[0] : dailyUsage;
 
     if (body.session_key) {
       await supabase
         .from("coach_sessions")
         .update({
-          ended_at: new Date().toISOString(),
+          ...(body.finalize_session ? { ended_at: new Date().toISOString() } : {}),
           response_count: body.response_count ?? 0,
         })
         .eq("session_key", body.session_key)
@@ -95,6 +94,8 @@ Deno.serve(async (req: Request) => {
 
     return jsonResponse({
       estimated_cost_usd: estimatedCost,
+      daily_usage: daily,
+      code: Number(daily?.remaining_usd ?? 0) <= 0 ? "daily_budget_exhausted" : undefined,
       logged: true,
     });
   } catch (err) {

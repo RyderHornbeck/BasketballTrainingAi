@@ -78,6 +78,7 @@ export default function DaysScreen() {
   const [selectedDayNumber, setSelectedDayNumber] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<DaysViewMode>("overview");
   const [slideDirection, setSlideDirection] = useState<SlideDirection>("forward");
+  const [contentTransitionKey, setContentTransitionKey] = useState(0);
   const [dayDetail, setDayDetail] = useState<WorkoutDayWithExercises | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [progressVersion, setProgressVersion] = useState(0);
@@ -92,6 +93,7 @@ export default function DaysScreen() {
   const detailRequestsRef = useRef<Map<string, Promise<WorkoutDayWithExercises | null>>>(new Map());
   const selectedDayIdRef = useRef<string | null>(null);
   const logSaveQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const viewTransitionFrameRef = useRef<number | null>(null);
   const finishingRef = useRef(false);
   const [finishingWorkout, setFinishingWorkout] = useState(false);
   const [retryingBlock, setRetryingBlock] = useState(false);
@@ -393,17 +395,49 @@ export default function DaysScreen() {
     (dayNumber: number) => {
       const currentDayNumber = selectedDayNumber ?? dayNumber;
       if (dayNumber === currentDayNumber) return;
-      setSlideDirection(dayNumber > currentDayNumber ? "forward" : "backward");
-      const nextDayId = days.find((day) => day.day_number === dayNumber)?.id;
-      const cached = nextDayId ? detailCacheRef.current.get(nextDayId) : undefined;
-      if (cached !== undefined) {
-        applySelectedDetail(cached);
-      } else {
-        setDayDetail(null);
+
+      if (viewTransitionFrameRef.current != null) {
+        cancelAnimationFrame(viewTransitionFrameRef.current);
       }
-      setSelectedDayNumber(dayNumber);
+      setSlideDirection(dayNumber > currentDayNumber ? "forward" : "backward");
+      // Let the current page render once with its exit direction before
+      // replacing it, so both pages travel together.
+      viewTransitionFrameRef.current = requestAnimationFrame(() => {
+        viewTransitionFrameRef.current = null;
+        const nextDayId = days.find((day) => day.day_number === dayNumber)?.id;
+        const cached = nextDayId ? detailCacheRef.current.get(nextDayId) : undefined;
+        if (cached !== undefined) {
+          applySelectedDetail(cached);
+        } else {
+          setDayDetail(null);
+        }
+        setSelectedDayNumber(dayNumber);
+        setContentTransitionKey((key) => key + 1);
+      });
     },
     [applySelectedDetail, days, selectedDayNumber]
+  );
+
+  const switchViewMode = useCallback((nextMode: DaysViewMode, direction: SlideDirection) => {
+    if (viewTransitionFrameRef.current != null) {
+      cancelAnimationFrame(viewTransitionFrameRef.current);
+    }
+    setSlideDirection(direction);
+    // The exiting view uses its props from its final render. Stage the
+    // direction first so the old and new pages always travel together.
+    viewTransitionFrameRef.current = requestAnimationFrame(() => {
+      viewTransitionFrameRef.current = null;
+      setViewMode(nextMode);
+    });
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (viewTransitionFrameRef.current != null) {
+        cancelAnimationFrame(viewTransitionFrameRef.current);
+      }
+    },
+    []
   );
 
   const confirmDeleteExercise = useCallback(
@@ -616,7 +650,7 @@ export default function DaysScreen() {
         }
       >
         <Animated.View
-          key={`${selectedDayId ?? "none"}-${viewMode}`}
+          key={`${viewMode}-${contentTransitionKey}`}
           entering={viewEntering}
           exiting={viewExiting}
         >
@@ -703,8 +737,8 @@ export default function DaysScreen() {
 
             <Pressable
               onPress={() => {
-                setSlideDirection("forward");
-                setViewMode("workout");
+                // Both pages move right-to-left into the workout view.
+                switchViewMode("workout", "forward");
               }}
               style={({ pressed }) => [
                 styles.startWorkoutCard,
@@ -744,8 +778,8 @@ export default function DaysScreen() {
             <Pressable
               onPress={() => {
                 setEditingWorkout(false);
-                setSlideDirection("backward");
-                setViewMode("overview");
+                // Both pages move left-to-right back into the overview.
+                switchViewMode("overview", "backward");
               }}
               style={styles.backRow}
               hitSlop={8}

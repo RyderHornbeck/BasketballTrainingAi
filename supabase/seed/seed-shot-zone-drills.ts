@@ -6,6 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 import * as dotenv from "dotenv";
 import * as path from "path";
 import WebSocket from "ws";
+import { stripTextAfterFinalStep } from "./catalog-description.ts";
 import { SHOT_ZONE_DRILLS } from "./shot-zone-drills-catalog.ts";
 
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
@@ -44,7 +45,7 @@ async function main() {
       youtube_video_id: CATALOG_VIDEO_ID,
       start_seconds: 20000 + index,
       end_seconds: null,
-      description: drill.description,
+      description: stripTextAfterFinalStep(drill.description),
       coaching_notes: drill.coaching_notes,
       requires_both_sides: drill.requires_both_sides,
       equipment: ["Basketball"],

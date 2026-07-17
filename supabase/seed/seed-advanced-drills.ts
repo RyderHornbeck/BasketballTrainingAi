@@ -7,6 +7,7 @@ import * as dotenv from "dotenv";
 import * as path from "path";
 import WebSocket from "ws";
 import { ADVANCED_COMBO_DRILLS } from "./advanced-combo-drills-catalog.ts";
+import { stripTextAfterFinalStep } from "./catalog-description.ts";
 
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
@@ -46,7 +47,7 @@ async function main() {
       youtube_video_id: CATALOG_VIDEO_ID,
       start_seconds: 10000 + index,
       end_seconds: null,
-      description: drill.description,
+      description: stripTextAfterFinalStep(drill.description),
       coaching_notes: drill.coaching_notes,
       requires_both_sides: drill.requires_both_sides,
       equipment: drill.equipment ?? ["Basketball"],

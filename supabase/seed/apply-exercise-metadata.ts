@@ -6,6 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 import * as dotenv from "dotenv";
 import * as path from "path";
 import WebSocket from "ws";
+import { stripTextAfterFinalStep } from "./catalog-description.ts";
 import { EXERCISE_CATALOG_METADATA } from "./exercise-catalog-metadata.ts";
 
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
@@ -48,7 +49,7 @@ async function main() {
     const { error: updateError } = await supabase
       .from("exercise_video_clips")
       .update({
-        description: meta.description,
+        description: stripTextAfterFinalStep(meta.description),
         coaching_notes: meta.coaching_notes,
         requires_both_sides: meta.requires_both_sides,
       })

@@ -86,23 +86,81 @@ const LEVEL_INSTRUCTIONS: Record<
   },
 };
 
+const BASIC_SPOT_UP_DRILLS: ShotZoneCatalogDrill[] = [
+  {
+    exercise_name: "Basic Corner 3 Spot-Up",
+    category: "shooting",
+    difficulty_level: "beginner",
+    description:
+      "Start in the right corner behind the three-point line. Step 1: Take 20 stationary corner threes, then repeat the same set from the left corner.",
+    coaching_notes: "Set your feet, stay balanced, and hold your follow-through.",
+    requires_both_sides: true,
+  },
+  {
+    exercise_name: "Basic Wing 3 Spot-Up",
+    category: "shooting",
+    difficulty_level: "beginner",
+    description:
+      "Start on the right wing behind the three-point line. Step 1: Take 20 stationary wing threes, then repeat the same set from the left wing.",
+    coaching_notes: "Square your feet and shoulders directly to the rim.",
+    requires_both_sides: true,
+  },
+  {
+    exercise_name: "Basic Top of Key 3 Spot-Up",
+    category: "shooting",
+    difficulty_level: "beginner",
+    description:
+      "Start at the top of the key behind the three-point line. Step 1: Take 20 stationary top-of-key threes.",
+    coaching_notes: "Stay centered and finish straight through the rim.",
+    requires_both_sides: false,
+  },
+  {
+    exercise_name: "Basic Elbow Mid-Range Spot-Up",
+    category: "shooting",
+    difficulty_level: "beginner",
+    description:
+      "Start at the right elbow on the free-throw line. Step 1: Take 20 stationary mid-range jumpers, then repeat the same set from the left elbow.",
+    coaching_notes: "Rise straight up and land in the same spot.",
+    requires_both_sides: true,
+  },
+  {
+    exercise_name: "Basic Wing Mid-Range Spot-Up",
+    category: "shooting",
+    difficulty_level: "beginner",
+    description:
+      "Start on the right wing inside the three-point line. Step 1: Take 20 stationary wing mid-range jumpers, then repeat the same set from the left wing.",
+    coaching_notes: "Stay balanced and avoid drifting toward the sideline.",
+    requires_both_sides: true,
+  },
+  {
+    exercise_name: "Basic Center Mid-Range Spot-Up",
+    category: "shooting",
+    difficulty_level: "beginner",
+    description:
+      "Start at the center of the free-throw line. Step 1: Take 20 stationary center mid-range jumpers.",
+    coaching_notes: "Keep your elbow under the ball and hold your follow-through.",
+    requires_both_sides: false,
+  },
+];
+
 /**
- * Fifteen text-only spot-up drills:
+ * Text-only spot-up drills:
  * corner, wing, top-of-key, elbow, and center spots at every plan difficulty.
  * Bilateral spots use side-labelled sets, rather than separate left/right drills.
  */
-export const SHOT_ZONE_DRILLS: ShotZoneCatalogDrill[] = (
-  Object.keys(LEVEL_INSTRUCTIONS) as ShotZoneDifficulty[]
-).flatMap((difficulty) => {
-  const level = LEVEL_INSTRUCTIONS[difficulty];
-  return SHOOTING_SPOTS.map((spot) => ({
-    exercise_name: `${level.prefix} ${spot.name} Spot-Up`,
-    category: "shooting" as const,
-    difficulty_level: difficulty,
-    description: spot.requiresBothSides
-      ? `Start at the ${spot.rightLocation} with a basketball. Step 1: ${level.action} Step 2: Shoot the ${spot.shot} and hold your follow-through until the ball reaches the rim. Step 3: ${level.target} Complete the right-side set, then repeat every step from the ${spot.leftLocation} for the left-side set.`
-      : `Start at the ${spot.rightLocation} with a basketball. Step 1: ${level.action} Step 2: Shoot the ${spot.shot} and hold your follow-through until the ball reaches the rim. Step 3: ${level.target}`,
-    coaching_notes: `${spot.coachingNote} ${level.note}`,
-    requires_both_sides: spot.requiresBothSides,
-  }));
-});
+export const SHOT_ZONE_DRILLS: ShotZoneCatalogDrill[] = [
+  ...BASIC_SPOT_UP_DRILLS,
+  ...(Object.keys(LEVEL_INSTRUCTIONS) as ShotZoneDifficulty[]).flatMap((difficulty) => {
+    const level = LEVEL_INSTRUCTIONS[difficulty];
+    return SHOOTING_SPOTS.map((spot) => ({
+      exercise_name: `${level.prefix} ${spot.name} Spot-Up`,
+      category: "shooting" as const,
+      difficulty_level: difficulty,
+      description: spot.requiresBothSides
+        ? `Start at the ${spot.rightLocation} with a basketball. Step 1: ${level.action} Step 2: Shoot the ${spot.shot} and hold your follow-through until the ball reaches the rim. Step 3: ${level.target} Complete the right-side set, then repeat every step from the ${spot.leftLocation} for the left-side set.`
+        : `Start at the ${spot.rightLocation} with a basketball. Step 1: ${level.action} Step 2: Shoot the ${spot.shot} and hold your follow-through until the ball reaches the rim. Step 3: ${level.target}`,
+      coaching_notes: `${spot.coachingNote} ${level.note}`,
+      requires_both_sides: spot.requiresBothSides,
+    }));
+  }),
+];

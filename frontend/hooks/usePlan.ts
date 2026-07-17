@@ -4,6 +4,7 @@ import {
   getWorkoutDays,
   requestNextBlockGeneration,
 } from "@/lib/plan";
+import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { PlanGenerationRequest, WorkoutDay, WorkoutPlan } from "@/types/database";
 import { AppState } from "@/types/plan";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -93,6 +94,14 @@ export function usePlan(): UsePlanResult {
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  useEffect(() => {
+    return onWorkoutUpdated((source) => {
+      if (source === "external") {
+        void load();
+      }
+    });
   }, [load]);
 
   useEffect(() => {
