@@ -105,26 +105,19 @@ export function AchievementUnlockQueue({
   return (
     <Modal transparent visible animationType="none" onRequestClose={dismiss}>
       <View style={styles.backdrop}>
-        <Animated.View style={{ opacity, transform: [{ scale }] }}>
-          <LinearGradient
-            colors={["#FFB347", "#F2721D", "#C2410C"]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.card}
-          >
-            <View style={styles.badgeGlow}>
-              <View style={[styles.badge, { backgroundColor: current.color }]}>
-                <Icon size={48} color="#FFFFFF" weight="fill" />
-              </View>
+        <Animated.View style={[styles.card, { opacity, transform: [{ scale }] }]}>
+          <LinearGradient colors={["#FFF7ED", "#FFE2C6"]} style={styles.badgeGlow}>
+            <View style={[styles.badge, { backgroundColor: current.color }]}>
+              <Icon size={48} color="#FFFFFF" weight="fill" />
             </View>
-            <Text style={styles.eyebrow}>ACHIEVEMENT UNLOCKED</Text>
-            <Text style={styles.title}>{current.title}</Text>
-            <Text style={styles.description}>{current.description}</Text>
-            <Pressable onPress={dismiss} style={({ pressed }) => [styles.button, { opacity: pressed ? 0.86 : 1 }]}>
-              <CheckCircleIcon size={20} color="#C2410C" weight="fill" />
-              <Text style={styles.buttonText}>Awesome</Text>
-            </Pressable>
           </LinearGradient>
+          <Text style={styles.eyebrow}>ACHIEVEMENT UNLOCKED</Text>
+          <Text style={styles.title}>{current.title}</Text>
+          <Text style={styles.description}>{current.description}</Text>
+          <Pressable onPress={dismiss} style={({ pressed }) => [styles.button, { backgroundColor: current.color, opacity: pressed ? 0.86 : 1 }]}>
+            <CheckCircleIcon size={20} color="#FFFFFF" weight="fill" />
+            <Text style={styles.buttonText}>Awesome</Text>
+          </Pressable>
         </Animated.View>
       </View>
     </Modal>
@@ -144,6 +137,7 @@ const styles = StyleSheet.create({
     maxWidth: 360,
     borderRadius: 30,
     alignItems: "center",
+    backgroundColor: "#FFFFFF",
     paddingHorizontal: 26,
     paddingBottom: 26,
     shadowColor: "#000000",
@@ -167,11 +161,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 4,
-    borderColor: "#FFF7ED",
+    borderColor: "#FFFFFF",
   },
-  eyebrow: { color: "#FFF7ED", fontSize: 11, fontWeight: "800", letterSpacing: 1.4 },
-  title: { marginTop: 8, color: "#FFFFFF", fontSize: 27, fontWeight: "800", textAlign: "center" },
-  description: { marginTop: 8, color: "#FFF7ED", fontSize: 14, lineHeight: 21, textAlign: "center" },
+  eyebrow: { color: "#A16207", fontSize: 11, fontWeight: "800", letterSpacing: 1.4 },
+  title: { marginTop: 8, color: "#18181B", fontSize: 27, fontWeight: "800", textAlign: "center" },
+  description: { marginTop: 8, color: "#71717A", fontSize: 14, lineHeight: 21, textAlign: "center" },
   button: {
     width: "100%",
     minHeight: 52,
@@ -181,7 +175,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    backgroundColor: "#FFFFFF",
   },
-  buttonText: { color: "#C2410C", fontSize: 16, fontWeight: "800" },
+  buttonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" },
 });

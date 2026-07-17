@@ -43,6 +43,12 @@ import {
   TimerIcon,
 } from "phosphor-react-native";
 import { useFocusEffect, useRouter } from "expo-router";
+import Animated, {
+  SlideInLeft,
+  SlideInRight,
+  SlideOutLeft,
+  SlideOutRight,
+} from "react-native-reanimated";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -56,6 +62,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 type DaysViewMode = "overview" | "workout";
+type SlideDirection = "forward" | "backward";
 
 export default function DaysScreen() {
   const { colors } = useTheme();
@@ -70,6 +77,7 @@ export default function DaysScreen() {
 
   const [selectedDayNumber, setSelectedDayNumber] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<DaysViewMode>("overview");
+  const [slideDirection, setSlideDirection] = useState<SlideDirection>("forward");
   const [dayDetail, setDayDetail] = useState<WorkoutDayWithExercises | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [progressVersion, setProgressVersion] = useState(0);
@@ -80,9 +88,15 @@ export default function DaysScreen() {
   });
   const [currentStreak, setCurrentStreak] = useState(0);
   const logsRef = useRef<Map<string, ExerciseLogInput>>(new Map());
+  const detailCacheRef = useRef<Map<string, WorkoutDayWithExercises | null>>(new Map());
+  const detailRequestsRef = useRef<Map<string, Promise<WorkoutDayWithExercises | null>>>(new Map());
+  const selectedDayIdRef = useRef<string | null>(null);
+  const logSaveQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
   const finishingRef = useRef(false);
+  const [finishingWorkout, setFinishingWorkout] = useState(false);
   const [retryingBlock, setRetryingBlock] = useState(false);
   const [editingWorkout, setEditingWorkout] = useState(false);
+  const [completionAnimationTokens, setCompletionAnimationTokens] = useState<Record<string, number>>({});
 
   const defaultDayNumber = useMemo(() => {
     if (days.length === 0) return null;
@@ -103,40 +117,82 @@ export default function DaysScreen() {
   const selectedDay = days.find((d) => d.day_number === selectedDayNumber) ?? null;
   const selectedDayId = selectedDay?.id ?? null;
 
-  const loadDetail = useCallback(async (showLoading = true) => {
-    if (!selectedDayId) return;
-    if (showLoading) setDetailLoading(true);
-    try {
-      const detail = await getWorkoutDayWithExercises(selectedDayId);
-      setDayDetail(detail);
-      logsRef.current = new Map();
-      detail?.exercises.forEach((ex) => {
-        if (ex.log) {
-          logsRef.current.set(ex.id, {
-            exercise_id: ex.id,
-            completed: ex.log.completed,
-            makes: ex.log.makes,
-            attempts: ex.log.attempts,
-            minutes_completed: ex.log.minutes_completed,
-            difficulty: ex.log.difficulty,
-            notes: ex.log.notes,
-          });
-        }
-      });
-    } catch (err) {
-      console.error("Failed to load day detail:", err);
-    } finally {
-      if (showLoading) setDetailLoading(false);
-    }
+  useEffect(() => {
+    selectedDayIdRef.current = selectedDayId;
   }, [selectedDayId]);
 
-  useEffect(() => {
-    loadDetail();
-  }, [loadDetail]);
+  const applySelectedDetail = useCallback((detail: WorkoutDayWithExercises | null) => {
+    setDayDetail(detail);
+    logsRef.current = new Map();
+    detail?.exercises.forEach((ex) => {
+      if (ex.log) {
+        logsRef.current.set(ex.id, {
+          exercise_id: ex.id,
+          completed: ex.log.completed,
+          makes: ex.log.makes,
+          attempts: ex.log.attempts,
+          minutes_completed: ex.log.minutes_completed,
+          difficulty: ex.log.difficulty,
+          notes: ex.log.notes,
+        });
+      }
+    });
+  }, []);
+
+  const fetchDayDetail = useCallback(async (dayId: string, force = false) => {
+    if (!force) {
+      const cached = detailCacheRef.current.get(dayId);
+      if (cached !== undefined) return cached;
+      const inFlight = detailRequestsRef.current.get(dayId);
+      if (inFlight) return inFlight;
+    }
+
+    const request = getWorkoutDayWithExercises(dayId)
+      .then((detail) => {
+        detailCacheRef.current.set(dayId, detail);
+        return detail;
+      })
+      .finally(() => detailRequestsRef.current.delete(dayId));
+    detailRequestsRef.current.set(dayId, request);
+    return request;
+  }, []);
+
+  const loadDetail = useCallback(
+    async (showLoading = false, force = false) => {
+      if (!selectedDayId) return;
+      const cached = !force ? detailCacheRef.current.get(selectedDayId) : undefined;
+      if (cached !== undefined) {
+        applySelectedDetail(cached);
+        return;
+      }
+      if (showLoading) setDetailLoading(true);
+      try {
+        const detail = await fetchDayDetail(selectedDayId, force);
+        if (selectedDayIdRef.current === selectedDayId) applySelectedDetail(detail);
+      } catch (err) {
+        console.error("Failed to load day detail:", err);
+      } finally {
+        if (showLoading) setDetailLoading(false);
+      }
+    },
+    [applySelectedDetail, fetchDayDetail, selectedDayId]
+  );
 
   useEffect(() => {
-    if (selectedDayId) void loadDetail(false);
-  }, [days, selectedDayId, loadDetail]);
+    void loadDetail(!dayDetail);
+  }, [selectedDayId, loadDetail]);
+
+  useEffect(() => {
+    if (selectedDayNumber == null) return;
+    const neighbors = [selectedDayNumber - 1, selectedDayNumber + 1]
+      .map((dayNumber) => days.find((day) => day.day_number === dayNumber)?.id)
+      .filter((id): id is string => Boolean(id));
+    neighbors.forEach((dayId) => {
+      void fetchDayDetail(dayId).catch((err) => {
+        console.warn("Failed to prefetch workout day:", err);
+      });
+    });
+  }, [days, fetchDayDetail, selectedDayNumber]);
 
   const loadWeeklyStats = useCallback(async () => {
     try {
@@ -206,9 +262,16 @@ export default function DaysScreen() {
   );
 
   useEffect(() => {
-    return onWorkoutUpdated(() => {
+    return onWorkoutUpdated((source) => {
+      // Manual cards already hold the latest optimistic state. Reloading them
+      // here would overwrite in-progress typing and make toggles flicker.
+      if (source === "manual") {
+        void loadWeeklyStats();
+        return;
+      }
+      detailCacheRef.current.clear();
       void refreshPlan();
-      void loadDetail(false);
+      void loadDetail(false, true);
       void loadWeeklyStats();
       void loadCurrentStreak();
     });
@@ -268,6 +331,7 @@ export default function DaysScreen() {
         onPress: () => {
           void (async () => {
             finishingRef.current = true;
+            setFinishingWorkout(true);
             try {
               await finishWorkoutDay(dayDetail, logs);
               await Promise.all([
@@ -283,6 +347,7 @@ export default function DaysScreen() {
               );
             } finally {
               finishingRef.current = false;
+              setFinishingWorkout(false);
             }
           })();
         },
@@ -291,26 +356,55 @@ export default function DaysScreen() {
   }, [dayDetail, loadCurrentStreak, loadDetail, loadWeeklyStats, refreshPlan]);
 
   const handleLogChange = useCallback(
-    async (log: ExerciseLogInput) => {
+    (log: ExerciseLogInput) => {
+      const previousLog =
+        logsRef.current.get(log.exercise_id) ??
+        dayDetail?.exercises.find((exercise) => exercise.id === log.exercise_id)?.log;
       logsRef.current.set(log.exercise_id, log);
       setProgressVersion((v) => v + 1);
       if (!dayDetail) return;
-
-      try {
-        await saveExerciseLog(dayDetail.id, log);
-        if (!dayDetail.completed) {
-          await tryAutoFinishDay(dayDetail);
-        }
-      } catch (err) {
-        console.error("Failed to save exercise log:", err);
+      if (!previousLog?.completed && log.completed) {
+        setCompletionAnimationTokens((tokens) => ({
+          ...tokens,
+          [log.exercise_id]: Date.now(),
+        }));
       }
+
+      // Save rapid edits in order per exercise. Without this, a slower request
+      // for an earlier keystroke/toggle can overwrite the user's later value.
+      const previous = logSaveQueuesRef.current.get(log.exercise_id) ?? Promise.resolve();
+      const save = previous
+        .catch(() => undefined)
+        .then(async () => {
+          await saveExerciseLog(dayDetail.id, log);
+          if (!dayDetail.completed) {
+            await tryAutoFinishDay(dayDetail);
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to save exercise log:", err);
+        });
+      logSaveQueuesRef.current.set(log.exercise_id, save);
     },
     [dayDetail, tryAutoFinishDay]
   );
 
-  const handleSelectDay = useCallback((dayNumber: number) => {
-    setSelectedDayNumber(dayNumber);
-  }, []);
+  const handleSelectDay = useCallback(
+    (dayNumber: number) => {
+      const currentDayNumber = selectedDayNumber ?? dayNumber;
+      if (dayNumber === currentDayNumber) return;
+      setSlideDirection(dayNumber > currentDayNumber ? "forward" : "backward");
+      const nextDayId = days.find((day) => day.day_number === dayNumber)?.id;
+      const cached = nextDayId ? detailCacheRef.current.get(nextDayId) : undefined;
+      if (cached !== undefined) {
+        applySelectedDetail(cached);
+      } else {
+        setDayDetail(null);
+      }
+      setSelectedDayNumber(dayNumber);
+    },
+    [applySelectedDetail, days, selectedDayNumber]
+  );
 
   const confirmDeleteExercise = useCallback(
     (exerciseId: string, exerciseName: string | null) => {
@@ -420,6 +514,10 @@ export default function DaysScreen() {
     const previousDay = Math.max(1, (selectedDay.day_number ?? 1) - 1);
     return `Complete the previous workout to unlock Day ${selectedDay.day_number ?? ""}.`;
   }, [days, selectedDay]);
+  const viewEntering =
+    slideDirection === "forward" ? SlideInRight.duration(220) : SlideInLeft.duration(220);
+  const viewExiting =
+    slideDirection === "forward" ? SlideOutLeft.duration(180) : SlideOutRight.duration(180);
 
   if (planLoading) {
     return (
@@ -507,9 +605,21 @@ export default function DaysScreen() {
         keyboardShouldPersistTaps="handled"
         nestedScrollEnabled
         refreshControl={
-          <RefreshControl refreshing={detailLoading} onRefresh={loadDetail} tintColor={colors.accent} />
+          <RefreshControl
+            refreshing={detailLoading}
+            onRefresh={() => {
+              if (selectedDayId) detailCacheRef.current.delete(selectedDayId);
+              void loadDetail(true, true);
+            }}
+            tintColor={colors.accent}
+          />
         }
       >
+        <Animated.View
+          key={`${selectedDayId ?? "none"}-${viewMode}`}
+          entering={viewEntering}
+          exiting={viewExiting}
+        >
         {!selectedDay ? null : !canViewDay ? (
           <Card style={styles.lockedCard}>
             <LockIcon size={40} color={colors.textMuted} weight="duotone" />
@@ -592,7 +702,10 @@ export default function DaysScreen() {
             </Card>
 
             <Pressable
-              onPress={() => setViewMode("workout")}
+              onPress={() => {
+                setSlideDirection("forward");
+                setViewMode("workout");
+              }}
               style={({ pressed }) => [
                 styles.startWorkoutCard,
                 {
@@ -631,6 +744,7 @@ export default function DaysScreen() {
             <Pressable
               onPress={() => {
                 setEditingWorkout(false);
+                setSlideDirection("backward");
                 setViewMode("overview");
               }}
               style={styles.backRow}
@@ -752,6 +866,7 @@ export default function DaysScreen() {
                   exercise={exercise}
                   readOnly={false}
                   editMode={editingWorkout}
+                  completionAnimationToken={completionAnimationTokens[exercise.id]}
                   onDelete={() => confirmDeleteExercise(exercise.id, exercise.name)}
                   onLogChange={handleLogChange}
                 />
@@ -767,21 +882,32 @@ export default function DaysScreen() {
             ) : (
               <Pressable
                 onPress={confirmFinishWorkout}
+                disabled={finishingWorkout}
                 style={({ pressed }) => [
                   styles.finishWorkoutButton,
                   {
                     backgroundColor: colors.accent,
-                    opacity: pressed ? 0.86 : 1,
+                    opacity: finishingWorkout || pressed ? 0.86 : 1,
                     shadowColor: colors.accent,
                   },
                 ]}
               >
-                <CheckCircleIcon size={20} color="#FFFFFF" weight="fill" />
-                <Text style={styles.finishWorkoutButtonText}>Finish workout</Text>
+                {finishingWorkout ? (
+                  <>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <Text style={styles.finishWorkoutButtonText}>Saving workout...</Text>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircleIcon size={20} color="#FFFFFF" weight="fill" />
+                    <Text style={styles.finishWorkoutButtonText}>Finish workout</Text>
+                  </>
+                )}
               </Pressable>
             )}
           </View>
         )}
+        </Animated.View>
       </ScrollView>
     </SafeAreaView>
   );

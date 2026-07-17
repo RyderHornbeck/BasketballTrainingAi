@@ -49,36 +49,10 @@ export function coachDailyBudgetFromUsage(
 
 export async function fetchDailyCoachBudget(): Promise<CoachDailyBudget> {
   const budgetUsd = COACH_DAILY_BUDGET_USD;
-  const { data: userData, error: userError } = await supabase.auth.getUser();
-  if (userError || !userData.user) throw new Error("Not authenticated");
-
-  const { data: profile, error: profileError } = await supabase
-    .from("profiles")
-    .select("timezone")
-    .eq("id", userData.user.id)
-    .maybeSingle();
-
-  if (profileError) throw new Error(profileError.message);
-  const timezone = profile?.timezone ?? "UTC";
-  const dateFormatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const parts = dateFormatter.formatToParts(new Date());
-  const localDate = `${parts.find((part) => part.type === "year")?.value}-${parts.find(
-    (part) => part.type === "month"
-  )?.value}-${parts.find((part) => part.type === "day")?.value}`;
-  const { data, error } = await supabase
-    .from("coach_daily_usage")
-    .select("spent_usd")
-    .eq("user_id", userData.user.id)
-    .eq("usage_date", localDate)
-    .maybeSingle();
+  const { data, error } = await supabase.rpc("get_my_coach_daily_usage");
   if (error) throw new Error(error.message);
-
-  return coachDailyBudgetFromUsage(Number(data?.spent_usd ?? 0), budgetUsd);
+  const daily = Array.isArray(data) ? data[0] : data;
+  return coachDailyBudgetFromUsage(Number(daily?.spent_usd ?? 0), budgetUsd);
 }
 
 export function formatCoachBudgetCents(usd: number): string {
@@ -215,37 +189,44 @@ export async function logCoachUsage(params: {
   sessionKey: string;
   totals: CoachUsageTotals;
 }): Promise<{ spentUsd: number; budgetUsd: number; remainingUsd: number } | null> {
-  try {
-    const { data, error } = await supabase.functions.invoke<{
-      daily_usage?: { spent_usd: number; budget_usd: number; remaining_usd: number };
-    }>("coach-usage", {
-      body: {
-        day_id: params.dayId,
-        session_key: params.sessionKey,
-        model: params.totals.model,
-        response_count: params.totals.responseCount,
-        session_duration_ms: params.totals.sessionDurationMs,
-        input_text_tokens: params.totals.inputTextTokens,
-        cached_text_tokens: params.totals.cachedTextTokens,
-        cached_audio_tokens: params.totals.cachedAudioTokens,
-        input_audio_tokens: params.totals.inputAudioTokens,
-        output_text_tokens: params.totals.outputTextTokens,
-        output_audio_tokens: params.totals.outputAudioTokens,
-      },
-    });
-    if (error) throw error;
-    const daily = data?.daily_usage;
-    return daily
-      ? {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const { data, error } = await supabase.functions.invoke<{
+        daily_usage?: { spent_usd: number; budget_usd: number; remaining_usd: number };
+      }>("coach-usage", {
+        body: {
+          day_id: params.dayId,
+          session_key: params.sessionKey,
+          model: params.totals.model,
+          response_count: params.totals.responseCount,
+          session_duration_ms: params.totals.sessionDurationMs,
+          input_text_tokens: params.totals.inputTextTokens,
+          cached_text_tokens: params.totals.cachedTextTokens,
+          cached_audio_tokens: params.totals.cachedAudioTokens,
+          input_audio_tokens: params.totals.inputAudioTokens,
+          output_text_tokens: params.totals.outputTextTokens,
+          output_audio_tokens: params.totals.outputAudioTokens,
+        },
+      });
+      if (error) throw error;
+      const daily = data?.daily_usage;
+      if (daily) {
+        return {
           spentUsd: Number(daily.spent_usd),
           budgetUsd: Number(daily.budget_usd),
           remainingUsd: Number(daily.remaining_usd),
-        }
-      : null;
-  } catch (err) {
-    console.warn("Failed to log coach usage:", err);
-    return null;
+        };
+      }
+      throw new Error("Coach usage response did not include a daily balance.");
+    } catch (err) {
+      if (attempt === 3) {
+        console.warn("Failed to log coach usage after retries:", err);
+        return null;
+      }
+      await new Promise((resolve) => setTimeout(resolve, attempt * 250));
+    }
   }
+  return null;
 }
 
 export function createClientRequestId(prefix: string): string {

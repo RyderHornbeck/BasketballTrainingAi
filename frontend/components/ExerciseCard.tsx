@@ -22,7 +22,15 @@ import { LinearGradient } from "expo-linear-gradient";
 import { CaretLeftIcon, CaretRightIcon, TimerIcon, XIcon } from "phosphor-react-native";
 import { useRouter } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Linking, Pressable, StyleSheet, TextInput as RNTextInput, View } from "react-native";
+import {
+  Alert,
+  Animated,
+  Linking,
+  Pressable,
+  StyleSheet,
+  TextInput as RNTextInput,
+  View,
+} from "react-native";
 import { WebView } from "react-native-webview";
 import { Card } from "./Card";
 import { Text } from "./Text";
@@ -31,6 +39,9 @@ interface ExerciseCardProps {
   exercise: WorkoutExerciseWithClip;
   readOnly?: boolean;
   editMode?: boolean;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+  completionAnimationToken?: number;
   onDelete?: () => void;
   onLogChange: (log: ExerciseLogInput) => void;
 }
@@ -98,8 +109,12 @@ function SetShootingRow({
   targetAttempts,
   targetMakes,
   completed,
+  makesDraft,
+  attemptsDraft,
   onMakesChange,
+  onMakesBlur,
   onAttemptsChange,
+  onAttemptsBlur,
   readOnly,
   colors,
 }: {
@@ -110,8 +125,12 @@ function SetShootingRow({
   targetAttempts: number | null;
   targetMakes: number | null;
   completed: boolean;
+  makesDraft?: string | null;
+  attemptsDraft?: string | null;
   onMakesChange: (value: string) => void;
+  onMakesBlur: () => void;
   onAttemptsChange: (value: string) => void;
+  onAttemptsBlur: () => void;
   readOnly?: boolean;
   colors: ReturnType<typeof useTheme>["colors"];
 }) {
@@ -143,8 +162,9 @@ function SetShootingRow({
         <View style={styles.shootingCol}>
           <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Makes</Text>
           <RNTextInput
-            value={makes}
+            value={makesDraft ?? makes}
             onChangeText={readOnly ? undefined : onMakesChange}
+            onBlur={onMakesBlur}
             editable={!readOnly}
             keyboardType="number-pad"
             inputMode="numeric"
@@ -160,8 +180,9 @@ function SetShootingRow({
         <View style={styles.shootingCol}>
           <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Attempts</Text>
           <RNTextInput
-            value={attempts}
+            value={attemptsDraft ?? attempts}
             onChangeText={readOnly ? undefined : onAttemptsChange}
+            onBlur={onAttemptsBlur}
             editable={!readOnly}
             keyboardType="number-pad"
             inputMode="numeric"
@@ -214,14 +235,19 @@ export function ExerciseCard({
   exercise,
   readOnly,
   editMode = false,
+  expanded: expandedProp,
+  onExpandedChange,
+  completionAnimationToken,
   onDelete,
   onLogChange,
 }: ExerciseCardProps) {
   const { colors, scheme } = useTheme();
   const router = useRouter();
-  const [expanded, setExpanded] = useState(false);
+  const [internalExpanded, setInternalExpanded] = useState(false);
   const [videoError, setVideoError] = useState(false);
   const [videoStarted, setVideoStarted] = useState(false);
+  const completionScale = useRef(new Animated.Value(1)).current;
+  const seenCompletionTokenRef = useRef<number | undefined>(completionAnimationToken);
   const previousExerciseIdRef = useRef(exercise.id);
 
   const baseSetPlan = useMemo(() => buildSetPlan(exercise), [exercise]);
@@ -233,6 +259,8 @@ export function ExerciseCard({
   const [minutesOverride, setMinutesOverride] = useState<number | null>(() =>
     resolveMinutesOverride(decodeExerciseLogMeta(exercise.log?.notes ?? null))
   );
+  const [attemptsDrafts, setAttemptsDrafts] = useState<Record<number, string>>({});
+  const [makesDrafts, setMakesDrafts] = useState<Record<number, string>>({});
   const setPlan = useMemo(
     () => applyMinutesOverride(applyAttemptsOverride(baseSetPlan, attemptsOverride), minutesOverride),
     [baseSetPlan, attemptsOverride, minutesOverride]
@@ -260,17 +288,36 @@ export function ExerciseCard({
     const hydrated = hydrateSetLogs(baseSetPlan, meta, exercise.log ?? undefined);
     setAttemptsOverride(resolveAttemptsOverride(meta, hydrated));
     setMinutesOverride(resolveMinutesOverride(meta));
+    setAttemptsDrafts({});
+    setMakesDrafts({});
     setSetLogs(hydrated);
     setDifficulty(exercise.log?.difficulty ?? 0);
     setUserNotes(meta.user_notes ?? "");
     hasUserEditsRef.current = false;
     if (previousExerciseIdRef.current !== exercise.id) {
       previousExerciseIdRef.current = exercise.id;
-      setExpanded(false);
+      setInternalExpanded(false);
       setVideoStarted(false);
       setVideoError(false);
     }
   }, [exercise.id, exercise.log, baseSetPlan]);
+
+  useEffect(() => {
+    if (
+      completionAnimationToken == null ||
+      completionAnimationToken === seenCompletionTokenRef.current
+    ) {
+      return;
+    }
+    seenCompletionTokenRef.current = completionAnimationToken;
+    completionScale.setValue(0.72);
+    Animated.spring(completionScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      friction: 4,
+      tension: 160,
+    }).start();
+  }, [completionAnimationToken, completionScale]);
 
   const clip = exercise.video_clip;
   const showVideo = hasVideoDemo(clip);
@@ -331,41 +378,79 @@ export function ExerciseCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setLogs, difficulty, userNotes, attemptsOverride, minutesOverride, setPlan]);
 
-  const syncAttemptsAcrossSets = (text: string) => {
+  const commitMakes = (setNumber: number) => {
+    const draft = makesDrafts[setNumber];
+    if (draft == null) return;
+    const makes = draft === "" ? null : Number.parseInt(draft, 10);
+    const row = setLogs.find((set) => set.set_number === setNumber);
+    const currentAttempts = row?.attempts ?? setPlan.perSetAttempts ?? 0;
+    const correctedAttempts = Math.max(currentAttempts, makes ?? 0);
+
     hasUserEditsRef.current = true;
-    const attemptsNum = text ? parseInt(text.replace(/[^0-9]/g, ""), 10) : 0;
-    if (!attemptsNum || attemptsNum <= 0) {
+    if (correctedAttempts !== currentAttempts) {
+      // A makes correction applies only to this set.
       setAttemptsOverride(null);
-      const resetPlan = applyAttemptsOverride(baseSetPlan, null);
-      setSetLogs((prev) =>
-        prev.map((row) => {
-          const makesNum = row.makes ?? 0;
-          const attempts = resetPlan.perSetAttempts;
-          return {
-            ...row,
-            makes: attempts != null ? Math.min(makesNum, attempts) : makesNum,
-            attempts,
-            completed: row.makes != null && (attempts ?? 0) > 0,
-          };
-        })
+    }
+    setSetLogs((previous) =>
+      previous.map((set) => ({
+        ...set,
+        makes: set.set_number === setNumber ? makes : set.makes,
+        attempts:
+          set.set_number === setNumber && correctedAttempts !== currentAttempts
+            ? correctedAttempts
+            : set.attempts,
+        completed:
+          set.set_number === setNumber
+            ? makes != null && correctedAttempts > 0
+            : set.completed,
+      }))
+    );
+    setMakesDrafts((drafts) => {
+      const next = { ...drafts };
+      delete next[setNumber];
+      return next;
+    });
+  };
+
+  const commitAttempts = (setNumber: number) => {
+    const attemptsDraft = attemptsDrafts[setNumber];
+    if (attemptsDraft == null) return;
+    const requestedAttempts =
+      attemptsDraft === "" ? 0 : Number.parseInt(attemptsDraft, 10);
+    const row = setLogs.find((set) => set.set_number === setNumber);
+    const setMakes = row?.makes ?? 0;
+    const wasCorrected = requestedAttempts < setMakes;
+    const correctedAttempts = wasCorrected
+      ? setMakes
+      : requestedAttempts > 0
+        ? requestedAttempts
+        : baseSetPlan.perSetAttempts;
+
+    if (wasCorrected) {
+      Alert.alert(
+        "Attempts can’t be lower than makes",
+        `Attempts for Set ${setNumber} were changed to ${setMakes} to match your makes.`
       );
-      return;
     }
 
-    const scaledPlan = applyAttemptsOverride(baseSetPlan, attemptsNum);
-    setAttemptsOverride(attemptsNum);
-    setSetLogs((prev) =>
-      prev.map((row) => {
-        const makesNum = row.makes ?? 0;
-        return {
-          ...row,
-          makes: Math.min(makesNum, attemptsNum),
-          attempts: attemptsNum,
-          completed:
-            row.makes != null && attemptsNum > 0,
-        };
-      })
+    hasUserEditsRef.current = true;
+    setAttemptsOverride(null);
+    setSetLogs((previous) =>
+      previous.map((set) =>
+        set.set_number === setNumber
+          ? {
+              ...set,
+              attempts: correctedAttempts,
+              completed: set.makes != null && (correctedAttempts ?? 0) > 0,
+            }
+          : set
+      )
     );
+    setAttemptsDrafts((drafts) => {
+      const next = { ...drafts };
+      delete next[setNumber];
+      return next;
+    });
   };
 
   const toggleSetComplete = (setNumber: number) => {
@@ -378,7 +463,12 @@ export function ExerciseCard({
     });
   };
 
-  const toggleExpand = () => setExpanded((v) => !v);
+  const expanded = expandedProp ?? internalExpanded;
+  const toggleExpand = () => {
+    const next = !expanded;
+    onExpandedChange?.(next);
+    if (expandedProp == null) setInternalExpanded(next);
+  };
 
   const openInYouTube = () => {
     if (watchUrl) Linking.openURL(watchUrl);
@@ -426,17 +516,20 @@ export function ExerciseCard({
           targetAttempts={setPlan.perSetAttempts}
           targetMakes={setPlan.perSetMakes}
           completed={row.completed}
+          makesDraft={makesDrafts[row.set_number]}
+          attemptsDraft={attemptsDrafts[row.set_number]}
           readOnly={readOnly}
           colors={colors}
           onMakesChange={(text) => {
-            const makesNum = text ? parseInt(text.replace(/[^0-9]/g, ""), 10) : 0;
-            const attemptsNum = row.attempts ?? setPlan.perSetAttempts ?? 0;
-            updateSet(row.set_number, {
-              makes: text ? Math.min(makesNum, attemptsNum) : null,
-              completed: Boolean(text) && attemptsNum > 0,
-            });
+            const digits = text.replace(/[^0-9]/g, "");
+            setMakesDrafts((drafts) => ({ ...drafts, [row.set_number]: digits }));
           }}
-          onAttemptsChange={syncAttemptsAcrossSets}
+          onMakesBlur={() => commitMakes(row.set_number)}
+          onAttemptsChange={(text) => {
+            const digits = text.replace(/[^0-9]/g, "");
+            setAttemptsDrafts((drafts) => ({ ...drafts, [row.set_number]: digits }));
+          }}
+          onAttemptsBlur={() => commitAttempts(row.set_number)}
         />
       ));
     }
@@ -480,7 +573,7 @@ export function ExerciseCard({
 
         <View style={styles.headerActions}>
           <Pressable onPress={editMode ? onDelete : toggleExpand} hitSlop={8}>
-            <View
+            <Animated.View
               style={[
                 styles.headerCheck,
                 {
@@ -494,6 +587,7 @@ export function ExerciseCard({
                     : completed
                       ? colors.accent
                       : colors.border,
+                transform: [{ scale: completionScale }],
                 },
               ]}
             >
@@ -502,7 +596,7 @@ export function ExerciseCard({
               ) : completed ? (
                 <Ionicons name="checkmark" size={16} color="#FFFFFF" />
               ) : null}
-            </View>
+            </Animated.View>
           </Pressable>
         </View>
       </View>

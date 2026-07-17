@@ -148,7 +148,8 @@ export function resolveAttemptsOverride(
     .filter((value): value is number => value != null && value > 0);
   if (!attempts.length) return null;
   const first = attempts[0];
-  return attempts.every((value) => value === first) ? first : attempts[attempts.length - 1];
+  // Differing values are intentional per-set edits, not a drill-wide override.
+  return attempts.every((value) => value === first) ? first : null;
 }
 
 export function createEmptySetLogs(plan: ExerciseSetPlan): SetLogEntry[] {

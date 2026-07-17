@@ -476,7 +476,7 @@ export async function saveExerciseLog(
     { onConflict: "exercise_id" }
   );
   if (error) throw new Error(`Failed to save log: ${error.message}`);
-  emitWorkoutUpdated();
+  emitWorkoutUpdated("manual");
 }
 
 /**

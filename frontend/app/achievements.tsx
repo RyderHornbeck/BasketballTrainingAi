@@ -221,7 +221,13 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { fontSize: 20, fontWeight: "800" },
   collectionCount: { fontSize: 14, fontWeight: "800" },
-  grid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", rowGap: 24 },
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "flex-start",
+    columnGap: "3.8%",
+    rowGap: 24,
+  },
   badgeCard: {
     width: "30.8%",
     minHeight: 174,

@@ -733,13 +733,10 @@ export class RealtimeCoachSession {
     };
     this.callbacks?.onUsage?.(totals);
 
-    const totalSpentUsd = this.dailySpentBaseline + totals.estimatedCostUsd;
-    this.callbacks?.onBudgetUpdate?.(totalSpentUsd, this.dailyBudgetUsd);
     const sessionKey = this.sessionKey;
     if (sessionKey) {
       const daily = await logCoachUsage({ dayId: this.dayId, sessionKey, totals });
       if (daily) {
-        this.dailySpentBaseline = daily.spentUsd;
         this.dailyBudgetUsd = daily.budgetUsd;
         this.callbacks?.onBudgetUpdate?.(daily.spentUsd, daily.budgetUsd);
         if (daily.remainingUsd <= 0) {
@@ -747,14 +744,13 @@ export class RealtimeCoachSession {
           void this.disconnect("daily_budget");
           return;
         }
+      } else {
+        // Keep the conversation alive on a transient logging failure. Totals
+        // are cumulative, so the next response and normal disconnect both
+        // retry the complete session usage without losing prior tokens.
+        console.warn("Coach usage persistence delayed; it will retry.");
       }
     }
-    if (totalSpentUsd >= this.dailyBudgetUsd) {
-      this.callbacks?.onError(COACH_LIMIT_MESSAGES.dailyBudgetExhausted);
-      void this.disconnect("daily_budget");
-      return;
-    }
-
     const output = event.response?.output ?? [];
     const functionCalls = output.filter(
       (item): item is FunctionCallItem => item.type === "function_call"

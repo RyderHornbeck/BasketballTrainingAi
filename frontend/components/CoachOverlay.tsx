@@ -48,7 +48,8 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     dailyBudget && dailyBudget.budgetUsd > 0
       ? Math.max(0, Math.min(1, dailyBudget.remainingUsd / dailyBudget.budgetUsd))
       : 0;
-  const remainingBudgetPercent = Math.round(remainingBudgetProgress * 100);
+  // Never round a non-zero spend back up to "100% left".
+  const remainingBudgetPercent = Math.floor(remainingBudgetProgress * 100);
 
   useEffect(() => {
     void activateKeepAwakeAsync("coach-overlay");
