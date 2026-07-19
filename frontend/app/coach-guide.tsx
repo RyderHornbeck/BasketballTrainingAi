@@ -9,6 +9,19 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 const GUIDE_SECTIONS = [
   {
+    icon: "headset-outline" as const,
+    title: "Best voice experience",
+    description:
+      "Realtime coaching needs a decent-to-good, stable internet connection. Bluetooth headphones are needed for the best voice experience; connect them before opening Coach and speak clearly.",
+    examples: [
+      "Use a decent-to-good Wi-Fi or cellular connection.",
+      "Connect Bluetooth headphones so the coach audio does not feed back into your microphone.",
+      "Speak clearly and give one result, question, or instruction at a time.",
+      "You can interrupt while Coach is talking. Coach will stop its original response and begin responding to what you are saying now.",
+      "If you want the complete original answer, let Coach finish before speaking again.",
+    ],
+  },
+  {
     icon: "basketball-outline" as const,
     title: "Log shots and sets",
     description:
@@ -75,6 +88,9 @@ const GUIDE_SECTIONS = [
       "Ask about targets, results, technique, progress, or any drill in today’s workout.",
     examples: [
       '"How many makes do I have on this drill?"',
+      '"How many exercises do I have left?"',
+      '"What drill am I on?"',
+      '"What’s my shooting percentage so far in this workout?"',
       '"What is the target for set three?"',
       '"How do I keep my elbow aligned?"',
     ],

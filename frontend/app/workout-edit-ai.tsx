@@ -25,6 +25,8 @@ interface ChatMessage {
   content: string;
 }
 
+const MAX_MESSAGES_PER_WORKOUT = 10;
+
 function TypingBubble({ colors }: { colors: ReturnType<typeof useTheme>["colors"] }) {
   const [dotOne] = useState(() => new Animated.Value(0));
   const [dotTwo] = useState(() => new Animated.Value(0));
@@ -82,7 +84,7 @@ export default function WorkoutEditAIScreen() {
   const [sending, setSending] = useState(false);
   const [undoing, setUndoing] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
-  const [remaining, setRemaining] = useState(50);
+  const [remaining, setRemaining] = useState(MAX_MESSAGES_PER_WORKOUT);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -94,12 +96,21 @@ export default function WorkoutEditAIScreen() {
         .eq("day_id", dayId)
         .order("created_at", { ascending: true })
         .limit(100),
-      supabase.functions.invoke<{ can_undo?: boolean }>("workout-editor", {
+      supabase.functions.invoke<{ can_undo?: boolean; remaining_messages?: number }>("workout-editor", {
         body: { action: "status", day_id: dayId },
       }),
     ]).then(([{ data }, { data: status }]) => {
-      setMessages((data as ChatMessage[]) ?? []);
+      const loadedMessages = (data as ChatMessage[]) ?? [];
+      setMessages(loadedMessages);
       setCanUndo(Boolean(status?.can_undo));
+      setRemaining(
+        status?.remaining_messages ??
+          Math.max(
+            0,
+            MAX_MESSAGES_PER_WORKOUT -
+              loadedMessages.filter((message) => message.role === "user").length
+          )
+      );
     });
   }, [dayId]);
 
@@ -208,7 +219,6 @@ export default function WorkoutEditAIScreen() {
         </Pressable>
         <View style={styles.headerCopy}>
           <Text style={[styles.title, { color: colors.text }]}>Edit with AI</Text>
-          <Text style={[styles.limit, { color: colors.textMuted }]}>{remaining} messages left today</Text>
         </View>
         <Pressable
           accessibilityRole="button"
@@ -330,7 +340,6 @@ const styles = StyleSheet.create({
   },
   undoText: { fontSize: 12, fontWeight: "800" },
   title: { fontSize: 19, fontWeight: "800" },
-  limit: { fontSize: 11, fontWeight: "600", marginTop: 1 },
   messages: { flexGrow: 1, padding: 18, gap: 10 },
   emptyCard: { marginTop: 30, borderRadius: 20, padding: 20 },
   emptyTitle: { fontSize: 17, fontWeight: "800" },

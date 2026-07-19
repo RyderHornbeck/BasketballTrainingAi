@@ -1,6 +1,7 @@
 // Full-screen realtime voice coach. Audio-only — listens continuously while open.
 
 import { Text } from "@/components/Text";
+import { NoConnectionBanner } from "@/components/NoConnectionBanner";
 import { useCoach } from "@/hooks/useCoach";
 import { useTheme } from "@/hooks/useTheme";
 import { Ionicons } from "@expo/vector-icons";
@@ -136,6 +137,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
   return (
     <Modal visible animationType="slide" onRequestClose={handleClose}>
       <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <NoConnectionBanner />
         <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
           <View style={styles.headerLeft}>
             <Text style={[styles.title, { color: colors.text }]}>Coach</Text>

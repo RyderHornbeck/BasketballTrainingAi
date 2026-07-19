@@ -6,7 +6,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const MODEL = Deno.env.get("OPENAI_WORKOUT_EDITOR_MODEL") ?? "gpt-4.1-mini";
-const DAILY_LIMIT = 50;
+const WORKOUT_MESSAGE_LIMIT = 10;
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -165,14 +165,27 @@ Deno.serve(async (req: Request) => {
     if (!day) return json({ error: "Workout not found" }, 404);
 
     if (action === "status") {
-      const { count: undoCount, error: undoError } = await supabase
-        .from("workout_edit_revisions")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", userId)
-        .eq("day_id", dayId)
-        .is("undone_at", null);
+      const [{ count: undoCount, error: undoError }, { count: messageCount, error: countError }] =
+        await Promise.all([
+          supabase
+            .from("workout_edit_revisions")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", userId)
+            .eq("day_id", dayId)
+            .is("undone_at", null),
+          supabase
+            .from("workout_edit_messages")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", userId)
+            .eq("day_id", dayId)
+            .eq("role", "user"),
+        ]);
       if (undoError) throw undoError;
-      return json({ can_undo: (undoCount ?? 0) > 0 });
+      if (countError) throw countError;
+      return json({
+        can_undo: (undoCount ?? 0) > 0,
+        remaining_messages: Math.max(0, WORKOUT_MESSAGE_LIMIT - (messageCount ?? 0)),
+      });
     }
 
     if (action === "undo") {
@@ -218,7 +231,7 @@ Deno.serve(async (req: Request) => {
       remaining?: number;
     } | null;
     if (reservationResult?.status === "limit") {
-      return json({ error: "Daily workout editor limit reached", code: "daily_limit" }, 429);
+      return json({ error: "Workout editor limit reached", code: "workout_limit" }, 429);
     }
     if (reservationResult?.status === "duplicate") {
       return json({ error: "This request was already processed" }, 409);
@@ -414,7 +427,10 @@ Deno.serve(async (req: Request) => {
     return json({
       reply,
       changes,
-      remaining_messages: Math.max(0, Number(reservationResult.remaining ?? DAILY_LIMIT - 1)),
+      remaining_messages: Math.max(
+        0,
+        Number(reservationResult.remaining ?? WORKOUT_MESSAGE_LIMIT - 1)
+      ),
       can_undo: canUndo,
     });
   } catch (error) {

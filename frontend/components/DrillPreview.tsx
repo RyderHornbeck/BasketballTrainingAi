@@ -3,6 +3,7 @@ import { useTheme } from "@/hooks/useTheme";
 import { parseDrillDescription } from "@/lib/drillDescription";
 import { hasVideoDemo } from "@/lib/exerciseClip";
 import { buildYouTubeClipHtml } from "@/lib/youtubePlayer";
+import { reportNetworkFailure } from "@/lib/connectivity";
 import { ExerciseVideoClip } from "@/types/database";
 import { PlayIcon } from "phosphor-react-native";
 import React, { useMemo, useState } from "react";
@@ -38,6 +39,10 @@ export function DrillPreview({ clip }: { clip: ExerciseVideoClip }) {
               mediaPlaybackRequiresUserAction={false}
               allowsInlineMediaPlayback
               scrollEnabled={false}
+              onError={() => {
+                setPlaying(false);
+                reportNetworkFailure("video");
+              }}
             />
           </View>
         ) : (

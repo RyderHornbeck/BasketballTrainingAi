@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { NoConnectionBanner } from "@/components/NoConnectionBanner";
 import { ACHIEVEMENTS, AchievementDefinition, getUserAchievements } from "@/lib/achievements";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { LinearGradient } from "expo-linear-gradient";
@@ -108,6 +109,7 @@ export function AchievementUnlockQueue({
   return (
     <Modal transparent visible animationType="none" onRequestClose={dismiss}>
       <View style={styles.backdrop}>
+        <NoConnectionBanner />
         <Animated.View style={[styles.card, { opacity, transform: [{ scale }] }]}>
           <LinearGradient colors={["#FFF7ED", "#FFE2C6"]} style={styles.badgeGlow}>
             <MetallicUnlockBadge definition={current} />

@@ -13,6 +13,7 @@ import {
   SetLogEntry,
 } from "@/lib/exerciseSetLogs";
 import { ExerciseLogInput } from "@/lib/plan";
+import { reportNetworkFailure } from "@/lib/connectivity";
 import { buildYouTubeClipHtml } from "@/lib/youtubePlayer";
 import { hasVideoDemo } from "@/lib/exerciseClip";
 import { parseDrillDescription } from "@/lib/drillDescription";
@@ -652,7 +653,10 @@ export function ExerciseCard({
                     allowsInlineMediaPlayback
                     scrollEnabled={false}
                     opaque={false}
-                    onError={() => setVideoError(true)}
+                    onError={() => {
+                      setVideoError(true);
+                      reportNetworkFailure("video");
+                    }}
                     onHttpError={() => setVideoError(true)}
                     startInLoadingState
                     renderLoading={() => (

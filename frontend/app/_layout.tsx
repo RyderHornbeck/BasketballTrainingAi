@@ -1,4 +1,5 @@
 import { ScreenBackground } from "@/components/ScreenBackground";
+import { ConnectivityProvider } from "@/components/NoConnectionBanner";
 import { ThemeMode, ThemeProvider, useThemeContext } from "@/components/ThemeProvider";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { buildNavigationTheme } from "@/lib/navigationTheme";
@@ -78,9 +79,11 @@ function AppShell() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
-      <AuthProvider>
-        <RootNavigator />
-      </AuthProvider>
+      <ConnectivityProvider>
+        <AuthProvider>
+          <RootNavigator />
+        </AuthProvider>
+      </ConnectivityProvider>
     </GestureHandlerRootView>
   );
 }
@@ -96,13 +99,20 @@ export default function RootLayout() {
   const [fontLoadTimedOut, setFontLoadTimedOut] = useState(false);
 
   useEffect(() => {
-    if (fontsLoaded || fontLoadTimedOut) {
-      SplashScreen.hideAsync().catch(() => {});
-      return;
-    }
+    if (fontsLoaded || fontLoadTimedOut) return;
     const timeout = setTimeout(() => setFontLoadTimedOut(true), 8_000);
     return () => clearTimeout(timeout);
   }, [fontsLoaded, fontLoadTimedOut]);
+
+  useEffect(() => {
+    // Normal startup hides the splash from app/index only after auth and plan
+    // routing resolve. This fallback prevents a restored deep link or an
+    // unexpected bootstrap failure from holding the native splash forever.
+    const timeout = setTimeout(() => {
+      SplashScreen.hideAsync().catch(() => {});
+    }, 12_000);
+    return () => clearTimeout(timeout);
+  }, []);
 
   if (!fontsLoaded && !fontLoadTimedOut) return null;
 

@@ -3,7 +3,6 @@ import { useTheme } from "@/hooks/useTheme";
 import {
   CompletionTrendPoint,
   HeatmapPoint,
-  WorkoutPerformancePoint,
 } from "@/lib/analytics";
 import {
   ShootingBucket,
@@ -34,7 +33,6 @@ const CHART_WIDTH = SCREEN_WIDTH - 76;
 const TICK_HEIGHT = 3;
 const TICK_GAP = 1;
 const DAYS_PER_BATCH = 100;
-const WORKOUTS_PER_PERFORMANCE_PAGE = 10;
 
 const PERIOD_LABELS: Record<ShootingChartPeriod, string> = {
   weekly: "Weekly",
@@ -675,62 +673,6 @@ export function CompletionLineChart({ points }: { points: CompletionTrendPoint[]
       formatLabel={(value) => `${value}%`}
       caption="Cumulative plan completion by week"
     />
-  );
-}
-
-export function WorkoutPerformanceLineChart({
-  points,
-}: {
-  points: WorkoutPerformancePoint[];
-}) {
-  const { colors } = useTheme();
-  const [batchesBack, setBatchesBack] = useState(0);
-  const highestWorkoutNumber = Math.max(1, ...points.map((point) => point.workoutNumber));
-  const batchCount = Math.max(1, Math.ceil(highestWorkoutNumber / WORKOUTS_PER_PERFORMANCE_PAGE));
-  const safeBatchesBack = Math.min(batchesBack, batchCount - 1);
-  const safeBatchIndex = batchCount - 1 - safeBatchesBack;
-  const firstWorkoutNumber = safeBatchIndex * WORKOUTS_PER_PERFORMANCE_PAGE + 1;
-  const lastWorkoutNumber = firstWorkoutNumber + WORKOUTS_PER_PERFORMANCE_PAGE - 1;
-  const scoresByWorkoutNumber = new Map(
-    points.map((point) => [point.workoutNumber, point.score] as const)
-  );
-  const visiblePoints = Array.from({ length: WORKOUTS_PER_PERFORMANCE_PAGE }, (_, index) => {
-    const workoutNumber = firstWorkoutNumber + index;
-    return {
-      workoutNumber,
-      score: scoresByWorkoutNumber.get(workoutNumber) ?? null,
-    };
-  });
-
-  if (points.length === 0) {
-    return (
-      <Text style={{ color: colors.textSecondary }}>
-        Finish a workout to track your performance over time.
-      </Text>
-    );
-  }
-
-  return (
-    <View>
-      <SimpleLineChart
-        data={visiblePoints.map((point) => ({
-          label: String(point.workoutNumber),
-          value: point.score,
-        }))}
-        maxValue={100}
-        formatLabel={(value) => `${value}%`}
-        caption="Performance combines completed sets and results against each drill's targets."
-      />
-      <ChartNavRow
-        label={`Workouts ${firstWorkoutNumber}–${lastWorkoutNumber}`}
-        onPrev={() =>
-          setBatchesBack((value) => Math.min(batchCount - 1, value + 1))
-        }
-        onNext={() => setBatchesBack((value) => Math.max(0, value - 1))}
-        canPrev={safeBatchIndex > 0}
-        canNext={safeBatchIndex < batchCount - 1}
-      />
-    </View>
   );
 }
 

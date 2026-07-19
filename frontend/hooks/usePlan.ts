@@ -4,6 +4,7 @@ import {
   getWorkoutDays,
   requestNextBlockGeneration,
 } from "@/lib/plan";
+import { reportNetworkFailure } from "@/lib/connectivity";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { PlanGenerationRequest, WorkoutDay, WorkoutPlan } from "@/types/database";
 import { AppState } from "@/types/plan";
@@ -26,10 +27,10 @@ const PLAN_LOAD_TIMEOUT_MS = 10_000;
 
 function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error(`${label} timed out. Check your connection and try again.`)),
-      PLAN_LOAD_TIMEOUT_MS
-    );
+    const timeout = setTimeout(() => {
+      reportNetworkFailure("plan-timeout");
+      reject(new Error(`${label} timed out. Check your connection and try again.`));
+    }, PLAN_LOAD_TIMEOUT_MS);
     promise.then(
       (value) => {
         clearTimeout(timeout);
@@ -59,6 +60,10 @@ export function usePlan(): UsePlanResult {
   const rolloverAttemptRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
+    // Keep the initial plan load pending until auth has resolved. Otherwise
+    // the first render sees a temporary null user, marks plan loading done,
+    // and dismisses the native splash before the real user's plan is read.
+    if (authLoading) return;
     if (!user) {
       setPlan(null);
       setDays([]);
@@ -100,10 +105,13 @@ export function usePlan(): UsePlanResult {
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [authLoading, user]);
 
   useEffect(() => {
-    load();
+    const frame = requestAnimationFrame(() => {
+      void load();
+    });
+    return () => cancelAnimationFrame(frame);
   }, [load]);
 
   useEffect(() => {

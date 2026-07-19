@@ -15,6 +15,7 @@ import {
   ArrowsOutLineHorizontalIcon,
   CalendarCheckIcon,
   CheckCircleIcon,
+  CircleIcon,
   ClockIcon,
   CrownIcon,
   FootprintsIcon,
@@ -43,7 +44,7 @@ import {
   WatchIcon,
 } from "phosphor-react-native";
 import React, { useEffect, useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, View } from "react-native";
 
 const SKILL_LEVELS = ["beginner", "intermediate", "advanced", "elite"];
 const GOALS = [
@@ -80,7 +81,16 @@ const INTENSITY_OPTIONS = ["Light", "Medium", "Hard", "Extremely hard"];
 const DAYS_PER_WEEK_OPTIONS = [1, 2, 3, 4, 5, 6, 7];
 const MINUTES_OPTIONS = [15, 30, 45, 60, 75, 90];
 
-const TOTAL_STEPS = 9;
+const QUESTION_STEPS = 9;
+const PRE_SIGNUP_STEP = 10;
+const GENERATION_STEPS = [
+  "Calculating your workout length",
+  "Reading your goals and skill levels",
+  "Finding exercises tailored to you",
+  "Balancing drill categories and difficulty",
+  "Scheduling your first five workouts",
+];
+const CHECKLIST_STEP_MS = 1_000;
 
 const initialForm: OnboardingFormData = {
   overall_skill_level: "",
@@ -111,6 +121,9 @@ export default function OnboardingScreen() {
   const [form, setForm] = useState<OnboardingFormData>(initialForm);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [completedChecklistSteps, setCompletedChecklistSteps] = useState(0);
+  const [checklistRun, setChecklistRun] = useState(0);
+  const totalSteps = user ? QUESTION_STEPS : PRE_SIGNUP_STEP;
 
   // Already finished onboarding — don't make them answer again.
   useEffect(() => {
@@ -130,6 +143,14 @@ export default function OnboardingScreen() {
       }
     });
   }, [user]);
+
+  useEffect(() => {
+    if (step !== PRE_SIGNUP_STEP) return;
+    const timeouts = GENERATION_STEPS.map((_, index) =>
+      setTimeout(() => setCompletedChecklistSteps(index + 1), (index + 1) * CHECKLIST_STEP_MS)
+    );
+    return () => timeouts.forEach(clearTimeout);
+  }, [checklistRun, step]);
 
   const update = <K extends keyof OnboardingFormData>(key: K, value: OnboardingFormData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -171,15 +192,24 @@ export default function OnboardingScreen() {
         return true;
       case 9:
         return !!form.preferred_intensity;
+      case PRE_SIGNUP_STEP:
+        return completedChecklistSteps === GENERATION_STEPS.length;
       default:
         return true;
     }
   };
 
   const handleNext = async () => {
-    if (step < TOTAL_STEPS) {
+    if (step < QUESTION_STEPS) {
       if (!user) await saveOnboardingDraft(form);
       setStep(step + 1);
+      return;
+    }
+    if (step === QUESTION_STEPS && !user) {
+      await saveOnboardingDraft(form);
+      setCompletedChecklistSteps(0);
+      setChecklistRun((run) => run + 1);
+      setStep(PRE_SIGNUP_STEP);
       return;
     }
     await handleSubmit();
@@ -195,11 +225,8 @@ export default function OnboardingScreen() {
         // this flow, or the app was killed mid-flow). Submit directly.
         await submitOnboardingAnswers(user.id, form);
         await refreshProfile();
-        const request = await requestPlanGeneration();
-        router.replace({
-          pathname: "/generating",
-          params: { checklist: "1", checklistSession: request.id },
-        });
+        await requestPlanGeneration();
+        router.replace("/generating");
         return;
       }
 
@@ -217,6 +244,7 @@ export default function OnboardingScreen() {
 
   const handleBack = () => {
     if (step > 1) {
+      if (step === PRE_SIGNUP_STEP) setCompletedChecklistSteps(0);
       setStep(step - 1);
       return;
     }
@@ -228,12 +256,12 @@ export default function OnboardingScreen() {
       title={STEP_TITLES[step - 1].title}
       subtitle={STEP_TITLES[step - 1].subtitle}
       step={step}
-      totalSteps={TOTAL_STEPS}
+      totalSteps={totalSteps}
       onNext={handleNext}
       onBack={handleBack}
       nextDisabled={!canGoNext()}
       nextLoading={submitting}
-      nextLabel={step === TOTAL_STEPS ? (user ? "Build My Plan" : "Create Account") : "Continue"}
+      nextLabel={step === QUESTION_STEPS && user ? "Build My Plan" : "Continue"}
     >
       {error ? <Text style={[styles.error, { color: colors.danger }]}>{error}</Text> : null}
 
@@ -353,6 +381,42 @@ export default function OnboardingScreen() {
           />
         </View>
       )}
+
+      {step === PRE_SIGNUP_STEP && !user && (
+        <View style={styles.checklist}>
+          {GENERATION_STEPS.map((label, index) => {
+            const complete = index < completedChecklistSteps;
+            const active = index === completedChecklistSteps;
+            return (
+              <View
+                key={label}
+                style={[
+                  styles.checklistRow,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                ]}
+              >
+                {complete ? (
+                  <CheckCircleIcon size={25} color="#35B96F" weight="fill" />
+                ) : active ? (
+                  <View style={styles.checklistIndicator}>
+                    <ActivityIndicator size="small" color={colors.accent} />
+                  </View>
+                ) : (
+                  <CircleIcon size={25} color={colors.textMuted} weight="regular" />
+                )}
+                <Text
+                  style={[
+                    styles.checklistText,
+                    { color: complete || active ? colors.text : colors.textMuted },
+                  ]}
+                >
+                  {label}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+      )}
     </OnboardingStep>
   );
 }
@@ -367,6 +431,10 @@ const STEP_TITLES = [
   { title: "Training days", subtitle: "How often can you train each week?" },
   { title: "Workout length", subtitle: "How much time do you have per workout?" },
   { title: "Workout intensity", subtitle: "Last step -- choose how challenging you want it to feel." },
+  {
+    title: "Preparing your first workouts",
+    subtitle: "Reviewing your answers and preparing your personalized training setup.",
+  },
 ];
 
 function capitalize(s: string) {
@@ -513,25 +581,25 @@ function positionIcon(position: string) {
 
 function dayOption(day: number): ChipOption {
   const icons = [
-    <NumberOneIcon />,
-    <NumberTwoIcon />,
-    <NumberThreeIcon />,
-    <NumberFourIcon />,
-    <NumberFiveIcon />,
-    <NumberSixIcon />,
-    <NumberSevenIcon />,
+    <NumberOneIcon key="one" />,
+    <NumberTwoIcon key="two" />,
+    <NumberThreeIcon key="three" />,
+    <NumberFourIcon key="four" />,
+    <NumberFiveIcon key="five" />,
+    <NumberSixIcon key="six" />,
+    <NumberSevenIcon key="seven" />,
   ];
   return { label: String(day), value: String(day), icon: icons[day - 1] };
 }
 
 function minuteOption(minutes: number): ChipOption {
   const icons = [
-    <AlarmIcon />,
-    <ClockIcon />,
-    <TimerIcon />,
-    <WatchIcon />,
-    <HourglassLowIcon />,
-    <CalendarCheckIcon />,
+    <AlarmIcon key="alarm" />,
+    <ClockIcon key="clock" />,
+    <TimerIcon key="timer" />,
+    <WatchIcon key="watch" />,
+    <HourglassLowIcon key="hourglass" />,
+    <CalendarCheckIcon key="calendar" />,
   ];
   return { label: `${minutes} min`, value: String(minutes), icon: icons[MINUTES_OPTIONS.indexOf(minutes)] };
 }
@@ -595,5 +663,28 @@ const styles = StyleSheet.create({
   chipText: {
     fontWeight: "600",
     fontSize: 15,
+  },
+  checklist: {
+    gap: 10,
+  },
+  checklistRow: {
+    minHeight: 54,
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  checklistIndicator: {
+    width: 25,
+    height: 25,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  checklistText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "700",
   },
 });

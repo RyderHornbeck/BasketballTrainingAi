@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createClient } from "@supabase/supabase-js";
 import { AppState, Platform } from "react-native";
 import "react-native-url-polyfill/auto";
+import { reportNetworkFailure } from "./connectivity";
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -22,7 +23,19 @@ const noopStorage = {
   removeItem: (_key: string) => Promise.resolve(),
 };
 
+const connectivityFetch: typeof fetch = async (...args) => {
+  try {
+    return await fetch(...args);
+  } catch (error) {
+    reportNetworkFailure("supabase");
+    throw error;
+  }
+};
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  global: {
+    fetch: connectivityFetch,
+  },
   auth: {
     storage: isSSR ? noopStorage : AsyncStorage,
     autoRefreshToken: !isSSR,

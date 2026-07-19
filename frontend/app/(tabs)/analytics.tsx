@@ -2,7 +2,6 @@ import { Card } from "@/components/Card";
 import {
   MakesMissesChartPanel,
   SkillRadarChart,
-  WorkoutPerformanceLineChart,
   WorkoutActivityHeatmap,
 } from "@/components/analytics/AnalyticsCharts";
 import { ShotMap } from "@/components/analytics/ShotMap";
@@ -125,11 +124,6 @@ export default function AnalyticsScreen() {
             logs={summary.shootingLogs}
             firstActivityDate={summary.firstActivityDate}
           />
-        </Card>
-
-        <Card style={styles.chartCard}>
-          <Text style={[styles.chartTitle, { color: colors.text }]}>Workout Performance</Text>
-          <WorkoutPerformanceLineChart points={summary.workoutPerformance} />
         </Card>
 
         <Card style={styles.chartCard}>

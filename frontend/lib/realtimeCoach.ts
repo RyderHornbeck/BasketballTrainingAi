@@ -11,6 +11,7 @@ import {
   logCoachUsage,
 } from "@/lib/coachUsage";
 import { supabase } from "@/lib/supabase";
+import { isLikelyNetworkError, reportNetworkFailure } from "@/lib/connectivity";
 import {
   inferVoiceAudioProfile,
   startVoiceCallAudio,
@@ -102,7 +103,10 @@ function waitForDataChannelOpen(dc: any): Promise<void> {
   if (dc.readyState === "open") return Promise.resolve();
 
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Coach data channel timed out.")), 15000);
+    const timeout = setTimeout(() => {
+      reportNetworkFailure("realtime-coach");
+      reject(new Error("Coach data channel timed out."));
+    }, 15000);
     const onOpen = () => {
       clearTimeout(timeout);
       dc.removeEventListener("open", onOpen);
@@ -110,6 +114,7 @@ function waitForDataChannelOpen(dc: any): Promise<void> {
       resolve();
     };
     const onError = () => {
+      reportNetworkFailure("realtime-coach");
       clearTimeout(timeout);
       dc.removeEventListener("open", onOpen);
       dc.removeEventListener("error", onError);
@@ -222,6 +227,7 @@ export class RealtimeCoachSession {
       });
       dc.addEventListener("close", () => {
         if (generation === this.connectionGeneration && this.active) {
+          reportNetworkFailure("realtime-coach");
           void this.disconnect("connection_lost");
         }
       });
@@ -242,6 +248,7 @@ export class RealtimeCoachSession {
               this.active &&
               this.pc?.connectionState === "disconnected"
             ) {
+              reportNetworkFailure("realtime-coach");
               this.callbacks?.onError("Coach connection lost.");
               void this.disconnect("connection_lost");
             }
@@ -249,6 +256,7 @@ export class RealtimeCoachSession {
           return;
         }
         if (state === "failed" || state === "closed") {
+          reportNetworkFailure("realtime-coach");
           this.callbacks?.onError("Coach connection lost.");
           void this.disconnect("connection_lost");
         }
@@ -343,6 +351,7 @@ export class RealtimeCoachSession {
       if (generation !== this.connectionGeneration) return;
       console.error("Realtime coach connect failed:", err);
       const msg = err instanceof Error ? err.message : "Failed to connect to coach.";
+      if (isLikelyNetworkError(msg)) reportNetworkFailure("realtime-coach");
       this.callbacks?.onError(msg);
       if (isCoachLimitMessage(msg)) {
         this.callbacks?.onStatus("budget_exhausted");

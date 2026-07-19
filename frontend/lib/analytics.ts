@@ -1,5 +1,4 @@
 import { OnboardingAnswers } from "@/types/database";
-import { calculateDayPerformance } from "./dayPerformance";
 import { decodeExerciseLogMeta } from "./exerciseSetLogs";
 import { computeSkillProfile, DisciplineWorkout, SkillProfile } from "./skillRatings";
 import { ShotMapLogEntry } from "./shotMap";
@@ -34,11 +33,6 @@ export interface HeatmapPoint {
   value: number;
 }
 
-export interface WorkoutPerformancePoint {
-  workoutNumber: number;
-  score: number | null;
-}
-
 export interface AnalyticsSummary {
   totalWorkoutsCompleted: number;
   currentStreak: number;
@@ -70,7 +64,6 @@ export interface AnalyticsSummary {
   firstActivityDate: string | null;
   completionTrend: CompletionTrendPoint[];
   shotMapLogs: ShotMapLogEntry[];
-  workoutPerformance: WorkoutPerformancePoint[];
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -202,35 +195,6 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     workout_exercises: exerciseById.get(String(log.exercise_id)) ?? null,
     activity_at: workoutActivityDates.get(log.day_id as string) ?? log.created_at,
   }));
-  const exerciseLogByExerciseId = new Map(
-    (exerciseLogs ?? []).map((log: any) => [String(log.exercise_id), log])
-  );
-  const fullExercisesByDay = new Map<string, any[]>();
-  for (const exercise of workoutExercises) {
-    const dayId = String((exercise as any).day_id);
-    const rows = fullExercisesByDay.get(dayId) ?? [];
-    rows.push({
-      ...exercise,
-      log: exerciseLogByExerciseId.get(String((exercise as any).id)) ?? null,
-    });
-    fullExercisesByDay.set(dayId, rows);
-  }
-  const workoutPerformance = [...logs]
-    .sort((a: any, b: any) => {
-      const timeDifference =
-        new Date(workoutActivityTimestamp(a)).getTime() -
-        new Date(workoutActivityTimestamp(b)).getTime();
-      return timeDifference || String(a.id).localeCompare(String(b.id));
-    })
-    .map((workout: any, index) => {
-      const performance = calculateDayPerformance(
-        fullExercisesByDay.get(String(workout.day_id)) ?? []
-      );
-      return {
-        workoutNumber: index + 1,
-        score: performance.hasData ? performance.score : null,
-      };
-    });
   const totalWorkoutsCompleted = logs.length;
   const totalMinutesTrained = logs.reduce((sum, l: any) => sum + (l.total_minutes ?? 0), 0);
 
@@ -350,7 +314,7 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
       .filter((log: any) => log.completed === true)
       .map((log: any) => String(log.exercise_id))
   );
-  const exercisesByDay = new Map<string, Array<{ id: string }>>();
+  const exercisesByDay = new Map<string, { id: string }[]>();
   for (const exercise of workoutExercises ?? []) {
     const dayId = String((exercise as any).day_id);
     const rows = exercisesByDay.get(dayId) ?? [];
@@ -396,7 +360,6 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     workoutHeatmap,
     shotMapLogs,
     skillProfile,
-    workoutPerformance,
   };
 }
 
