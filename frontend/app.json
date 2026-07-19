@@ -68,7 +68,9 @@
       "expo-config-plugin-incall-manager",
       "expo-audio",
       "expo-asset",
-      "expo-apple-authentication"
+      "expo-apple-authentication",
+      "expo-notifications",
+      "@react-native-community/datetimepicker"
     ],
     "extra": {
       "eas": {

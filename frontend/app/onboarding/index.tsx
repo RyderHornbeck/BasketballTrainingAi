@@ -195,8 +195,11 @@ export default function OnboardingScreen() {
         // this flow, or the app was killed mid-flow). Submit directly.
         await submitOnboardingAnswers(user.id, form);
         await refreshProfile();
-        await requestPlanGeneration();
-        router.replace({ pathname: "/generating", params: { checklist: "1" } });
+        const request = await requestPlanGeneration();
+        router.replace({
+          pathname: "/generating",
+          params: { checklist: "1", checklistSession: request.id },
+        });
         return;
       }
 

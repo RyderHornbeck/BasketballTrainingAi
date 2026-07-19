@@ -5,6 +5,7 @@ import { useCoach } from "@/hooks/useCoach";
 import { useTheme } from "@/hooks/useTheme";
 import { Ionicons } from "@expo/vector-icons";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
+import { router } from "expo-router";
 import React, { useEffect, useRef } from "react";
 import { ActivityIndicator, Animated, Modal, Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -75,6 +76,12 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
   const handleClose = () => {
     void stopSession();
     onClose();
+  };
+
+  const handleOpenGuide = () => {
+    void stopSession();
+    onClose();
+    requestAnimationFrame(() => router.push("/coach-guide"));
   };
 
   const statusLabel = budgetExhausted
@@ -218,6 +225,16 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
 
           <Text style={[styles.hint, { color: colors.textSecondary }]}>{hint}</Text>
         </View>
+
+        <Pressable
+          onPress={handleOpenGuide}
+          hitSlop={10}
+          style={[styles.guideLink, { bottom: insets.bottom + 10 }]}
+        >
+          <Text style={[styles.guideLinkText, { color: colors.textMuted }]}>
+            How to use Court Coach
+          </Text>
+        </Pressable>
       </View>
     </Modal>
   );
@@ -313,5 +330,16 @@ const styles = StyleSheet.create({
     marginTop: 28,
     textAlign: "center",
     lineHeight: 20,
+  },
+  guideLink: {
+    position: "absolute",
+    alignSelf: "center",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  guideLinkText: {
+    fontSize: 11,
+    fontWeight: "600",
+    textDecorationLine: "underline",
   },
 });

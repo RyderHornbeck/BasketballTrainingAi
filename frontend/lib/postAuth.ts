@@ -30,6 +30,9 @@ export async function routeAfterSocialAuth(
   await submitOnboardingAnswers(userId, draft);
   await clearOnboardingDraft();
   await refreshProfile();
-  await requestPlanGeneration();
-  router.replace({ pathname: "/generating", params: { checklist: "1" } });
+  const request = await requestPlanGeneration();
+  router.replace({
+    pathname: "/generating",
+    params: { checklist: "1", checklistSession: request.id },
+  });
 }

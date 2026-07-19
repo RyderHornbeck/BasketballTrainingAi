@@ -60,6 +60,7 @@ function RootNavigator() {
           <Stack.Screen name="workout-edit-manual" />
           <Stack.Screen name="achievements" />
           <Stack.Screen name="workout-edit-ai" />
+          <Stack.Screen name="coach-guide" />
           <Stack.Screen
             name="(tabs)"
             options={{

@@ -16,16 +16,34 @@ const GENERATION_STEPS = [
   "Scheduling your first five workouts",
 ];
 const STEP_DURATION_MS = 1_000;
+const CHECKLIST_DURATION_MS = GENERATION_STEPS.length * STEP_DURATION_MS;
+const checklistStartBySession = new Map<string, number>();
 
 export default function GeneratingScreen() {
   const { colors } = useTheme();
-  const { checklist } = useLocalSearchParams<{ checklist?: string }>();
+  const { checklist, checklistSession } = useLocalSearchParams<{
+    checklist?: string;
+    checklistSession?: string;
+  }>();
   const { appState, generationRequest, loading, refresh } = usePlan();
-  const [retrying, setRetrying] = useState(false);
-  const [completedSteps, setCompletedSteps] = useState(0);
-  const [checklistFinished, setChecklistFinished] = useState(false);
-  const [checklistRun, setChecklistRun] = useState(0);
   const holdForChecklist = checklist === "1";
+  const sessionKey = checklistSession ?? "unkeyed";
+  const [checklistStartedAt, setChecklistStartedAt] = useState(() => {
+    if (!holdForChecklist) return Date.now();
+    const existingStart = checklistStartBySession.get(sessionKey);
+    if (existingStart != null) return existingStart;
+    const start = Date.now();
+    checklistStartBySession.set(sessionKey, start);
+    return start;
+  });
+  const initialElapsed = Math.max(0, Date.now() - checklistStartedAt);
+  const [retrying, setRetrying] = useState(false);
+  const [completedSteps, setCompletedSteps] = useState(() =>
+    Math.min(GENERATION_STEPS.length, Math.floor(initialElapsed / STEP_DURATION_MS))
+  );
+  const [checklistFinished, setChecklistFinished] = useState(
+    () => initialElapsed >= CHECKLIST_DURATION_MS
+  );
   const isFailed = appState === "plan_failed";
   const hasNoRequestYet = !loading && appState === "no_plan" && !generationRequest;
   const showChecklist = holdForChecklist
@@ -50,20 +68,28 @@ export default function GeneratingScreen() {
 
   useEffect(() => {
     if (!showChecklist) return;
-    setCompletedSteps(0);
-    setChecklistFinished(false);
-    const timeouts = GENERATION_STEPS.map((_, index) =>
-      setTimeout(() => {
+    const elapsed = Math.max(0, Date.now() - checklistStartedAt);
+    const alreadyCompleted = Math.min(
+      GENERATION_STEPS.length,
+      Math.floor(elapsed / STEP_DURATION_MS)
+    );
+    setCompletedSteps(alreadyCompleted);
+    setChecklistFinished(elapsed >= CHECKLIST_DURATION_MS);
+
+    const timeouts = GENERATION_STEPS.flatMap((_, index) => {
+      const delay = (index + 1) * STEP_DURATION_MS - elapsed;
+      if (delay <= 0) return [];
+      return [setTimeout(() => {
         setCompletedSteps(index + 1);
         if (index === GENERATION_STEPS.length - 1) {
           setChecklistFinished(true);
         }
-      }, (index + 1) * STEP_DURATION_MS)
-    );
+      }, delay)];
+    });
     return () => {
       timeouts.forEach(clearTimeout);
     };
-  }, [checklistRun, showChecklist]);
+  }, [checklistStartedAt, showChecklist]);
 
   if (loading && !holdForChecklist) {
     return (
@@ -87,7 +113,9 @@ export default function GeneratingScreen() {
   }
 
   const handleRetry = async () => {
-    setChecklistRun((run) => run + 1);
+    const restartAt = Date.now();
+    checklistStartBySession.set(sessionKey, restartAt);
+    setChecklistStartedAt(restartAt);
     setRetrying(true);
     try {
       await requestPlanGeneration();
