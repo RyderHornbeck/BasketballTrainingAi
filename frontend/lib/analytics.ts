@@ -1,6 +1,11 @@
 import { OnboardingAnswers } from "@/types/database";
 import { decodeExerciseLogMeta } from "./exerciseSetLogs";
-import { computeSkillProfile, DisciplineWorkout, SkillProfile } from "./skillRatings";
+import {
+  computeSkillProfile,
+  DisciplineWorkout,
+  RadarSkillKey,
+  SkillProfile,
+} from "./skillRatings";
 import { ShotMapLogEntry } from "./shotMap";
 import { supabase } from "./supabase";
 
@@ -134,7 +139,7 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
   const userId = userData.user?.id;
   if (!userId) throw new Error("Not authenticated");
 
-  const [dayLogsResult, allDaysResult, exerciseLogsResult, onboardingResult] =
+  const [dayLogsResult, allDaysResult, exerciseLogsResult, onboardingResult, ratingResult] =
     await Promise.all([
       supabase
         .from("workout_day_logs")
@@ -157,12 +162,20 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle(),
+      supabase
+        .from("user_skill_rating_snapshots")
+        .select(
+          "overall_rating, shooting_rating, ball_handling_rating, finishing_rating, defense_rating, conditioning_rating, discipline_rating"
+        )
+        .eq("user_id", userId)
+        .maybeSingle(),
     ]);
   const firstError =
     dayLogsResult.error ??
     allDaysResult.error ??
     exerciseLogsResult.error ??
-    onboardingResult.error;
+    onboardingResult.error ??
+    ratingResult.error;
   if (firstError) throw new Error(firstError.message);
 
   const dayLogs = dayLogsResult.data;
@@ -333,11 +346,28 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     };
   });
 
-  const skillProfile = computeSkillProfile(
+  const calculatedSkillProfile = computeSkillProfile(
     (onboarding as OnboardingAnswers | null) ?? null,
     analyticsExerciseLogs,
     disciplineWorkouts
   );
+  const storedOverall = ratingResult.data?.overall_rating;
+  const storedSkillRatings: Record<RadarSkillKey, number | null | undefined> = {
+    shooting: ratingResult.data?.shooting_rating,
+    ball_handling: ratingResult.data?.ball_handling_rating,
+    finishing: ratingResult.data?.finishing_rating,
+    defense: ratingResult.data?.defense_rating,
+    conditioning: ratingResult.data?.conditioning_rating,
+    discipline: ratingResult.data?.discipline_rating,
+  };
+  const skills = calculatedSkillProfile.skills.map((skill) => {
+    const storedScore = storedSkillRatings[skill.key];
+    return typeof storedScore === "number" ? { ...skill, score: storedScore } : skill;
+  });
+  const skillProfile: SkillProfile =
+    typeof storedOverall === "number"
+      ? { ...calculatedSkillProfile, skills, overall: storedOverall }
+      : { ...calculatedSkillProfile, skills };
 
   return {
     totalWorkoutsCompleted,

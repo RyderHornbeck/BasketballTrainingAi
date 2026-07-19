@@ -56,6 +56,12 @@ export function updateNetworkConnectivity(offline: boolean): void {
 }
 
 export function reportNetworkFailure(source = "network"): void {
+  // NetInfo's offline transition already owns the visible banner. Background
+  // polling can keep failing while offline, but it must not repeatedly
+  // retrigger or reanimate the same banner.
+  if (snapshot.offline) return;
+  if (snapshot.failureRevision > snapshot.dismissedRevision) return;
+
   const now = Date.now();
   // One failed action can fan out into several Supabase requests. Treat that
   // burst as one banner, while allowing a later action to show it again.

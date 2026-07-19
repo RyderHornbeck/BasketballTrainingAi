@@ -141,19 +141,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             );
             if (error) throw error;
             if (!mounted) return;
+            // Expose the locally restored session immediately so plan loading
+            // can run in parallel with the profile request.
+            setSession(data.session);
 
-            let nextProfile = data.session?.user
+            const nextProfile = data.session?.user
               ? await loadProfile(data.session.user.id)
               : null;
             if (!mounted) return;
-            if (data.session?.user && nextProfile) {
-              const timezone = await syncTimezone(data.session.user.id, nextProfile.timezone);
-              if (!mounted) return;
-              nextProfile = { ...nextProfile, timezone };
-            }
-
-            setSession(data.session);
             setProfile(nextProfile);
+
+            // Timezone persistence improves server-side day bucketing but is
+            // not needed to choose the first screen. Do it after startup so it
+            // does not hold the native splash for another network round trip.
+            if (data.session?.user && nextProfile) {
+              void syncTimezone(data.session.user.id, nextProfile.timezone)
+                .then((timezone) => {
+                  if (!mounted || timezone === nextProfile.timezone) return;
+                  setProfile((current) =>
+                    current?.id === nextProfile.id ? { ...current, timezone } : current
+                  );
+                })
+                .catch((timezoneError) => {
+                  console.warn("Timezone sync failed:", timezoneError);
+                });
+            }
             return;
           } catch (error) {
             lastError = error;

@@ -4,22 +4,13 @@ import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
 import { Redirect } from "expo-router";
-import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect } from "react";
+import React from "react";
 import { StyleSheet, View } from "react-native";
 
 export default function Index() {
   const { colors } = useTheme();
   const { startupError, retryStartup } = useAuth();
   const { appState, loading, loadError, refresh } = usePlan();
-
-  useEffect(() => {
-    if (loading && !startupError && !loadError) return;
-    const frame = requestAnimationFrame(() => {
-      SplashScreen.hideAsync().catch(() => {});
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [loadError, loading, startupError]);
 
   if (startupError) {
     return (

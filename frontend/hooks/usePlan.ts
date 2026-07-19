@@ -63,7 +63,7 @@ export function usePlan(): UsePlanResult {
     // Keep the initial plan load pending until auth has resolved. Otherwise
     // the first render sees a temporary null user, marks plan loading done,
     // and dismisses the native splash before the real user's plan is read.
-    if (authLoading) return;
+    if (authLoading && !user) return;
     if (!user) {
       setPlan(null);
       setDays([]);

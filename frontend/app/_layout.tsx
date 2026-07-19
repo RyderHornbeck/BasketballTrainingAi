@@ -100,17 +100,16 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (fontsLoaded || fontLoadTimedOut) return;
-    const timeout = setTimeout(() => setFontLoadTimedOut(true), 8_000);
+    const timeout = setTimeout(() => setFontLoadTimedOut(true), 1_000);
     return () => clearTimeout(timeout);
   }, [fontsLoaded, fontLoadTimedOut]);
 
   useEffect(() => {
-    // Normal startup hides the splash from app/index only after auth and plan
-    // routing resolve. This fallback prevents a restored deep link or an
-    // unexpected bootstrap failure from holding the native splash forever.
+    // Keep the branded native launch screen briefly, then reveal the app even
+    // if authentication or workout data are still finishing in the background.
     const timeout = setTimeout(() => {
       SplashScreen.hideAsync().catch(() => {});
-    }, 12_000);
+    }, 1_000);
     return () => clearTimeout(timeout);
   }, []);
 

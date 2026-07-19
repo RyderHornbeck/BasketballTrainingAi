@@ -47,7 +47,6 @@ export function NoConnectionBanner() {
 
   useEffect(() => {
     if (!visible) return;
-    translateY.setValue(-120);
     Animated.spring(translateY, {
       toValue: 0,
       useNativeDriver: true,
