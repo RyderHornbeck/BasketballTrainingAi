@@ -625,7 +625,7 @@ export default function DaysScreen() {
             },
           ]}
         >
-          <FireIcon size={23} color="#F7B379" weight="fill" />
+          <FireIcon size={23} color="#F97316" weight="fill" />
           <Text
             style={[
               styles.streakValue,

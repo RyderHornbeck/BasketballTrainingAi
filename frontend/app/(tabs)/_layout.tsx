@@ -2,6 +2,7 @@ import { AchievementUnlockQueue } from "@/components/AchievementUnlockQueue";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
+import { requestPendingAccountReview } from "@/lib/appReview";
 import { isDayUnlocked } from "@/lib/plan";
 import {
   BasketballIcon,
@@ -11,7 +12,7 @@ import {
 } from "phosphor-react-native";
 import { Tabs } from "expo-router";
 import { BottomTabBar } from "expo-router/build/react-navigation/bottom-tabs";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -30,6 +31,14 @@ export default function TabsLayout() {
   const { width: screenWidth } = useWindowDimensions();
   const { days } = usePlan();
   const [coachOpen, setCoachOpen] = useState(false);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const timeout = setTimeout(() => {
+      void requestPendingAccountReview(user.id);
+    }, 750);
+    return () => clearTimeout(timeout);
+  }, [user?.id]);
 
   // Tab bar stops before the coach button: [12px edge][tab bar][12px gap][64px button][12px edge]
   const tabBarWidth =

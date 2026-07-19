@@ -52,6 +52,12 @@ interface PerformanceEvent {
   timestamp: number;
 }
 
+const COMPLETION_SCORED_CATEGORIES = new Set([
+  "ball_handling",
+  "conditioning",
+  "defense",
+]);
+
 interface ExerciseLogRow {
   created_at: string;
   completed: boolean;
@@ -97,7 +103,7 @@ function baselineForSkill(
   return 20 + selfRating * 5;
 }
 
-function scoreSetEntry(entry: SetLogEntry, plan: ExerciseSetPlan): number {
+function scoreSetEntry(entry: SetLogEntry, plan: ExerciseSetPlan, category: string): number {
   if (plan.logType === "makes_attempts") {
     const targetMakes = plan.perSetMakes ?? 0;
     const targetAttempts = plan.perSetAttempts ?? targetMakes;
@@ -119,9 +125,15 @@ function scoreSetEntry(entry: SetLogEntry, plan: ExerciseSetPlan): number {
     const minutes = entry.minutes ?? (entry.completed ? plan.perSetMinutes ?? 0 : 0);
     const target = plan.perSetMinutes ?? 1;
     const timeRatio = clamp((minutes / target) * 100);
+    if (COMPLETION_SCORED_CATEGORIES.has(category)) {
+      return Math.round(entry.completed ? timeRatio : timeRatio * 0.55);
+    }
     return Math.round(entry.completed ? 0.75 * timeRatio + 12.5 : timeRatio * 0.55);
   }
 
+  if (COMPLETION_SCORED_CATEGORIES.has(category)) {
+    return entry.completed ? 75 : 42;
+  }
   return entry.completed ? 65 : 42;
 }
 
@@ -149,6 +161,20 @@ function scoreExerciseFallback(
         ? clamp((actualAccuracy / targetAccuracy) * 100)
         : attainment;
     return Math.round(0.6 * attainment + 0.3 * accuracy + 0.1 * (log.completed ? 100 : 50));
+  }
+
+  if (COMPLETION_SCORED_CATEGORIES.has(category)) {
+    if (plan.logType === "minutes") {
+      const prescribedMinutes = plan.perSetMinutes ?? parseMinutes(log.workout_exercises?.duration);
+      const timeRatio =
+        prescribedMinutes && log.minutes_completed != null
+          ? clamp((log.minutes_completed / (prescribedMinutes * setCount)) * 100)
+          : log.completed
+            ? 100
+            : 0;
+      return Math.round(log.completed ? timeRatio : timeRatio * 0.55);
+    }
+    return log.completed ? 75 : 42;
   }
 
   const prescribedMinutes = plan.perSetMinutes ?? parseMinutes(log.workout_exercises?.duration);
@@ -191,7 +217,7 @@ function expandExerciseLogToEvents(log: ExerciseLogRow): PerformanceEvent[] {
     for (const entry of meta.set_logs.filter((set) => set.completed)) {
       events.push({
         skill,
-        observedScore: scoreSetEntry(entry, plan),
+        observedScore: scoreSetEntry(entry, plan, category),
         timestamp,
       });
     }
@@ -258,9 +284,9 @@ export function computeSkillProfile(
           const completionRatio = clamp((workout.completedExercises / workout.totalExercises) * 100);
           return {
             skill: "discipline" as const,
-            // Mirrors the timed-drill score: a fully completed workout is 87.5,
-            // while a partial workout scales directly with its completion ratio.
-            observedScore: 0.75 * completionRatio + 12.5,
+            // Discipline directly reflects workout completion, so completing
+            // every prescribed exercise produces a perfect performance event.
+            observedScore: completionRatio,
             timestamp: workout.timestamp,
           };
         })

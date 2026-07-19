@@ -1,6 +1,7 @@
 import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
+import { markAccountReviewPending } from "@/lib/appReview";
 import { routeAfterSocialAuth } from "@/lib/postAuth";
 import * as AppleAuthentication from "expo-apple-authentication";
 import { Link } from "expo-router";
@@ -9,6 +10,13 @@ import React, { useState } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
 
 type Provider = "google" | "apple";
+
+function isNewlyCreatedAccount(createdAt: string, lastSignInAt?: string): boolean {
+  const created = Date.parse(createdAt);
+  const lastSignIn = lastSignInAt ? Date.parse(lastSignInAt) : created;
+  if (!Number.isFinite(created) || !Number.isFinite(lastSignIn)) return false;
+  return Date.now() - created < 10 * 60 * 1_000 && Math.abs(lastSignIn - created) < 2 * 60 * 1_000;
+}
 
 function authErrorMessage(error: unknown, provider: Provider): string {
   const fallback = `Unable to continue with ${provider === "google" ? "Google" : "Apple"}.`;
@@ -34,6 +42,9 @@ export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
       const user =
         provider === "google" ? await signInWithGoogle() : await signInWithApple();
       if (!user) return;
+      if (mode === "signup" && isNewlyCreatedAccount(user.created_at, user.last_sign_in_at)) {
+        await markAccountReviewPending(user.id);
+      }
       await routeAfterSocialAuth(user.id, refreshProfile);
     } catch (authError) {
       setError(authErrorMessage(authError, provider));

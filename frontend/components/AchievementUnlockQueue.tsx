@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { NoConnectionBanner } from "@/components/NoConnectionBanner";
 import { ACHIEVEMENTS, AchievementDefinition, getUserAchievements } from "@/lib/achievements";
+import { AppReviewMilestone, requestAppReviewOnce } from "@/lib/appReview";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { LinearGradient } from "expo-linear-gradient";
 import { CheckCircleIcon } from "phosphor-react-native";
@@ -20,6 +21,7 @@ export function AchievementUnlockQueue({
   const [queue, setQueue] = useState<AchievementDefinition[]>([]);
   const [scale] = useState(() => new Animated.Value(0.82));
   const [opacity] = useState(() => new Animated.Value(0));
+  const reviewAfterAchievement = useRef(new Map<string, AppReviewMilestone>());
 
   const refreshQueue = useCallback(async () => {
     if (!userId) return;
@@ -58,6 +60,17 @@ export function AchievementUnlockQueue({
       .filter((achievement): achievement is AchievementDefinition => Boolean(achievement));
 
     if (!newDefinitions.length) return;
+    const previousEarnedCount = earnedKeys.filter((key) => seen.has(key)).length;
+    for (const [threshold, milestone] of [
+      [5, "badge_5"],
+      [10, "badge_10"],
+    ] as const) {
+      if (previousEarnedCount >= threshold || earnedKeys.length < threshold) continue;
+      const milestoneDefinition = newDefinitions[threshold - previousEarnedCount - 1];
+      if (milestoneDefinition) {
+        reviewAfterAchievement.current.set(milestoneDefinition.key, milestone);
+      }
+    }
     await AsyncStorage.setItem(seenStorageKey(userId), JSON.stringify([...new Set([...seen, ...earnedKeys])]));
     setQueue((current) => {
       const currentKeys = new Set(current.map((achievement) => achievement.key));
@@ -99,8 +112,17 @@ export function AchievementUnlockQueue({
   }, [current, opacity, scale]);
 
   const dismiss = () => {
+    const reviewMilestone = current
+      ? reviewAfterAchievement.current.get(current.key)
+      : undefined;
+    if (current) reviewAfterAchievement.current.delete(current.key);
     Animated.timing(opacity, { toValue: 0, duration: 140, useNativeDriver: true }).start(() => {
       setQueue((currentQueue) => currentQueue.slice(1));
+      if (userId && reviewMilestone) {
+        setTimeout(() => {
+          void requestAppReviewOnce(userId, reviewMilestone);
+        }, 300);
+      }
     });
   };
 

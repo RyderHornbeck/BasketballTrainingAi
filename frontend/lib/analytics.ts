@@ -165,7 +165,7 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
       supabase
         .from("user_skill_rating_snapshots")
         .select(
-          "overall_rating, shooting_rating, ball_handling_rating, finishing_rating, defense_rating, conditioning_rating, discipline_rating"
+          "overall_rating, shooting_rating, ball_handling_rating, finishing_rating, defense_rating, conditioning_rating, discipline_rating, workouts_completed"
         )
         .eq("user_id", userId)
         .maybeSingle(),
@@ -208,7 +208,9 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
     workout_exercises: exerciseById.get(String(log.exercise_id)) ?? null,
     activity_at: workoutActivityDates.get(log.day_id as string) ?? log.created_at,
   }));
-  const totalWorkoutsCompleted = logs.length;
+  const storedWorkoutTotal = ratingResult.data?.workouts_completed;
+  const totalWorkoutsCompleted =
+    typeof storedWorkoutTotal === "number" ? storedWorkoutTotal : logs.length;
   const totalMinutesTrained = logs.reduce((sum, l: any) => sum + (l.total_minutes ?? 0), 0);
 
   const totalDays = allDays?.length ?? 0;

@@ -25,7 +25,7 @@ interface ChatMessage {
   content: string;
 }
 
-const MAX_MESSAGES_PER_WORKOUT = 10;
+const MAX_MESSAGES_PER_WORKOUT = 30;
 
 function TypingBubble({ colors }: { colors: ReturnType<typeof useTheme>["colors"] }) {
   const [dotOne] = useState(() => new Animated.Value(0));
@@ -249,6 +249,18 @@ export default function WorkoutEditAIScreen() {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={8}
       >
+        {remaining <= 0 ? (
+          <View
+            style={[
+              styles.limitBubble,
+              { backgroundColor: colors.accentMuted, borderColor: colors.border },
+            ]}
+          >
+            <Text style={[styles.limitText, { color: colors.text }]}>
+              All Edits with AI have been used for this workout.
+            </Text>
+          </View>
+        ) : null}
         <FlatList
           ref={listRef}
           data={messages}
@@ -361,6 +373,16 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   typingDot: { width: 6, height: 6, borderRadius: 3 },
+  limitBubble: {
+    alignSelf: "center",
+    marginHorizontal: 18,
+    marginTop: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderRadius: 18,
+  },
+  limitText: { fontSize: 12, fontWeight: "700", textAlign: "center" },
   composer: {
     borderTopWidth: StyleSheet.hairlineWidth,
     padding: 12,
