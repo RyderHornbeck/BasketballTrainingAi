@@ -229,9 +229,12 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
         <Pressable
           onPress={handleOpenGuide}
           hitSlop={10}
-          style={[styles.guideLink, { bottom: insets.bottom + 10 }]}
+          style={[
+            styles.guideLink,
+            { bottom: insets.bottom + 10, borderColor: "#FFFFFF" },
+          ]}
         >
-          <Text style={[styles.guideLinkText, { color: colors.textMuted }]}>
+          <Text style={[styles.guideLinkText, { color: colors.accent }]}>
             How to use Court Coach
           </Text>
         </Pressable>
@@ -334,12 +337,13 @@ const styles = StyleSheet.create({
   guideLink: {
     position: "absolute",
     alignSelf: "center",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    borderWidth: 1.5,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
   },
   guideLinkText: {
-    fontSize: 11,
-    fontWeight: "600",
-    textDecorationLine: "underline",
+    fontSize: 13,
+    fontWeight: "700",
   },
 });

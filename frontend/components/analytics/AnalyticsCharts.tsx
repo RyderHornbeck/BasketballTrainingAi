@@ -34,6 +34,7 @@ const CHART_WIDTH = SCREEN_WIDTH - 76;
 const TICK_HEIGHT = 3;
 const TICK_GAP = 1;
 const DAYS_PER_BATCH = 100;
+const WORKOUTS_PER_PERFORMANCE_PAGE = 10;
 
 const PERIOD_LABELS: Record<ShootingChartPeriod, string> = {
   weekly: "Weekly",
@@ -684,12 +685,22 @@ export function WorkoutPerformanceLineChart({
 }) {
   const { colors } = useTheme();
   const [batchesBack, setBatchesBack] = useState(0);
-  const batchCount = Math.max(1, Math.ceil(points.length / 5));
+  const highestWorkoutNumber = Math.max(1, ...points.map((point) => point.workoutNumber));
+  const batchCount = Math.max(1, Math.ceil(highestWorkoutNumber / WORKOUTS_PER_PERFORMANCE_PAGE));
   const safeBatchesBack = Math.min(batchesBack, batchCount - 1);
   const safeBatchIndex = batchCount - 1 - safeBatchesBack;
-  const firstWorkoutNumber = safeBatchIndex * 5 + 1;
-  const lastWorkoutNumber = Math.min(firstWorkoutNumber + 4, points.length);
-  const visiblePoints = points.slice(safeBatchIndex * 5, safeBatchIndex * 5 + 5);
+  const firstWorkoutNumber = safeBatchIndex * WORKOUTS_PER_PERFORMANCE_PAGE + 1;
+  const lastWorkoutNumber = firstWorkoutNumber + WORKOUTS_PER_PERFORMANCE_PAGE - 1;
+  const scoresByWorkoutNumber = new Map(
+    points.map((point) => [point.workoutNumber, point.score] as const)
+  );
+  const visiblePoints = Array.from({ length: WORKOUTS_PER_PERFORMANCE_PAGE }, (_, index) => {
+    const workoutNumber = firstWorkoutNumber + index;
+    return {
+      workoutNumber,
+      score: scoresByWorkoutNumber.get(workoutNumber) ?? null,
+    };
+  });
 
   if (points.length === 0) {
     return (

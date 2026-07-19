@@ -127,7 +127,7 @@ export default function ProfileScreen() {
       if (!granted) {
         Alert.alert(
           "Notifications are off",
-          "Enable notifications for Court Coach in your device Settings to schedule workout reminders."
+          "Go to your phone's Settings and turn on notifications for Court Coach AI, then try again."
         );
         return;
       }
@@ -157,7 +157,7 @@ export default function ProfileScreen() {
         setReminderEnabled(false);
         Alert.alert(
           "Notifications are off",
-          "Enable notifications for Court Coach in your device Settings to schedule workout reminders."
+          "Go to your phone's Settings and turn on notifications for Court Coach AI, then try again."
         );
         return;
       }
@@ -281,6 +281,13 @@ export default function ProfileScreen() {
           )}
         </Card>
 
+        <Button
+          title="How to use Court Coach AI"
+          variant="secondary"
+          onPress={() => router.push("/coach-guide")}
+          style={styles.actionButton}
+        />
+
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Appearance</Text>
         <Card style={styles.card}>
           <View style={styles.themeRow}>
@@ -334,12 +341,6 @@ export default function ProfileScreen() {
         />
 
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Information</Text>
-        <Button
-          title="How to use Court Coach AI"
-          variant="secondary"
-          onPress={() => router.push("/coach-guide")}
-          style={styles.actionButton}
-        />
         <Button
           title="Privacy Policy"
           variant="outline"

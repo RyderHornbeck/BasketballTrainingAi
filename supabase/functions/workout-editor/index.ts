@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { buildWorkoutEditorSnapshot } from "../_shared/workoutEditorContext.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -14,21 +15,20 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function userDayStart(timezoneOffsetMinutes: number): string {
-  const safeOffset = Number.isFinite(timezoneOffsetMinutes) ? timezoneOffsetMinutes : 0;
-  const localNow = new Date(Date.now() - safeOffset * 60_000);
-  localNow.setUTCHours(0, 0, 0, 0);
-  return new Date(localNow.getTime() + safeOffset * 60_000).toISOString();
-}
-
 function prescription(clip: any) {
   const text = `${clip.description ?? ""} ${clip.coaching_notes ?? ""}`;
   const durationMatch = text.match(/(\d+)\s*(?:to\s*\d+\s*)?(second|minute)/i);
-  const duration = durationMatch
+  const categoryIsTimed = ["ball_handling", "defense", "conditioning"].includes(clip.category);
+  const extractedMinutes = durationMatch
     ? durationMatch[2].toLowerCase().startsWith("second")
       ? `${Math.max(0.5, Number(durationMatch[1]) / 60)} min`
       : `${Math.max(0.5, Number(durationMatch[1]))} min`
-    : "3 min";
+    : null;
+  const durationMinutes = extractedMinutes ? Number.parseFloat(extractedMinutes) : null;
+  const duration =
+    categoryIsTimed
+      ? `${Math.max(1, Math.min(3, durationMinutes ?? 2))} min`
+      : extractedMinutes ?? "3 min";
   const shooting = clip.category === "shooting";
   const finishing = clip.category === "finishing";
   return {
@@ -39,7 +39,7 @@ function prescription(clip: any) {
     target_attempts: shooting ? 20 : finishing ? 15 : null,
     log_type: shooting || finishing
       ? "makes_attempts"
-      : durationMatch
+      : categoryIsTimed || durationMatch
         ? "minutes"
         : "checkbox",
     set_side_labels: clip.requires_both_sides ? ["left side", "right side"] : null,
@@ -65,6 +65,35 @@ function candidateScore(clip: any, requestText: string): number {
     if (text.includes(token)) return score + 2;
     return score;
   }, 0);
+}
+
+async function loadWorkoutState(supabase: any, userId: string, day: any) {
+  const { data: exercises, error: exercisesError } = await supabase
+    .from("workout_exercises")
+    .select("*")
+    .eq("day_id", day.id)
+    .eq("user_id", userId)
+    .order("order_index");
+  if (exercisesError) throw new Error(exercisesError.message);
+
+  const exerciseIds = (exercises ?? []).map((exercise: any) => exercise.id);
+  let logs: any[] = [];
+  if (exerciseIds.length) {
+    const { data, error } = await supabase
+      .from("exercise_logs")
+      .select("*")
+      .eq("day_id", day.id)
+      .eq("user_id", userId)
+      .in("exercise_id", exerciseIds);
+    if (error) throw new Error(error.message);
+    logs = data ?? [];
+  }
+
+  return {
+    exercises: exercises ?? [],
+    logs,
+    snapshot: buildWorkoutEditorSnapshot(day, exercises ?? [], logs),
+  };
 }
 
 async function refreshEstimate(supabase: any, userId: string, dayId: string) {
@@ -104,6 +133,7 @@ Deno.serve(async (req: Request) => {
 
   try {
     const body = await req.json() as {
+      action?: "edit" | "undo" | "status";
       day_id?: string;
       message?: string;
       request_id?: string;
@@ -111,51 +141,94 @@ Deno.serve(async (req: Request) => {
     };
     const dayId = body.day_id;
     const message = body.message?.trim();
-    if (!dayId || !message || !body.request_id) {
-      return json({ error: "day_id, message, and request_id are required" }, 400);
+    const action = body.action ?? "edit";
+    if (!["edit", "undo", "status"].includes(action)) {
+      return json({ error: "Invalid action" }, 400);
     }
-    if (message.length > 1200) return json({ error: "Message is too long" }, 400);
+    if (!dayId) {
+      return json({ error: "day_id is required" }, 400);
+    }
+    if (dayId.length > 64 || (body.request_id?.length ?? 0) > 200) {
+      return json({ error: "Invalid request identifiers" }, 400);
+    }
+    if (action === "edit" && (!message || !body.request_id)) {
+      return json({ error: "message and request_id are required for edits" }, 400);
+    }
+    if (message && message.length > 1200) return json({ error: "Message is too long" }, 400);
 
     const { data: day } = await supabase
       .from("workout_days")
-      .select("id, title, completed")
+      .select("id, title, completed, active_exercise_id")
       .eq("id", dayId)
       .eq("user_id", userId)
       .maybeSingle();
     if (!day) return json({ error: "Workout not found" }, 404);
-    const { count } = await supabase
-      .from("workout_edit_messages")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", userId)
-      .eq("role", "user")
-      .gte("created_at", userDayStart(Number(body.timezone_offset_minutes ?? 0)));
-    if ((count ?? 0) >= DAILY_LIMIT) {
-      return json({ error: "Daily workout editor limit reached", code: "daily_limit" }, 429);
+
+    if (action === "status") {
+      const { count: undoCount, error: undoError } = await supabase
+        .from("workout_edit_revisions")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .eq("day_id", dayId)
+        .is("undone_at", null);
+      if (undoError) throw undoError;
+      return json({ can_undo: (undoCount ?? 0) > 0 });
     }
 
-    const { data: existingRequest } = await supabase
-      .from("workout_edit_messages")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("request_id", body.request_id)
-      .maybeSingle();
-    if (existingRequest) return json({ error: "This request was already processed" }, 409);
+    if (action === "undo") {
+      const { data: undone, error: undoError } = await supabase.rpc(
+        "undo_workout_edit_revision",
+        { p_user_id: userId, p_day_id: dayId }
+      );
+      if (undoError) throw undoError;
+      const revision = Array.isArray(undone) ? undone[0] : undone;
+      if (!revision) {
+        return json({ error: "There are no AI edits left to undo.", code: "nothing_to_undo" }, 409);
+      }
+      const changes = Array.isArray(revision.changes) ? revision.changes : [];
+      const reply = changes.length
+        ? `Undid: ${changes.join(", ")}.`
+        : "Undid the last AI workout edit.";
+      await supabase.from("workout_edit_messages").insert({
+        user_id: userId,
+        day_id: dayId,
+        role: "assistant",
+        content: reply,
+      });
+      return json({
+        reply,
+        changes,
+        can_undo: Boolean(revision.can_undo),
+        undone_revision_id: revision.revision_id,
+      });
+    }
 
-    await supabase.from("workout_edit_messages").insert({
-      user_id: userId,
-      day_id: dayId,
-      role: "user",
-      content: message,
-      request_id: body.request_id,
-    });
+    const { data: reservation, error: reservationError } = await supabase.rpc(
+      "reserve_workout_editor_request",
+      {
+        p_user_id: userId,
+        p_day_id: dayId,
+        p_request_id: body.request_id,
+        p_message: message,
+      }
+    );
+    if (reservationError) throw reservationError;
+    const reservationResult = reservation as {
+      status?: "accepted" | "duplicate" | "limit";
+      remaining?: number;
+    } | null;
+    if (reservationResult?.status === "limit") {
+      return json({ error: "Daily workout editor limit reached", code: "daily_limit" }, 429);
+    }
+    if (reservationResult?.status === "duplicate") {
+      return json({ error: "This request was already processed" }, 409);
+    }
+    if (reservationResult?.status !== "accepted") {
+      throw new Error("Unable to reserve workout editor request");
+    }
 
-    const [{ data: currentExercises }, { data: catalog }, { data: history }] = await Promise.all([
-      supabase
-        .from("workout_exercises")
-        .select("id, video_clip_id, order_index, name, category, instructions, sets, duration")
-        .eq("day_id", dayId)
-        .eq("user_id", userId)
-        .order("order_index"),
+    const [workoutState, { data: catalog }, { data: history }, { data: revisions }] = await Promise.all([
+      loadWorkoutState(supabase, userId, day),
       supabase
         .from("exercise_video_clips")
         .select("id, exercise_name, category, difficulty_level, description, coaching_notes, requires_both_sides, goals, weaknesses, source_section")
@@ -166,11 +239,21 @@ Deno.serve(async (req: Request) => {
         .eq("day_id", dayId)
         .eq("user_id", userId)
         .order("created_at", { ascending: false })
-        .limit(16),
+        .limit(100),
+      supabase
+        .from("workout_edit_revisions")
+        .select("request_message, assistant_reply, changes, before_snapshot, after_snapshot, applied_at, undone_at")
+        .eq("day_id", dayId)
+        .eq("user_id", userId)
+        .order("applied_at", { ascending: true })
+        .limit(50),
     ]);
+    const currentExercises = workoutState.exercises;
+    const currentLogs = workoutState.logs;
+    const beforeSnapshot = workoutState.snapshot;
 
     const candidates = [...(catalog ?? [])]
-      .map((clip) => ({ ...clip, score: candidateScore(clip, message) }))
+      .map((clip) => ({ ...clip, score: candidateScore(clip, message!) }))
       .sort((a, b) => b.score - a.score)
       .slice(0, 80)
       .map(({ score: _score, ...clip }) => clip);
@@ -189,7 +272,7 @@ Deno.serve(async (req: Request) => {
           {
             role: "system",
             content:
-              "You edit one basketball workout. Return JSON only: {\"reply\":string,\"operations\":[{\"type\":\"add\",\"clip_id\":string}|{\"type\":\"remove\",\"exercise_id\":string}]}. Use only IDs supplied below. Make the smallest changes that satisfy the athlete. Never remove every exercise. Explain the completed changes briefly in reply.",
+              "You are a friendly basketball workout editor. Return JSON only: {\"reply\":string,\"operations\":[{\"type\":\"add\",\"clip_id\":string}|{\"type\":\"remove\",\"exercise_id\":string}]}. current_workout is authoritative and includes every drill's exact prescription, aggregate log, and per-set makes, attempts, minutes, and completion. edit_history records every prior AI edit with timestamps and before/after workout snapshots. Use only IDs supplied below. Make the smallest changes that satisfy the athlete. Never remove every exercise. For greetings or general conversation, reply naturally and warmly with an empty operations array; for example, greet the athlete and ask what they would like to change about their workout. Explain completed changes briefly in reply.",
           },
           ...[...(history ?? [])].reverse().map((entry) => ({
             role: entry.role,
@@ -199,7 +282,8 @@ Deno.serve(async (req: Request) => {
             role: "user",
             content: JSON.stringify({
               request: message,
-              current_exercises: currentExercises ?? [],
+              current_workout: beforeSnapshot,
+              edit_history: revisions ?? [],
               available_catalog_exercises: candidates,
             }),
           },
@@ -216,53 +300,109 @@ Deno.serve(async (req: Request) => {
       operations?: Array<{ type?: string; clip_id?: string; exercise_id?: string }>;
     };
 
-    const currentIds = new Set((currentExercises ?? []).map((exercise) => exercise.id));
+    const currentIds = new Set((currentExercises ?? []).map((exercise: any) => exercise.id));
     const existingClipIds = new Set(
-      (currentExercises ?? []).map((exercise) => exercise.video_clip_id).filter(Boolean)
+      (currentExercises ?? []).map((exercise: any) => exercise.video_clip_id).filter(Boolean)
     );
     const candidateById = new Map(candidates.map((clip) => [clip.id, clip]));
     let orderIndex = Math.max(
       0,
-      ...(currentExercises ?? []).map((exercise) => exercise.order_index ?? 0)
+      ...(currentExercises ?? []).map((exercise: any) => exercise.order_index ?? 0)
     );
     const changes: string[] = [];
+    const revisionOperations: Array<{
+      operation_index: number;
+      operation_type: "add" | "remove";
+      exercise_id: string;
+      exercise_snapshot?: Record<string, unknown> | null;
+      exercise_log_snapshot?: Record<string, unknown> | null;
+    }> = [];
+    const logsByExercise = new Map(currentLogs.map((log: any) => [log.exercise_id, log]));
 
     for (const operation of parsed.operations ?? []) {
       if (operation.type === "remove" && operation.exercise_id && currentIds.has(operation.exercise_id)) {
         if ((currentExercises?.length ?? 0) - changes.filter((change) => change.startsWith("Removed")).length <= 1) {
           continue;
         }
-        const exercise = currentExercises?.find((item) => item.id === operation.exercise_id);
+        const exercise = currentExercises?.find((item: any) => item.id === operation.exercise_id);
         const { error } = await supabase
           .from("workout_exercises")
           .delete()
           .eq("id", operation.exercise_id)
           .eq("day_id", dayId)
           .eq("user_id", userId);
-        if (!error) changes.push(`Removed ${exercise?.name ?? "exercise"}`);
+        if (!error && exercise) {
+          changes.push(`Removed ${exercise.name ?? "exercise"}`);
+          revisionOperations.push({
+            operation_index: revisionOperations.length,
+            operation_type: "remove",
+            exercise_id: exercise.id,
+            exercise_snapshot: exercise,
+            exercise_log_snapshot: logsByExercise.get(exercise.id) ?? null,
+          });
+        }
       }
       if (operation.type === "add" && operation.clip_id && candidateById.has(operation.clip_id)) {
         if (existingClipIds.has(operation.clip_id)) continue;
         const clip = candidateById.get(operation.clip_id)!;
         orderIndex += 1;
-        const { error } = await supabase.from("workout_exercises").insert({
-          day_id: dayId,
-          user_id: userId,
-          video_clip_id: clip.id,
-          order_index: orderIndex,
-          name: clip.exercise_name,
-          category: clip.category,
-          instructions: clip.description ?? clip.coaching_notes,
-          ...prescription(clip),
-        });
-        if (!error) {
+        const { data: addedExercise, error } = await supabase
+          .from("workout_exercises")
+          .insert({
+            day_id: dayId,
+            user_id: userId,
+            video_clip_id: clip.id,
+            order_index: orderIndex,
+            name: clip.exercise_name,
+            category: clip.category,
+            instructions: clip.description ?? clip.coaching_notes,
+            ...prescription(clip),
+          })
+          .select("*")
+          .single();
+        if (!error && addedExercise) {
           existingClipIds.add(operation.clip_id);
           changes.push(`Added ${clip.exercise_name}`);
+          revisionOperations.push({
+            operation_index: revisionOperations.length,
+            operation_type: "add",
+            exercise_id: addedExercise.id,
+            exercise_snapshot: addedExercise,
+          });
         }
       }
     }
 
-    if (changes.length) await refreshEstimate(supabase, userId, dayId);
+    let canUndo = false;
+    if (changes.length) {
+      await refreshEstimate(supabase, userId, dayId);
+      const afterState = await loadWorkoutState(supabase, userId, day);
+      const replyForRevision = parsed.reply?.trim() || changes.join(". ");
+      const { data: revision, error: revisionError } = await supabase
+        .from("workout_edit_revisions")
+        .insert({
+          user_id: userId,
+          day_id: dayId,
+          request_message: message,
+          assistant_reply: replyForRevision,
+          changes,
+          before_snapshot: beforeSnapshot,
+          after_snapshot: afterState.snapshot,
+        })
+        .select("id")
+        .single();
+      if (revisionError || !revision) {
+        throw new Error(revisionError?.message ?? "Could not save workout edit history");
+      }
+      const { error: operationsError } = await supabase
+        .from("workout_edit_operations")
+        .insert(revisionOperations.map((operation) => ({
+          revision_id: revision.id,
+          ...operation,
+        })));
+      if (operationsError) throw new Error(operationsError.message);
+      canUndo = true;
+    }
     const reply = parsed.reply?.trim() || (changes.length ? changes.join(". ") : "I did not make any changes.");
     await supabase.from("workout_edit_messages").insert({
       user_id: userId,
@@ -274,10 +414,11 @@ Deno.serve(async (req: Request) => {
     return json({
       reply,
       changes,
-      remaining_messages: Math.max(0, DAILY_LIMIT - (count ?? 0) - 1),
+      remaining_messages: Math.max(0, Number(reservationResult.remaining ?? DAILY_LIMIT - 1)),
+      can_undo: canUndo,
     });
   } catch (error) {
     console.error("workout-editor error", error);
-    return json({ error: error instanceof Error ? error.message : "Workout editor failed" }, 500);
+    return json({ error: "Workout editor failed" }, 500);
   }
 });

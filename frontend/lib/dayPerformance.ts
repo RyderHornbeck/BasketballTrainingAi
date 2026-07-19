@@ -38,7 +38,9 @@ function scoreExercise(exercise: WorkoutExerciseWithClip, log?: ExerciseLogInput
   const normalized = normalizeSetLogs(setLogs, plan);
 
   const hasStarted = normalized.some(
-    (set) => set.completed || (set.makes != null && set.makes > 0)
+    // A recorded zero is still a real result. Checking for null (rather than
+    // truthiness) keeps 0% shooting sets visible in workout performance.
+    (set) => set.completed || set.makes != null || set.minutes != null
   );
   if (!hasStarted && !log?.completed) return null;
 

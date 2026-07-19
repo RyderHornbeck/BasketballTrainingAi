@@ -53,10 +53,20 @@ Deno.serve(async (req: Request) => {
       session_key?: string;
       tool_name?: string;
       arguments?: Record<string, unknown>;
+      refresh_context?: boolean;
     };
 
     if (!body.day_id) return jsonResponse({ error: "day_id is required" }, 400);
     if (!body.tool_name) return jsonResponse({ error: "tool_name is required" }, 400);
+    if (!body.session_key) return jsonResponse({ error: "session_key is required" }, 400);
+    if (
+      body.day_id.length > 64
+      || body.session_key.length < 16
+      || body.session_key.length > 128
+      || body.tool_name.length > 80
+    ) {
+      return jsonResponse({ error: "Invalid tool request" }, 400);
+    }
 
     const args = { ...(body.arguments ?? {}) };
     let clientRequestId =
@@ -77,22 +87,76 @@ Deno.serve(async (req: Request) => {
       "resume_timer",
       "stop_timer",
     ]);
+    const readOnlyTools = new Set([
+      "get_workout_position",
+      "get_next_drill",
+      "get_progress",
+      "list_workout_drills",
+      "search_exercise_catalog",
+    ]);
+    const allowedTools = new Set([
+      ...idempotentTools,
+      ...readOnlyTools,
+      "set_current_drill",
+      "add_workout_exercise",
+      "remove_workout_exercise",
+    ]);
+    if (!allowedTools.has(body.tool_name)) {
+      return jsonResponse({ error: "Unsupported tool" }, 400);
+    }
 
     if (!clientRequestId && idempotentTools.has(body.tool_name)) {
       clientRequestId = `${body.tool_name}-${userId}-${crypto.randomUUID()}`;
       args.client_request_id = clientRequestId;
     }
 
-    if (clientRequestId) {
-      const { data: cached } = await supabase
-        .from("coach_tool_requests")
-        .select("result, db_changed, client_action, local_confirmation, skip_model_response")
-        .eq("user_id", userId)
-        .eq("client_request_id", clientRequestId)
-        .maybeSingle();
+    if (clientRequestId && (clientRequestId.length < 8 || clientRequestId.length > 200)) {
+      return jsonResponse({ error: "Invalid client request ID" }, 400);
+    }
 
-      if (cached) {
-        const refreshedContext = cached.db_changed || body.tool_name === "get_workout_position"
+    let claimedRequestId: string | null = null;
+    if (clientRequestId) {
+      const { data: claimed, error: claimError } = await supabase
+        .from("coach_tool_requests")
+        .upsert(
+          {
+            user_id: userId,
+            day_id: body.day_id,
+            client_request_id: clientRequestId,
+            tool_name: body.tool_name,
+            result: "",
+            processing_status: "processing",
+          },
+          {
+            onConflict: "user_id,client_request_id",
+            ignoreDuplicates: true,
+          }
+        )
+        .select("id")
+        .maybeSingle();
+      if (claimError) throw claimError;
+      claimedRequestId = claimed?.id ?? null;
+
+      if (!claimedRequestId) {
+        const { data: cached } = await supabase
+          .from("coach_tool_requests")
+          .select(
+            "day_id, tool_name, result, db_changed, client_action, local_confirmation, skip_model_response, processing_status"
+          )
+          .eq("user_id", userId)
+          .eq("client_request_id", clientRequestId)
+          .maybeSingle();
+        if (!cached) return jsonResponse({ error: "Unable to claim tool request" }, 409);
+        if (cached.day_id !== body.day_id || cached.tool_name !== body.tool_name) {
+          return jsonResponse({ error: "Request ID was already used for a different action" }, 409);
+        }
+        if (cached.processing_status === "processing") {
+          return jsonResponse({ error: "Tool request is already processing" }, 409);
+        }
+        if (cached.processing_status === "failed") {
+          return jsonResponse({ error: "Earlier tool request failed" }, 409);
+        }
+        const refreshedContext = cached.db_changed
           ? await loadWorkoutContext(supabase, userId, body.day_id)
           : null;
         return jsonResponse({
@@ -104,70 +168,84 @@ Deno.serve(async (req: Request) => {
           deduplicated: true,
           updated_context: refreshedContext ? buildRealtimeNavigationUpdate(refreshedContext) : null,
           updated_instructions: refreshedContext
+            && (cached.db_changed || body.refresh_context)
             ? buildRealtimeInstructions(refreshedContext, answers ?? null)
             : null,
+          tool_kind: cached.db_changed ? "mutation" : "read_only",
+          requires_spoken_confirmation: cached.db_changed,
         });
       }
     }
 
-    if (body.session_key) {
-      const { data: session } = await supabase
-        .from("coach_sessions")
-        .select("id, response_count, expires_at, ended_at")
-        .eq("session_key", body.session_key)
-        .eq("user_id", userId)
-        .maybeSingle();
-
-      if (!session || session.ended_at) {
-        return jsonResponse({ error: "Coach session is not active." }, 409);
-      }
+    const { data: activeSession } = await supabase
+      .from("coach_sessions")
+      .select("id, day_id, expires_at, ended_at")
+      .eq("session_key", body.session_key)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (
+      !activeSession
+      || activeSession.day_id !== body.day_id
+      || activeSession.ended_at
+      || new Date(activeSession.expires_at).getTime() <= Date.now()
+    ) {
+      return jsonResponse({ error: "Coach session is not active." }, 409);
     }
 
     const ctx = await loadWorkoutContext(supabase, userId, body.day_id);
     if (!ctx) return jsonResponse({ error: "Workout day not found" }, 404);
 
-    const outcome = await executeCoachTool(
-      supabase,
-      userId,
-      body.day_id,
-      ctx,
-      body.tool_name,
-      args
-    );
-
-    if (clientRequestId) {
-      await supabase.from("coach_tool_requests").insert({
-        user_id: userId,
-        day_id: body.day_id,
-        client_request_id: clientRequestId,
-        tool_name: body.tool_name,
-        result: outcome.result,
-        db_changed: outcome.dbChanged,
-        client_action: outcome.clientAction ?? null,
-        local_confirmation: outcome.localConfirmation ?? null,
-        skip_model_response: outcome.skipModelResponse ?? false,
-      });
-    }
-
-    if (body.session_key) {
-      const { data: session } = await supabase
-        .from("coach_sessions")
-        .select("id, response_count")
-        .eq("session_key", body.session_key)
-        .eq("user_id", userId)
-        .maybeSingle();
-
-      if (session) {
+    let outcome;
+    try {
+      outcome = await executeCoachTool(
+        supabase,
+        userId,
+        body.day_id,
+        ctx,
+        body.tool_name,
+        args
+      );
+    } catch (toolError) {
+      if (claimedRequestId) {
         await supabase
-          .from("coach_sessions")
-          .update({ response_count: (session.response_count ?? 0) + 1 })
-          .eq("id", session.id);
+          .from("coach_tool_requests")
+          .update({
+            processing_status: "failed",
+            result: "Tool execution failed",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", claimedRequestId)
+          .eq("user_id", userId);
       }
+      throw toolError;
     }
 
-    const refreshedContext = outcome.dbChanged || body.tool_name === "get_workout_position"
+    if (claimedRequestId) {
+      const { error: completionError } = await supabase
+        .from("coach_tool_requests")
+        .update({
+          result: outcome.result,
+          db_changed: outcome.dbChanged,
+          client_action: outcome.clientAction ?? null,
+          local_confirmation: outcome.localConfirmation ?? null,
+          skip_model_response: outcome.skipModelResponse ?? false,
+          processing_status: "completed",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", claimedRequestId)
+        .eq("user_id", userId);
+      if (completionError) throw completionError;
+    }
+
+    await supabase.rpc("increment_coach_session_response", {
+      p_session_id: activeSession.id,
+      p_user_id: userId,
+    });
+
+    const refreshedContext = outcome.dbChanged
       ? await loadWorkoutContext(supabase, userId, body.day_id)
-      : null;
+      : ctx;
+    const toolKind = readOnlyTools.has(body.tool_name) ? "read_only" : "mutation";
 
     return jsonResponse({
       result: outcome.result,
@@ -177,11 +255,14 @@ Deno.serve(async (req: Request) => {
       skip_model_response: outcome.skipModelResponse ?? false,
       updated_context: refreshedContext ? buildRealtimeNavigationUpdate(refreshedContext) : null,
       updated_instructions: refreshedContext
+        && (outcome.dbChanged || body.refresh_context)
         ? buildRealtimeInstructions(refreshedContext, answers ?? null)
         : null,
+      tool_kind: toolKind,
+      requires_spoken_confirmation: toolKind === "mutation" && !outcome.skipModelResponse,
     });
   } catch (err) {
     console.error("coach-tools error:", err);
-    return jsonResponse({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+    return jsonResponse({ error: "Coach tool request failed" }, 500);
   }
 });

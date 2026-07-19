@@ -129,7 +129,9 @@ export function resolveAttemptsOverride(
     .filter((value): value is number => value != null && value > 0);
   if (!attempts.length) return null;
   const first = attempts[0];
-  return attempts.every((value) => value === first) ? first : attempts[attempts.length - 1];
+  // Differing values are intentional per-set edits, not a drill-wide
+  // prescription override.
+  return attempts.every((value) => value === first) ? first : null;
 }
 
 export function createEmptySetLogs(plan: ExerciseSetPlan): SetLogEntry[] {
@@ -200,6 +202,11 @@ export function aggregateSetLogs(setLogs: SetLogEntry[], plan: ExerciseSetPlan) 
   let hasMinutes = false;
 
   for (const entry of normalized) {
+    // Empty set rows carry their target attempts so the UI can display a
+    // prescription. Those are not recorded shot attempts. Count only sets
+    // the athlete has completed; otherwise future targets inflate progress
+    // summaries and the aggregate persisted on exercise_logs.
+    if (plan.logType === "makes_attempts" && !entry.completed) continue;
     if (entry.makes != null) {
       makes += entry.makes;
       hasMakes = true;

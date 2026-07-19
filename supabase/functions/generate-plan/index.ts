@@ -19,7 +19,6 @@
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { isCatalogOnlyVideoId } from "../_shared/exerciseClip.ts";
-import { sendExpoPushNotification } from "../_shared/expo-push.ts";
 import {
   AdaptiveProfile,
   buildAdaptiveProfile,
@@ -237,19 +236,24 @@ function buildClipPool(
   if (answers.has_court_access && !pool.some((clip) => clip.category === "shooting")) {
     pool = dedupeClips([
       ...pool,
-      ...clips.filter((clip) => clip.category === "shooting"),
+      ...clips.filter((clip) => clip.category === "shooting" && difficultyOk(clip)),
     ]);
   }
 
-  // Never drop an entire core skill category because of difficulty mismatch alone.
+  // Restore core categories only from the athlete's allowed difficulty range.
   for (const category of ["ball_handling", "finishing", "defense"] as const) {
     if (!pool.some((clip) => clip.category === category)) {
-      pool = dedupeClips([...pool, ...clips.filter((clip) => clip.category === category)]);
+      pool = dedupeClips([
+        ...pool,
+        ...clips.filter((clip) => clip.category === category && difficultyOk(clip)),
+      ]);
     }
   }
 
   return [...pool].sort(
-    (a, b) => scoreClip(b, answers, adaptiveProfile) - scoreClip(a, answers, adaptiveProfile)
+    (a, b) =>
+      scoreClip(b, answers, adaptiveProfile) - scoreClip(a, answers, adaptiveProfile) ||
+      a.id.localeCompare(b.id)
   );
 }
 
@@ -709,16 +713,28 @@ function sanityCheckPlan(
   answers: OnboardingAnswers
 ): string | null {
   if (plan.days.length !== 5) return "Plan must contain exactly five days.";
+  const level = (answers.overall_skill_level ?? "beginner").toLowerCase();
+  const allowedDifficulties = DIFFICULTY_ALLOWANCE[level] ?? DIFFICULTY_ORDER;
   for (let index = 0; index < plan.days.length; index++) {
     const day = plan.days[index];
     if (day.day_number !== context.startDayNumber + index) {
       return `Day numbering is wrong at position ${index + 1}.`;
     }
     if (!day.exercises.length) return `Day ${day.day_number} has no exercises.`;
+    if (day.exercises.length > context.composition.totalExercises) {
+      return `Day ${day.day_number} exceeds its configured exercise count.`;
+    }
     const seen = new Set<string>();
     for (const exercise of day.exercises) {
-      if (!clipById.has(exercise.video_clip_id)) {
+      const clip = clipById.get(exercise.video_clip_id);
+      if (!clip) {
         return `Exercise "${exercise.name}" references an unknown video clip.`;
+      }
+      if (
+        clip.difficulty_level &&
+        !allowedDifficulties.includes(clip.difficulty_level)
+      ) {
+        return `Exercise "${exercise.name}" is outside the athlete's allowed difficulty range.`;
       }
       if (seen.has(exercise.video_clip_id)) {
         return `Day ${day.day_number} repeats a video clip.`;
@@ -806,16 +822,18 @@ async function runGeneration(
         requires_both_sides: clip.requires_both_sides ?? false,
       })
     );
-    const repairPool = (allClips as VideoClip[]).map((clip) => ({
+    const allClipPool = (allClips as VideoClip[]).map((clip) => ({
       ...clip,
       requires_both_sides: clip.requires_both_sides ?? false,
     }));
-    const clipById = new Map(repairPool.map((clip) => [clip.id, clip]));
+    const clipById = new Map(allClipPool.map((clip) => [clip.id, clip]));
 
     // 1. Deterministic generation -- always succeeds if the pool is non-empty.
+    const generationSeed = context.targetPlanId ?? userId;
     let plan: SmartPlan = buildSmartPlan(pool, {
       startDayNumber: context.startDayNumber,
       blockIndex: context.blockIndex,
+      randomSeed: generationSeed,
       adaptiveProfile: context.adaptiveProfile,
       composition: context.composition,
       daysPerWeek: answers.days_per_week ?? 3,
@@ -830,6 +848,7 @@ async function runGeneration(
     const planInput = {
       startDayNumber: context.startDayNumber,
       blockIndex: context.blockIndex,
+      randomSeed: generationSeed,
       adaptiveProfile: context.adaptiveProfile,
       composition: context.composition,
       daysPerWeek: answers.days_per_week ?? 3,
@@ -837,7 +856,9 @@ async function runGeneration(
       hasCourtAccess: true,
       samples: context.samples,
     };
-    plan = repairSmartPlan(plan, repairPool, planInput);
+    // Repair only from the athlete's equipment- and difficulty-compatible
+    // pool. The full catalog remains available above solely for validation.
+    plan = repairSmartPlan(plan, pool, planInput);
 
     const sanityError = sanityCheckPlan(plan, clipById, context, trainingAnswers);
     if (sanityError) {
@@ -886,13 +907,16 @@ async function runGeneration(
       planRow = data;
     }
 
+    if (!planRow) {
+      await markRequestFailed(supabase, requestId, "Failed to resolve workout plan.");
+      return;
+    }
     const planId = String(planRow.id);
     const sortedDays = [...plan.days].sort((a, b) => a.day_number - b.day_number);
     const daysPerWeek = answers.days_per_week || plan.days_per_week || 3;
 
     for (const day of sortedDays) {
       const isFirstGeneratedDay = day.day_number === context.startDayNumber;
-      const isInitialFirstDay = context.generationType === "initial" && isFirstGeneratedDay;
 
       const { data: dayRow, error: dayInsertError } = await supabase
         .from("workout_days")
@@ -905,7 +929,10 @@ async function runGeneration(
           focus: day.focus,
           estimated_minutes: day.estimated_minutes,
           coach_notes: day.coach_notes,
-          locked: !isInitialFirstDay,
+          // A new five-day extension is requested only after the preceding
+          // block is complete, so its first day must be immediately available.
+          // Subsequent days still unlock one at a time.
+          locked: !isFirstGeneratedDay,
           completed: false,
           scheduled_date: null,
         })
@@ -967,18 +994,6 @@ async function runGeneration(
       .update({ status: "completed", completed_at: new Date().toISOString() })
       .eq("id", requestId);
 
-    const { data: profile } = await supabase.from("profiles").select("push_token").eq("id", userId).single();
-    if (profile?.push_token) {
-      const message =
-        context.generationType === "extend"
-          ? "Your next five adaptive workouts are ready."
-          : "Your first five basketball workouts are ready.";
-      await sendExpoPushNotification(profile.push_token, "Court Coach", message, {
-        plan_id: planId,
-        screen: "days",
-      });
-    }
-
     console.log(
       `[generate-plan] Completed request ${requestId} -> plan ${planId}, block ${context.blockIndex}`
     );
@@ -1015,6 +1030,9 @@ Deno.serve(async (req: Request) => {
     const body = await req.json().catch(() => ({}));
     const requestId: string | undefined = body.request_id;
     if (!requestId) return jsonResponse({ error: "request_id is required" }, 400);
+    if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(requestId)) {
+      return jsonResponse({ error: "Invalid request_id" }, 400);
+    }
 
     // 3. Load the matching generation request (must belong to this user).
     const { data: genRequest, error: genRequestError } = await supabase
@@ -1107,6 +1125,6 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ success: true, status: "generating" });
   } catch (err) {
     console.error("generate-plan error:", err);
-    return jsonResponse({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+    return jsonResponse({ error: "Plan generation failed" }, 500);
   }
 });

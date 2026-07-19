@@ -312,6 +312,7 @@ function highIntensityCap(dayOffset: number, totalExercises: number): number {
 interface BuildContext {
   startDayNumber: number;
   blockIndex: number;
+  randomSeed: string;
   adaptiveProfile: AdaptiveProfile;
   composition: CompositionRules;
   daysPerWeek: number;
@@ -332,7 +333,9 @@ function minutesPerSet(composition: CompositionRules, averageSets: number): numb
 
 function categoryLogType(category: string): SmartExercise["log_type"] {
   if (category === "shooting" || category === "finishing") return "makes_attempts";
-  if (category === "ball_handling" || category === "conditioning") return "minutes";
+  if (category === "ball_handling" || category === "defense" || category === "conditioning") {
+    return "minutes";
+  }
   return "checkbox";
 }
 
@@ -434,7 +437,9 @@ function buildExercise(
   );
   const log_type = categoryLogType(clip.category);
   const perSetMinutesForDrill =
-    clip.category === "ball_handling"
+    clip.category === "ball_handling" ||
+    clip.category === "defense" ||
+    clip.category === "conditioning"
       ? Math.max(1, Math.min(perSetMinutes, 3))
       : perSetMinutes;
 
@@ -524,7 +529,12 @@ function eligibleClips(
     if (fresh.length >= 3) candidates = fresh;
   }
 
-  return candidates;
+  return [...candidates].sort(
+    (a, b) =>
+      a.category.localeCompare(b.category) ||
+      (a.difficulty_level ?? "").localeCompare(b.difficulty_level ?? "") ||
+      a.id.localeCompare(b.id)
+  );
 }
 
 function selectClip(
@@ -923,6 +933,8 @@ function buildDay(
 export interface SmartPlanInput {
   startDayNumber: number;
   blockIndex: number;
+  /** Stable user/plan identity used for retry-safe randomized choices. */
+  randomSeed?: string;
   adaptiveProfile: AdaptiveProfile;
   composition: CompositionRules;
   daysPerWeek: number;
@@ -936,6 +948,7 @@ export function buildSmartPlan(clips: PlanClip[], input: SmartPlanInput): SmartP
   const context: BuildContext = {
     startDayNumber: input.startDayNumber,
     blockIndex: input.blockIndex,
+    randomSeed: input.randomSeed ?? "default-plan",
     adaptiveProfile: input.adaptiveProfile,
     composition: input.composition,
     daysPerWeek: input.daysPerWeek,
@@ -966,28 +979,93 @@ export function buildSmartPlan(clips: PlanClip[], input: SmartPlanInput): SmartP
     summary: `Five personalized workouts${goal}, tuned to your recent performance.`,
     duration_weeks: 1,
     days_per_week: input.daysPerWeek,
-    days: enforcePlanRequirements(days, clips, context),
+    days: enforcePlanRequirements(days, clips, context, false),
   };
+}
+
+function stablePositiveHash(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function fillDeficientDay(
+  exercises: SmartExercise[],
+  dayNumber: number,
+  pool: PlanClip[],
+  context: BuildContext,
+  dayState: DayPickState,
+  block: BlockPickState,
+  perSetMinutes: number
+): SmartExercise[] {
+  const missing = context.composition.totalExercises - exercises.length;
+  if (missing <= 0) return exercises;
+
+  // Random-looking but stable across retries, so an idempotent generation
+  // request always produces the same workout.
+  const seed = stablePositiveHash(
+    `${context.randomSeed}:${context.blockIndex}:${dayNumber}:deficit-fill`
+  );
+  const requested = (seed % 3) + 1;
+  const additions = Math.min(missing, requested);
+  const categories = [...new Set(pool.map((clip) => clip.category))];
+  const result = [...exercises];
+
+  for (let index = 0; index < additions; index++) {
+    let candidates = pool.filter(
+      (clip) =>
+        categories.includes(clip.category) &&
+        !dayState.usedInDay.has(clip.id) &&
+        !context.history.painExcludedCategories.has(clip.category)
+    );
+    const nonConsecutive = candidates.filter(
+      (clip) => !dayState.previousDayClipIds.has(clip.id)
+    );
+    if (nonConsecutive.length) candidates = nonConsecutive;
+    if (dayState.highIntensityCount >= dayState.highIntensityLimit) {
+      candidates = candidates.filter((clip) => !isHighIntensity(clip));
+    }
+    candidates.sort(
+      (a, b) =>
+        stablePositiveHash(`${seed}:${index}:${a.id}`) -
+          stablePositiveHash(`${seed}:${index}:${b.id}`) ||
+        a.id.localeCompare(b.id)
+    );
+    const clip = candidates[0] ?? null;
+    if (!clip) break;
+    commitClip(clip, dayState, block);
+    result.push(buildExercise(clip, "other", context, perSetMinutes));
+  }
+
+  return result;
 }
 
 function enforcePlanRequirements(
   days: SmartDay[],
   pool: PlanClip[],
-  context: BuildContext
+  context: BuildContext,
+  fillDeficits: boolean
 ): SmartDay[] {
   const block: BlockPickState = {
     tracker: createMixTracker(days.length * context.composition.totalExercises, 0),
     usageCount: new Map(),
   };
 
-  return days.map((day, dayOffset) => {
+  const repairedDays: SmartDay[] = [];
+  for (let dayOffset = 0; dayOffset < days.length; dayOffset++) {
+    const day = days[dayOffset];
     const dayState: DayPickState = {
       usedInDay: new Set(day.exercises.map((exercise) => exercise.video_clip_id)),
       highIntensityCount: 0,
       highIntensityLimit: 2,
       previousDayClipIds: new Set(
         dayOffset > 0
-          ? days[dayOffset - 1].exercises.map((exercise) => exercise.video_clip_id)
+          ? repairedDays[dayOffset - 1].exercises.map(
+              (exercise) => exercise.video_clip_id
+            )
           : []
       ),
     };
@@ -1013,12 +1091,38 @@ function enforcePlanRequirements(
       }
     }
 
+    if (fillDeficits) {
+      exercises = fillDeficientDay(
+        exercises,
+        day.day_number,
+        pool,
+        context,
+        dayState,
+        block,
+        perSetMinutes
+      );
+    }
+
     exercises = exercises
       .slice(0, context.composition.totalExercises)
       .map((exercise, index) => ({ ...exercise, order_index: index + 1 }));
 
-    return { ...day, exercises };
-  });
+    const plannedMinutes = exercises.reduce(
+      (total, exercise) => total + parseExerciseMinutes(exercise),
+      0
+    );
+    const estimatedMinutes = plannedMinutes + 5 + exercises.length * 1.5;
+
+    repairedDays.push({
+      ...day,
+      estimated_minutes: Math.min(
+        context.composition.minutes,
+        Math.max(10, Math.round(estimatedMinutes))
+      ),
+      exercises,
+    });
+  }
+  return repairedDays;
 }
 
 export function repairSmartPlan(
@@ -1030,6 +1134,7 @@ export function repairSmartPlan(
   const context: BuildContext = {
     startDayNumber: input.startDayNumber,
     blockIndex: input.blockIndex,
+    randomSeed: input.randomSeed ?? "default-plan",
     adaptiveProfile: input.adaptiveProfile,
     composition: input.composition,
     daysPerWeek: input.daysPerWeek,
@@ -1039,6 +1144,6 @@ export function repairSmartPlan(
   };
   return {
     ...plan,
-    days: enforcePlanRequirements(plan.days, pool, context),
+    days: enforcePlanRequirements(plan.days, pool, context, true),
   };
 }

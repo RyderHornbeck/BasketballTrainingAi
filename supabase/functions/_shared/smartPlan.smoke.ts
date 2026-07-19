@@ -8,6 +8,7 @@ import {
   determineNextDifficulty,
   detectPainExclusions,
   PlanClip,
+  repairSmartPlan,
 } from "./smartPlan.ts";
 
 let failures = 0;
@@ -126,6 +127,16 @@ assert(
     .every((exercise) => Number.parseInt(exercise.sets, 10) >= 2),
   "ball-handling drills prescribe at least two sets"
 );
+const timedExercises = initialExercises.filter((exercise) =>
+  ["ball_handling", "defense", "conditioning"].includes(exercise.category)
+);
+assert(
+  timedExercises.every((exercise) => {
+    const minutes = Number.parseFloat(exercise.duration);
+    return exercise.log_type === "minutes" && minutes >= 1 && minutes <= 3;
+  }),
+  "ball-handling, defense, and conditioning drills use one-to-three minute timed sets"
+);
 assert(
   initialExercises
     .filter((exercise) => exercise.set_side_labels != null)
@@ -137,6 +148,112 @@ for (let i = 1; i < initial.days.length; i++) {
   const overlap = initial.days[i].exercises.filter((e) => prev.has(e.video_clip_id));
   assert(overlap.length === 0, `days ${i} and ${i + 1} share no consecutive drills`);
 }
+
+// Deficient days receive one-to-three stable random eligible drills, capped at
+// the configured count.
+const deficient = {
+  ...initial,
+  days: initial.days.map((day, index) => ({
+    ...day,
+    exercises: day.exercises.slice(0, day.exercises.length - [2, 1, 3, 2, 1][index]),
+  })),
+};
+const allowedRepairPool = clips.filter((clip) => clip.difficulty_level !== "advanced");
+const repairInput = {
+  startDayNumber: 1,
+  blockIndex: 1,
+  randomSeed: "initial-user",
+  adaptiveProfile: emptyProfile,
+  composition,
+  daysPerWeek: 3,
+  mainGoal: "improve shooting",
+  hasCourtAccess: true,
+  samples: [] as PerformanceSample[],
+};
+const repairedDeficient = repairSmartPlan(deficient, allowedRepairPool, repairInput);
+const repairedAgain = repairSmartPlan(deficient, allowedRepairPool, repairInput);
+const allowedIds = new Set(allowedRepairPool.map((clip) => clip.id));
+for (let index = 0; index < repairedDeficient.days.length; index++) {
+  const before = deficient.days[index];
+  const after = repairedDeficient.days[index];
+  const increase = after.exercises.length - before.exercises.length;
+  assert(
+    increase >= 1 &&
+      increase <= 3 &&
+      after.exercises.length <= composition.totalExercises,
+    `initial block day ${after.day_number} adds one-to-three drills without exceeding its configured count`
+  );
+  assert(
+    new Set(after.exercises.map((exercise) => exercise.video_clip_id)).size ===
+      after.exercises.length,
+    `initial block day ${after.day_number} filler never duplicates a drill`
+  );
+  const originalIds = new Set(before.exercises.map((exercise) => exercise.video_clip_id));
+  const addedIds = after.exercises
+    .map((exercise) => exercise.video_clip_id)
+    .filter((clipId) => !originalIds.has(clipId));
+  assert(
+    addedIds.every((clipId) => allowedIds.has(clipId)),
+    `initial block day ${after.day_number} fillers stay inside the allowed difficulty pool`
+  );
+}
+assert(
+  JSON.stringify(
+    repairedAgain.days.map((day) => day.exercises.map((exercise) => exercise.video_clip_id))
+  ) ===
+    JSON.stringify(
+      repairedDeficient.days.map((day) =>
+        day.exercises.map((exercise) => exercise.video_clip_id)
+      )
+    ),
+  "deficient-day randomization is stable across retries"
+);
+const repairedFromReversedPool = repairSmartPlan(
+  deficient,
+  [...allowedRepairPool].reverse(),
+  repairInput
+);
+assert(
+  JSON.stringify(
+    repairedFromReversedPool.days.map((day) =>
+      day.exercises.map((exercise) => exercise.video_clip_id)
+    )
+  ) ===
+    JSON.stringify(
+      repairedDeficient.days.map((day) =>
+        day.exercises.map((exercise) => exercise.video_clip_id)
+      )
+    ),
+  "deficient-day selection is stable when catalog input order changes"
+);
+
+function stableHashForTest(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+const seedRequestingThree = Array.from({ length: 100 }, (_, index) => `three-${index}`).find(
+  (seed) => stableHashForTest(`${seed}:1:1:deficit-fill`) % 3 === 2
+)!;
+const threeMissing = {
+  ...initial,
+  days: initial.days.map((day, index) => ({
+    ...day,
+    exercises: index === 0 ? day.exercises.slice(0, day.exercises.length - 3) : day.exercises,
+  })),
+};
+const threeAdded = repairSmartPlan(threeMissing, allowedRepairPool, {
+  ...repairInput,
+  randomSeed: seedRequestingThree,
+});
+assert(
+  threeAdded.days[0].exercises.length - threeMissing.days[0].exercises.length === 3,
+  "a randomized filler count of three adds three distinct exercises"
+);
 
 // --- Extension block with history ---------------------------------------------
 // Simulate completing block 1 with mixed results.

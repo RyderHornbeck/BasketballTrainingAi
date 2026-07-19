@@ -760,6 +760,32 @@ Deno.serve(async (req: Request) => {
 
     const body = (await req.json().catch(() => ({}))) as CoachRequest;
     if (!body.day_id) return jsonResponse({ error: "day_id is required" }, 400);
+    if (body.day_id.length > 64) return jsonResponse({ error: "Invalid day_id" }, 400);
+    if ((body.text?.length ?? 0) > 4_000) return jsonResponse({ error: "Text is too long" }, 413);
+    if ((body.audio_base64?.length ?? 0) > 20_000_000) {
+      return jsonResponse({ error: "Audio payload is too large" }, 413);
+    }
+    if ((body.conversation?.length ?? 0) > 32) {
+      return jsonResponse({ error: "Conversation is too large" }, 413);
+    }
+
+    const ctx = await loadWorkoutContext(supabase, userId, body.day_id);
+    if (!ctx) return jsonResponse({ error: "Workout day not found" }, 404);
+    const { data: reservationRows, error: reservationError } = await supabase.rpc(
+      "reserve_coach_session_usage",
+      {
+        p_user_id: userId,
+        p_session_key: `legacy-${crypto.randomUUID()}`,
+        p_day_id: body.day_id,
+        p_model: COACH_MODEL,
+        p_reservation_usd: 0.01,
+      }
+    );
+    if (reservationError) throw reservationError;
+    const reservation = Array.isArray(reservationRows) ? reservationRows[0] : reservationRows;
+    if (!reservation?.allowed) {
+      return jsonResponse({ error: "Daily coach credit is used up.", code: "daily_budget_exhausted" }, 429);
+    }
 
     // 1. Get the user's words: either raw text or transcribed audio.
     let userText = (body.text ?? "").trim();
@@ -770,10 +796,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ transcript: "", reply: null, audio_base64: null, actions: [], db_changed: false });
     }
 
-    // 2. Fresh workout context + athlete profile.
-    const ctx = await loadWorkoutContext(supabase, userId, body.day_id);
-    if (!ctx) return jsonResponse({ error: "Workout day not found" }, 404);
-
+    // 2. Fresh athlete profile.
     const { data: answers } = await supabase
       .from("onboarding_answers")
       .select(
@@ -789,7 +812,7 @@ Deno.serve(async (req: Request) => {
     // 3. Build the conversation and run the tool loop.
     const history = (body.conversation ?? []).slice(-16).map((m) => ({
       role: m.role,
-      content: m.content,
+      content: m.content.slice(0, 4_000),
     }));
 
     const messages: ChatMessage[] = [
@@ -860,6 +883,6 @@ Deno.serve(async (req: Request) => {
     });
   } catch (err) {
     console.error("coach error:", err);
-    return jsonResponse({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+    return jsonResponse({ error: "Coach request failed" }, 500);
   }
 });

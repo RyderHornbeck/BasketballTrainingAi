@@ -29,7 +29,7 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 async function getDailyUsageTotals(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   userId: string,
   timezone: string | null
 ) {
@@ -59,7 +59,7 @@ async function getDailyUsageTotals(
     .eq("user_id", userId)
     .eq("usage_date", localDate)
     .maybeSingle();
-  return Number(data?.spent_usd ?? 0);
+  return Number((data as { spent_usd?: number } | null)?.spent_usd ?? 0);
 }
 
 Deno.serve(async (req: Request) => {
@@ -98,6 +98,13 @@ Deno.serve(async (req: Request) => {
     if (!body.day_id) return jsonResponse({ error: "day_id is required" }, 400);
     if (!body.sdp) return jsonResponse({ error: "sdp is required" }, 400);
     if (!body.session_key) return jsonResponse({ error: "session_key is required" }, 400);
+    if (body.day_id.length > 64 || body.session_key.length < 16 || body.session_key.length > 128) {
+      return jsonResponse({ error: "Invalid session parameters" }, 400);
+    }
+    if (body.sdp.length > 2_000_000) return jsonResponse({ error: "SDP payload is too large" }, 413);
+    if ((body.conversation_summary?.length ?? 0) > 8_000) {
+      return jsonResponse({ error: "Conversation summary is too large" }, 413);
+    }
 
     const { data: profile } = await supabase
       .from("profiles")
@@ -122,9 +129,15 @@ Deno.serve(async (req: Request) => {
 
     const { data: existingSession } = await supabase
       .from("coach_sessions")
-      .select("id, response_count, expires_at, ended_at")
+      .select("id, user_id, day_id, response_count, expires_at, ended_at")
       .eq("session_key", body.session_key)
       .maybeSingle();
+    if (
+      existingSession
+      && (existingSession.user_id !== userId || existingSession.day_id !== body.day_id)
+    ) {
+      return jsonResponse({ error: "Session key is already bound to another workout." }, 409);
+    }
 
     const ctx = await loadWorkoutContext(supabase, userId, body.day_id);
     if (!ctx) return jsonResponse({ error: "Workout day not found" }, 404);
@@ -143,6 +156,28 @@ Deno.serve(async (req: Request) => {
       body.timer,
       body.conversation_summary
     );
+    const { data: reservationRows, error: reservationError } = await supabase.rpc(
+      "reserve_coach_session_usage",
+      {
+        p_user_id: userId,
+        p_session_key: body.session_key,
+        p_day_id: body.day_id,
+        p_model: REALTIME_MODEL,
+        p_reservation_usd: 0.0025,
+      }
+    );
+    if (reservationError) throw reservationError;
+    const reservation = Array.isArray(reservationRows) ? reservationRows[0] : reservationRows;
+    if (!reservation?.allowed) {
+      return jsonResponse(
+        {
+          error: "Daily coach credit is used up.",
+          code: "daily_budget_exhausted",
+          daily_usage: reservation,
+        },
+        429
+      );
+    }
 
     const sessionConfig = buildRealtimeSessionConfig(
       buildRealtimeInstructions(ctx, answers ?? null, body.timer, body.conversation_summary),
@@ -154,8 +189,7 @@ Deno.serve(async (req: Request) => {
     // This is retained as a database session-validity timestamp, not a coach
     // conversation limit. Workout/day limits are enforced separately above.
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    await supabase.from("coach_sessions").upsert(
-      {
+    const sessionValues = {
         user_id: userId,
         day_id: body.day_id,
         session_key: body.session_key,
@@ -165,9 +199,12 @@ Deno.serve(async (req: Request) => {
         started_at: new Date().toISOString(),
         expires_at: expiresAt,
         ended_at: null,
-      },
-      { onConflict: "session_key" }
-    );
+      };
+    const sessionWrite = existingSession
+      ? supabase.from("coach_sessions").update(sessionValues).eq("id", existingSession.id)
+      : supabase.from("coach_sessions").insert(sessionValues);
+    const { error: sessionWriteError } = await sessionWrite;
+    if (sessionWriteError) throw sessionWriteError;
 
     const form = new FormData();
     form.set("sdp", body.sdp);
@@ -216,6 +253,6 @@ Deno.serve(async (req: Request) => {
     });
   } catch (err) {
     console.error("coach-realtime error:", err);
-    return jsonResponse({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+    return jsonResponse({ error: "Could not start coach session" }, 500);
   }
 });
