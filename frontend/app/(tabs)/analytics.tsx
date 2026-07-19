@@ -1,8 +1,8 @@
 import { Card } from "@/components/Card";
 import {
   MakesMissesChartPanel,
-  ShootingTrendLineChart,
   SkillRadarChart,
+  WorkoutPerformanceLineChart,
   WorkoutActivityHeatmap,
 } from "@/components/analytics/AnalyticsCharts";
 import { ShotMap } from "@/components/analytics/ShotMap";
@@ -128,8 +128,8 @@ export default function AnalyticsScreen() {
         </Card>
 
         <Card style={styles.chartCard}>
-          <Text style={[styles.chartTitle, { color: colors.text }]}>Shooting Percentage</Text>
-          <ShootingTrendLineChart buckets={summary.weeklyPctTrend} />
+          <Text style={[styles.chartTitle, { color: colors.text }]}>Workout Performance</Text>
+          <WorkoutPerformanceLineChart points={summary.workoutPerformance} />
         </Card>
 
         <Card style={styles.chartCard}>

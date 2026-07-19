@@ -10,7 +10,15 @@ import { ExerciseVideoClip } from "@/types/database";
 import { ArrowLeftIcon, CheckIcon, MagnifyingGlassIcon, PlusIcon } from "phosphor-react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Pressable,
+  StyleSheet,
+  TextInput,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const ZONE_LABELS: Record<string, string> = {
@@ -115,6 +123,11 @@ export default function WorkoutEditManualScreen() {
     try {
       await addCatalogExerciseToWorkout(dayId, clip);
       setAddedIds((current) => new Set(current).add(clip.id));
+    } catch (error) {
+      Alert.alert(
+        "Could not add exercise",
+        error instanceof Error ? error.message : "Please try again."
+      );
     } finally {
       setAddingId(null);
     }

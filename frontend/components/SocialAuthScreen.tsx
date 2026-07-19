@@ -10,6 +10,17 @@ import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, View } 
 
 type Provider = "google" | "apple";
 
+function authErrorMessage(error: unknown, provider: Provider): string {
+  const fallback = `Unable to continue with ${provider === "google" ? "Google" : "Apple"}.`;
+  if (!(error instanceof Error)) return fallback;
+
+  if (error.message.toLowerCase().includes("database error saving new user")) {
+    return "This sign-in can’t be used to create a new Court Coach account. Please use a different account.";
+  }
+
+  return error.message;
+}
+
 export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
   const { colors } = useTheme();
   const { signInWithApple, signInWithGoogle, refreshProfile } = useAuth();
@@ -25,11 +36,7 @@ export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
       if (!user) return;
       await routeAfterSocialAuth(user.id, refreshProfile);
     } catch (authError) {
-      const message =
-        authError instanceof Error
-          ? authError.message
-          : `Unable to continue with ${provider === "google" ? "Google" : "Apple"}.`;
-      setError(message);
+      setError(authErrorMessage(authError, provider));
     } finally {
       setLoadingProvider(null);
     }

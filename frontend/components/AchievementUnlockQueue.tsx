@@ -17,7 +17,6 @@ export function AchievementUnlockQueue({
   coachOpen: boolean;
 }) {
   const [queue, setQueue] = useState<AchievementDefinition[]>([]);
-  const initializedForUser = useRef<string | null>(null);
   const [scale] = useState(() => new Animated.Value(0.82));
   const [opacity] = useState(() => new Animated.Value(0));
 
@@ -30,21 +29,27 @@ export function AchievementUnlockQueue({
     ]);
     const earnedKeys = earned.map((achievement) => achievement.achievement_key);
     let storedKeys: string[] = [];
+    let hasValidSeenState = rawSeen != null;
     try {
-      storedKeys = rawSeen ? JSON.parse(rawSeen) : [];
+      const parsed = rawSeen ? JSON.parse(rawSeen) : [];
+      if (!Array.isArray(parsed) || !parsed.every((key) => typeof key === "string")) {
+        hasValidSeenState = false;
+      } else {
+        storedKeys = parsed;
+      }
     } catch {
-      // Treat a malformed local cache as a new install rather than blocking unlocks.
-      storedKeys = [];
+      hasValidSeenState = false;
     }
     const seen = new Set<string>(storedKeys);
 
-    // Do not replay a member's existing collection after an app install.
-    if (initializedForUser.current !== userId && rawSeen == null) {
-      initializedForUser.current = userId;
+    // Any caller that observes missing or invalid local state must silently
+    // establish the baseline. Multiple startup refreshes can overlap, so a
+    // per-component "initialized" flag is not safe here: a second request
+    // could otherwise enqueue the member's entire existing collection.
+    if (!hasValidSeenState) {
       await AsyncStorage.setItem(seenStorageKey(userId), JSON.stringify(earnedKeys));
       return;
     }
-    initializedForUser.current = userId;
 
     const newDefinitions = earnedKeys
       .filter((key) => !seen.has(key))
@@ -61,7 +66,6 @@ export function AchievementUnlockQueue({
 
   useEffect(() => {
     if (!userId) {
-      initializedForUser.current = null;
       const timeout = setTimeout(() => setQueue([]), 0);
       return () => clearTimeout(timeout);
     }
@@ -100,16 +104,13 @@ export function AchievementUnlockQueue({
   };
 
   if (!current) return null;
-  const Icon = current.icon;
 
   return (
     <Modal transparent visible animationType="none" onRequestClose={dismiss}>
       <View style={styles.backdrop}>
         <Animated.View style={[styles.card, { opacity, transform: [{ scale }] }]}>
           <LinearGradient colors={["#FFF7ED", "#FFE2C6"]} style={styles.badgeGlow}>
-            <View style={[styles.badge, { backgroundColor: current.color }]}>
-              <Icon size={48} color="#FFFFFF" weight="fill" />
-            </View>
+            <MetallicUnlockBadge definition={current} />
           </LinearGradient>
           <Text style={styles.eyebrow}>ACHIEVEMENT UNLOCKED</Text>
           <Text style={styles.title}>{current.title}</Text>
@@ -122,6 +123,73 @@ export function AchievementUnlockQueue({
       </View>
     </Modal>
   );
+}
+
+function MetallicUnlockBadge({ definition }: { definition: AchievementDefinition }) {
+  const Icon = definition.icon;
+  const gradientColors: [string, string, string, string, string] = [
+    darkenColor(definition.color, 0.34),
+    lightenColor(definition.color, 0.08),
+    lightenColor(definition.color, 0.58),
+    lightenColor(definition.color, 0.14),
+    darkenColor(definition.color, 0.3),
+  ];
+  const borderColor = darkenColor(definition.color, 0.4);
+  const rimColor = lightenColor(definition.color, 0.58);
+
+  const shapeStyle =
+    definition.shape === "shield"
+      ? styles.shieldBadge
+      : definition.shape === "diamond"
+        ? styles.diamondBadge
+        : styles.circleBadge;
+
+  return (
+    <LinearGradient
+      colors={gradientColors}
+      locations={[0, 0.23, 0.47, 0.68, 1]}
+      start={{ x: 0.1, y: 0 }}
+      end={{ x: 0.9, y: 1 }}
+      style={[styles.metalBadge, shapeStyle, { borderColor }]}
+    >
+      <View pointerEvents="none" style={styles.metalHighlight} />
+      <View
+        pointerEvents="none"
+        style={[
+          styles.metalRim,
+          definition.shape === "shield" ? styles.shieldRim : undefined,
+          definition.shape === "diamond" ? styles.diamondRim : undefined,
+          { borderColor: rimColor },
+        ]}
+      />
+      <View style={definition.shape === "diamond" ? styles.diamondBadgeContent : undefined}>
+        <Icon size={40} color="#FFFFFF" weight="fill" />
+      </View>
+    </LinearGradient>
+  );
+}
+
+function darkenColor(hex: string, amount: number): string {
+  const value = hex.replace("#", "");
+  const transform = (offset: number) =>
+    Math.max(
+      0,
+      Math.min(255, Math.round(parseInt(value.slice(offset, offset + 2), 16) * (1 - amount)))
+    )
+      .toString(16)
+      .padStart(2, "0");
+  return `#${transform(0)}${transform(2)}${transform(4)}`;
+}
+
+function lightenColor(hex: string, amount: number): string {
+  const value = hex.replace("#", "");
+  const transform = (offset: number) => {
+    const channel = parseInt(value.slice(offset, offset + 2), 16);
+    return Math.round(channel + (255 - channel) * amount)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${transform(0)}${transform(2)}${transform(4)}`;
 }
 
 const styles = StyleSheet.create({
@@ -154,15 +222,57 @@ const styles = StyleSheet.create({
     marginTop: -46,
     marginBottom: 18,
   },
-  badge: {
-    width: 86,
-    height: 86,
-    borderRadius: 43,
+  metalBadge: {
+    width: 88,
+    height: 88,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 4,
-    borderColor: "#FFFFFF",
+    borderWidth: 3,
+    overflow: "hidden",
+    shadowColor: "#0A0A0C",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 7,
   },
+  circleBadge: { borderRadius: 44 },
+  shieldBadge: {
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    borderBottomLeftRadius: 44,
+    borderBottomRightRadius: 44,
+  },
+  diamondBadge: {
+    width: 72,
+    height: 72,
+    borderRadius: 14,
+    transform: [{ rotate: "45deg" }],
+  },
+  diamondBadgeContent: { transform: [{ rotate: "-45deg" }] },
+  metalHighlight: {
+    position: "absolute",
+    top: 5,
+    left: 10,
+    width: "72%",
+    height: 26,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.3)",
+    transform: [{ rotate: "-18deg" }],
+  },
+  metalRim: {
+    position: "absolute",
+    inset: 5,
+    borderWidth: 1.4,
+    borderRadius: 999,
+    borderBottomColor: "rgba(0,0,0,0.24)",
+  },
+  shieldRim: {
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    borderBottomLeftRadius: 34,
+    borderBottomRightRadius: 34,
+  },
+  diamondRim: { borderRadius: 10 },
   eyebrow: { color: "#A16207", fontSize: 11, fontWeight: "800", letterSpacing: 1.4 },
   title: { marginTop: 8, color: "#18181B", fontSize: 27, fontWeight: "800", textAlign: "center" },
   description: { marginTop: 8, color: "#71717A", fontSize: 14, lineHeight: 21, textAlign: "center" },

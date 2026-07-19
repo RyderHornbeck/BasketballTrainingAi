@@ -18,7 +18,6 @@ import {
   hydrateSetLogs,
 } from "./exerciseSetLogs";
 import { supabase } from "./supabase";
-import { registerForPushNotificationsAsync } from "./notifications";
 
 export interface WeeklyWorkoutStats {
   shots: number;
@@ -143,10 +142,7 @@ export async function submitOnboardingAnswers(
   );
   if (insertError) throw new Error(insertError.message);
 
-  const { error: profileError } = await supabase
-    .from("profiles")
-    .update({ onboarding_completed: true })
-    .eq("id", userId);
+  const { error: profileError } = await supabase.rpc("complete_my_onboarding");
   if (profileError) throw new Error(profileError.message);
 }
 
@@ -184,21 +180,15 @@ export async function requestPlanGeneration(
   const existing = await getInFlightGenerationRequest();
   if (existing) return existing;
 
-  // Save a push token before generation starts so the user gets notified
-  // even if they leave the app while the plan is building.
-  await registerForPushNotificationsAsync(userData.user.id);
-
-  const { data: request, error: insertError } = await supabase
-    .from("plan_generation_requests")
-    .insert({
-      user_id: userData.user.id,
-      status: "pending",
-      generation_type: generationType,
-      target_plan_id: targetPlanId,
-      block_index: blockIndex,
-    })
-    .select()
-    .single();
+  const { data: requestData, error: insertError } = await supabase.rpc(
+    "create_my_plan_generation_request",
+    {
+      p_generation_type: generationType,
+      p_target_plan_id: targetPlanId,
+      p_block_index: blockIndex,
+    }
+  );
+  const request = Array.isArray(requestData) ? requestData[0] : requestData;
 
   if (insertError || !request) {
     const racedRequest = await getInFlightGenerationRequest();
@@ -211,13 +201,9 @@ export async function requestPlanGeneration(
   });
 
   if (invokeError) {
-    // The Edge Function is responsible for marking the request as failed on
-    // its own errors, but if invocation itself failed (network, cold start,
-    // etc.) make sure the UI doesn't spin forever.
-    await supabase
-      .from("plan_generation_requests")
-      .update({ status: "failed", error_message: invokeError.message })
-      .eq("id", request.id);
+    // Status is server-controlled. If invocation never reached the server, a
+    // later retry safely reuses this pending request.
+    console.error("Plan generation invocation failed:", invokeError.message);
   }
 
   return request as PlanGenerationRequest;
@@ -346,76 +332,15 @@ export async function getExerciseCatalogItem(id: string): Promise<ExerciseVideoC
   return (data as ExerciseVideoClip | null) ?? null;
 }
 
-function catalogPrescription(clip: ExerciseVideoClip) {
-  const searchableText = `${clip.description ?? ""} ${clip.coaching_notes ?? ""}`;
-  const durationMatch = searchableText.match(/(\d+)\s*(?:to\s*\d+\s*)?(second|minute)/i);
-  const timed = durationMatch != null;
-  const durationMinutes = durationMatch
-    ? durationMatch[2].toLowerCase().startsWith("second")
-      ? Math.max(0.5, Number(durationMatch[1]) / 60)
-      : Math.max(0.5, Number(durationMatch[1]))
-    : null;
-  const shooting = clip.category === "shooting";
-  const finishing = clip.category === "finishing";
-  return {
-    sets: "2",
-    reps: null,
-    duration: timed ? `${durationMinutes} min` : "3 min",
-    target_makes: shooting ? 10 : finishing ? 8 : null,
-    target_attempts: shooting ? 20 : finishing ? 15 : null,
-    log_type: shooting || finishing ? "makes_attempts" : timed ? "minutes" : "checkbox",
-    set_side_labels: clip.requires_both_sides ? ["left side", "right side"] : null,
-  };
-}
-
-async function refreshWorkoutEstimate(dayId: string): Promise<void> {
-  const { data: exercises, error } = await supabase
-    .from("workout_exercises")
-    .select("sets, duration")
-    .eq("day_id", dayId);
-  if (error) throw new Error(error.message);
-  const activeMinutes = (exercises ?? []).reduce((total, exercise) => {
-    const sets = Math.max(1, Number.parseInt(exercise.sets ?? "1", 10) || 1);
-    const match = exercise.duration?.match(/(\d+(?:\.\d+)?)\s*min/i);
-    return total + (match ? Number.parseFloat(match[1]) : 3) * sets;
-  }, 0);
-  const estimate = Math.max(
-    5,
-    Math.round(activeMinutes + 5 + (exercises?.length ?? 0) * 1.5)
-  );
-  const { error: updateError } = await supabase
-    .from("workout_days")
-    .update({ estimated_minutes: estimate })
-    .eq("id", dayId);
-  if (updateError) throw new Error(updateError.message);
-}
-
 export async function addCatalogExerciseToWorkout(
   dayId: string,
   clip: ExerciseVideoClip
 ): Promise<void> {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
-  if (!userId) throw new Error("Not authenticated");
-  const { data: lastExercise } = await supabase
-    .from("workout_exercises")
-    .select("order_index")
-    .eq("day_id", dayId)
-    .order("order_index", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const { error } = await supabase.from("workout_exercises").insert({
-    day_id: dayId,
-    user_id: userId,
-    video_clip_id: clip.id,
-    order_index: (lastExercise?.order_index ?? 0) + 1,
-    name: clip.exercise_name,
-    category: clip.category,
-    instructions: clip.description ?? clip.coaching_notes,
-    ...catalogPrescription(clip),
+  const { error } = await supabase.rpc("add_my_catalog_exercise", {
+    p_day_id: dayId,
+    p_catalog_exercise_id: clip.id,
   });
   if (error) throw new Error(error.message);
-  await refreshWorkoutEstimate(dayId);
   emitWorkoutUpdated();
 }
 
@@ -423,9 +348,11 @@ export async function removeExerciseFromWorkout(
   dayId: string,
   exerciseId: string
 ): Promise<void> {
-  const { error } = await supabase.from("workout_exercises").delete().eq("id", exerciseId);
+  const { error } = await supabase.rpc("remove_my_workout_exercise", {
+    p_day_id: dayId,
+    p_exercise_id: exerciseId,
+  });
   if (error) throw new Error(error.message);
-  await refreshWorkoutEstimate(dayId);
   emitWorkoutUpdated();
 }
 
@@ -456,12 +383,12 @@ export interface ExerciseLogInput {
 export async function saveExerciseLog(
   dayId: string,
   log: ExerciseLogInput
-): Promise<void> {
+): Promise<ExerciseLog> {
   const { data: userData } = await supabase.auth.getUser();
   const userId = userData.user?.id;
   if (!userId) throw new Error("Not authenticated");
 
-  const { error } = await supabase.from("exercise_logs").upsert(
+  const { data, error } = await supabase.from("exercise_logs").upsert(
     {
       exercise_id: log.exercise_id,
       day_id: dayId,
@@ -474,9 +401,10 @@ export async function saveExerciseLog(
       notes: log.notes ?? null,
     },
     { onConflict: "exercise_id" }
-  );
+  ).select().single();
   if (error) throw new Error(`Failed to save log: ${error.message}`);
   emitWorkoutUpdated("manual");
+  return data as ExerciseLog;
 }
 
 /**
@@ -499,41 +427,12 @@ export async function finishWorkoutDay(
     await saveExerciseLog(day.id, log);
   }
 
-  const totalMinutes = logs.reduce((sum, l) => sum + (l.minutes_completed ?? 0), 0);
-  const completionKind =
-    logs.length > 0 && logs.every((log) => log.completed)
-      ? "full"
-      : "partial";
-
-  const { error: dayLogError } = await supabase.from("workout_day_logs").upsert(
-    {
-      day_id: day.id,
-      user_id: userId,
-      total_minutes: totalMinutes || day.estimated_minutes || null,
-    },
-    { onConflict: "day_id" }
-  );
-  if (dayLogError) throw new Error(`Failed to create day log: ${dayLogError.message}`);
-
-  const { error: dayUpdateError } = await supabase
-    .from("workout_days")
-    .update({
-      completed: true,
-      locked: false,
-      completion_kind: completionKind,
-      finalized_at: new Date().toISOString(),
-    })
-    .eq("id", day.id);
-  if (dayUpdateError) throw new Error(`Failed to mark day completed: ${dayUpdateError.message}`);
+  const { error: finishError } = await supabase.rpc("finish_my_workout_day", {
+    p_day_id: day.id,
+  });
+  if (finishError) throw new Error(`Failed to finish workout: ${finishError.message}`);
 
   if (day.day_number != null) {
-    const { error: unlockError } = await supabase
-      .from("workout_days")
-      .update({ locked: false, scheduled_date: null })
-      .eq("plan_id", day.plan_id)
-      .eq("day_number", day.day_number + 1);
-    if (unlockError) console.error("Failed to unlock next day:", unlockError.message);
-
     const { data: remainingDay, error: remainingError } = await supabase
       .from("workout_days")
       .select("id")

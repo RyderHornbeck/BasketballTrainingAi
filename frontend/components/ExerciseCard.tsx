@@ -59,6 +59,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   mobility: "Mobility",
   basketball_iq: "Discipline",
 };
+const TIMED_CATEGORIES = new Set(["ball_handling", "defense", "defensive", "conditioning"]);
 
 function SetCheckboxRow({
   label,
@@ -250,7 +251,15 @@ export function ExerciseCard({
   const seenCompletionTokenRef = useRef<number | undefined>(completionAnimationToken);
   const previousExerciseIdRef = useRef(exercise.id);
 
-  const baseSetPlan = useMemo(() => buildSetPlan(exercise), [exercise]);
+  const baseSetPlan = useMemo(() => {
+    const plan = buildSetPlan(exercise);
+    if (!TIMED_CATEGORIES.has((exercise.category ?? "").toLowerCase())) return plan;
+    return {
+      ...plan,
+      logType: "minutes" as const,
+      perSetMinutes: Math.max(1, Math.min(3, plan.perSetMinutes ?? 2)),
+    };
+  }, [exercise]);
   const [attemptsOverride, setAttemptsOverride] = useState<number | null>(() => {
     const meta = decodeExerciseLogMeta(exercise.log?.notes ?? null);
     const logs = hydrateSetLogs(baseSetPlan, meta, exercise.log ?? undefined);
@@ -323,9 +332,7 @@ export function ExerciseCard({
   const showVideo = hasVideoDemo(clip);
   const descriptionText =
     clip?.description ?? exercise.instructions ?? clip?.coaching_notes ?? null;
-  const hasDrillTimer =
-    (exercise.category === "ball_handling" || exercise.category === "conditioning") &&
-    setPlan.perSetMinutes != null;
+  const hasDrillTimer = logType === "minutes" && setPlan.perSetMinutes != null;
   const watchUrl = clip
     ? `https://www.youtube.com/watch?v=${clip.youtube_video_id}&t=${clip.start_seconds}s`
     : null;
@@ -491,7 +498,7 @@ export function ExerciseCard({
   const adjustSetTimer = (secondsDelta: number) => {
     if (!setPlan.perSetMinutes) return;
     hasUserEditsRef.current = true;
-    const nextMinutes = Math.max(0.5, setPlan.perSetMinutes + secondsDelta / 60);
+    const nextMinutes = Math.max(1, Math.min(3, setPlan.perSetMinutes + secondsDelta / 60));
     setMinutesOverride(nextMinutes);
   };
 

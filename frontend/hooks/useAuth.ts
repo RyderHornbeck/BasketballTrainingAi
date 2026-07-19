@@ -114,14 +114,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           ? user.user_metadata.name.trim()
           : null;
     const fullName = appleName?.trim() || metadataName || null;
-    const profileValues: Record<string, string> = { id: user.id };
-    if (user.email) profileValues.email = user.email;
-    if (fullName) profileValues.full_name = fullName;
-
-    const { error } = await supabase
-      .from("profiles")
-      .upsert(profileValues, { onConflict: "id" });
-    if (error) throw error;
+    if (fullName) {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ full_name: fullName })
+        .eq("id", user.id);
+      if (error) throw error;
+    }
   }, []);
 
   useEffect(() => {

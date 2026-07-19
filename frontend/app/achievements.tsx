@@ -9,7 +9,6 @@ import { ArrowLeftIcon, FireIcon, LockIcon } from "phosphor-react-native";
 import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Svg, { Defs, LinearGradient as SvgLinearGradient, Polygon, Stop } from "react-native-svg";
 
 export default function AchievementsScreen() {
   const { colors } = useTheme();
@@ -89,78 +88,71 @@ function BadgeCard({
   const { colors } = useTheme();
   const earned = Boolean(unlocked);
   const Icon = definition.icon;
-  const borderColor = earned ? darkenColor(definition.color, 0.35) : "#929299";
-  const gradientColors: [string, string] = earned
-    ? [lightenColor(definition.color, 0.22), darkenColor(definition.color, 0.18)]
-    : ["#D3D3D8", "#A6A6AE"];
+  const borderColor = earned ? darkenColor(definition.color, 0.4) : "#7B808A";
+  const rimColor = earned ? lightenColor(definition.color, 0.58) : "#F4F4F5";
+  const gradientColors: [string, string, string, string, string] = earned
+    ? [
+        darkenColor(definition.color, 0.34),
+        lightenColor(definition.color, 0.08),
+        lightenColor(definition.color, 0.58),
+        lightenColor(definition.color, 0.14),
+        darkenColor(definition.color, 0.3),
+      ]
+    : ["#ADB1B9", "#A9ADB5", "#A5A9B1", "#A0A4AD", "#9B9FA8"];
   const shapeStyle =
-    definition.shape === "oval"
-      ? styles.triangleWrapper
-      : definition.shape === "shield"
-        ? styles.shield
-        : definition.shape === "diamond"
-          ? styles.diamond
-          : styles.circle;
+    definition.shape === "shield"
+      ? styles.shield
+      : definition.shape === "diamond"
+        ? styles.diamond
+        : styles.circle;
 
   return (
     <View style={styles.badgeCard}>
-      {definition.shape === "oval" ? (
-        <TriangleBadge colors={gradientColors} borderColor={borderColor}>
-          {earned ? <Icon size={27} color="#FFFFFF" weight="fill" /> : <LockIcon size={24} color="#F5F5F7" weight="fill" />}
-        </TriangleBadge>
-      ) : (
-        <LinearGradient
-          colors={gradientColors}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={[styles.badgeShape, shapeStyle, { borderColor }]}
+      <LinearGradient
+        colors={gradientColors}
+        locations={[0, 0.23, 0.47, 0.68, 1]}
+        start={{ x: 0.1, y: 0 }}
+        end={{ x: 0.9, y: 1 }}
+        style={[
+          styles.badgeShape,
+          shapeStyle,
+          { borderColor },
+          !earned && styles.lockedBadgeShape,
+        ]}
+      >
+        {earned ? (
+          <>
+            <View pointerEvents="none" style={styles.metalHighlight} />
+            <View
+              pointerEvents="none"
+              style={[
+                styles.metalRim,
+                definition.shape === "shield" ? styles.shieldRim : undefined,
+                definition.shape === "diamond" ? styles.diamondRim : undefined,
+                { borderColor: rimColor },
+              ]}
+            />
+          </>
+        ) : null}
+        <View
+          style={[
+            styles.iconPlate,
+            definition.shape === "diamond" ? styles.diamondContent : undefined,
+          ]}
         >
-          <View style={definition.shape === "diamond" ? styles.diamondContent : undefined}>
             {earned ? (
-              <Icon size={31} color="#FFFFFF" weight="fill" />
+              <Icon size={32} color="#FFFFFF" weight="fill" />
             ) : (
-              <LockIcon size={27} color="#F5F5F7" weight="fill" />
+              <LockIcon size={28} color="#F5F5F7" weight="fill" />
             )}
-          </View>
-        </LinearGradient>
-      )}
+        </View>
+      </LinearGradient>
       <Text style={[styles.badgeTitle, { color: earned ? colors.text : colors.textMuted }]}>
         {definition.title}
       </Text>
       <Text style={[styles.badgeDescription, { color: colors.textSecondary }]}>
         {definition.description}
       </Text>
-    </View>
-  );
-}
-
-function TriangleBadge({
-  colors,
-  borderColor,
-  children,
-}: {
-  colors: [string, string];
-  borderColor: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <View style={styles.triangleWrapper}>
-      <Svg width={82} height={74} viewBox="0 0 82 74">
-        <Defs>
-          <SvgLinearGradient id="badgeTriangleGradient" x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor={colors[0]} />
-            <Stop offset="1" stopColor={colors[1]} />
-          </SvgLinearGradient>
-        </Defs>
-        <Polygon
-          points="4,5 78,5 41,69"
-          fill="url(#badgeTriangleGradient)"
-          stroke={borderColor}
-          strokeWidth={4}
-          strokeLinejoin="round"
-        />
-      </Svg>
-      <View pointerEvents="none" style={styles.triangleIcon}>{children}</View>
     </View>
   );
 }
@@ -230,31 +222,59 @@ const styles = StyleSheet.create({
   },
   badgeCard: {
     width: "30.8%",
-    minHeight: 174,
+    minHeight: 182,
     alignItems: "center",
   },
   badgeShape: {
-    width: 72,
-    height: 72,
+    width: 80,
+    height: 80,
     alignItems: "center",
     justifyContent: "center",
     marginTop: 2,
     marginBottom: 11,
     borderWidth: 3,
+    overflow: "hidden",
+    shadowColor: "#0A0A0C",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.28,
+    shadowRadius: 7,
+    elevation: 6,
   },
-  circle: { borderRadius: 36 },
-  shield: { borderTopLeftRadius: 24, borderTopRightRadius: 24, borderBottomLeftRadius: 36, borderBottomRightRadius: 36 },
-  diamond: { width: 58, height: 58, marginTop: 9, marginBottom: 20, borderRadius: 12, transform: [{ rotate: "45deg" }] },
+  lockedBadgeShape: {
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    elevation: 0,
+  },
+  circle: { borderRadius: 40 },
+  shield: { borderTopLeftRadius: 27, borderTopRightRadius: 27, borderBottomLeftRadius: 40, borderBottomRightRadius: 40 },
+  diamond: { width: 64, height: 64, marginTop: 10, marginBottom: 22, borderRadius: 13, transform: [{ rotate: "45deg" }] },
   diamondContent: { transform: [{ rotate: "-45deg" }] },
-  triangleWrapper: {
-    width: 82,
-    height: 74,
-    marginTop: 2,
-    marginBottom: 10,
+  metalHighlight: {
+    position: "absolute",
+    top: 5,
+    left: 10,
+    width: "72%",
+    height: 24,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.3)",
+    transform: [{ rotate: "-18deg" }],
+  },
+  metalRim: {
+    position: "absolute",
+    inset: 5,
+    borderWidth: 1.4,
+    borderRadius: 999,
+    borderBottomColor: "rgba(0,0,0,0.24)",
+  },
+  shieldRim: { borderTopLeftRadius: 20, borderTopRightRadius: 20, borderBottomLeftRadius: 31, borderBottomRightRadius: 31 },
+  diamondRim: { inset: 5, borderRadius: 9 },
+  iconPlate: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     alignItems: "center",
     justifyContent: "center",
   },
-  triangleIcon: { position: "absolute", top: 17, alignItems: "center", justifyContent: "center" },
   badgeTitle: { fontSize: 12, fontWeight: "800", textAlign: "center" },
   badgeDescription: { marginTop: 5, fontSize: 10, lineHeight: 14, textAlign: "center" },
 });

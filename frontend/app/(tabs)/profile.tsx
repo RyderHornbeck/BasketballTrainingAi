@@ -4,6 +4,7 @@ import { ThemeMode } from "@/components/ThemeProvider";
 import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
+import { clearOnboardingDraft } from "@/lib/onboardingDraft";
 import { regeneratePlan } from "@/lib/plan";
 import { supabase } from "@/lib/supabase";
 import { OnboardingAnswers } from "@/types/database";
@@ -23,6 +24,7 @@ export default function ProfileScreen() {
   const [answers, setAnswers] = useState<OnboardingAnswers | null>(null);
   const [loading, setLoading] = useState(true);
   const [regenerating, setRegenerating] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -64,6 +66,42 @@ export default function ProfileScreen() {
               );
             } finally {
               setRegenerating(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      "Permanently delete account?",
+      "This permanently deletes your account, sign-in, workouts, analytics, badges, coach history, and onboarding data. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete Account",
+          style: "destructive",
+          onPress: async () => {
+            setDeleting(true);
+            try {
+              const { data, error } = await supabase.functions.invoke<{ error?: string }>(
+                "delete-account",
+                { body: { confirmation: "DELETE" } }
+              );
+              if (error) throw error;
+              if (data?.error) throw new Error(data.error);
+              setAnswers(null);
+              await clearOnboardingDraft();
+              await supabase.auth.signOut({ scope: "local" });
+              router.replace("/auth/login");
+            } catch (err) {
+              Alert.alert(
+                "Delete failed",
+                err instanceof Error ? err.message : "Could not delete your account. Please try again."
+              );
+            } finally {
+              setDeleting(false);
             }
           },
         },
@@ -145,6 +183,14 @@ export default function ProfileScreen() {
           style={styles.actionButton}
         />
 
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Account</Text>
+        <Button
+          title="Delete Account"
+          variant="danger"
+          onPress={handleDeleteAccount}
+          loading={deleting}
+          style={styles.actionButton}
+        />
         <Button
           title="Sign Out"
           variant="danger"

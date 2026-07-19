@@ -1,48 +1,71 @@
 import { Button } from "@/components/Button";
 import { Text } from "@/components/Text";
-import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
-import { registerForPushNotificationsAsync } from "@/lib/notifications";
 import { requestPlanGeneration } from "@/lib/plan";
-import { Redirect } from "expo-router";
+import { Redirect, useLocalSearchParams } from "expo-router";
 import { CheckCircleIcon, CircleIcon, SmileySadIcon } from "phosphor-react-native";
 import React, { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 
 const GENERATION_STEPS = [
-  "Reviewing your player profile",
-  "Evaluating strengths and weaknesses",
-  "Finding drills that match your goals",
-  "Balancing intensity and recovery",
-  "Finalizing your first five workouts",
+  "Calculating your workout length",
+  "Reading your goals and skill levels",
+  "Finding exercises tailored to you",
+  "Balancing drill categories and difficulty",
+  "Scheduling your first five workouts",
 ];
+const STEP_DURATION_MS = 1_000;
 
 export default function GeneratingScreen() {
   const { colors } = useTheme();
-  const { user } = useAuth();
+  const { checklist } = useLocalSearchParams<{ checklist?: string }>();
   const { appState, generationRequest, loading, refresh } = usePlan();
   const [retrying, setRetrying] = useState(false);
   const [completedSteps, setCompletedSteps] = useState(0);
+  const [checklistFinished, setChecklistFinished] = useState(false);
+  const [checklistRun, setChecklistRun] = useState(0);
+  const holdForChecklist = checklist === "1";
   const isFailed = appState === "plan_failed";
   const hasNoRequestYet = !loading && appState === "no_plan" && !generationRequest;
-  const isBuilding = appState === "plan_generating";
+  const showChecklist = holdForChecklist
+    ? !isFailed
+    : !loading &&
+      !isFailed &&
+      appState !== "onboarding_incomplete" &&
+      appState !== "logged_out";
 
-  // Belt-and-suspenders: make sure we have a push token while they wait.
   useEffect(() => {
-    if (user?.id) registerForPushNotificationsAsync(user.id);
-  }, [user?.id]);
+    if (!hasNoRequestYet || retrying) return;
+    void (async () => {
+      setRetrying(true);
+      try {
+        await requestPlanGeneration();
+        await refresh();
+      } finally {
+        setRetrying(false);
+      }
+    })();
+  }, [hasNoRequestYet, refresh, retrying]);
 
   useEffect(() => {
-    if (!isBuilding) return;
+    if (!showChecklist) return;
     setCompletedSteps(0);
-    const interval = setInterval(() => {
-      setCompletedSteps((count) => Math.min(GENERATION_STEPS.length, count + 1));
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [generationRequest?.id, isBuilding]);
+    setChecklistFinished(false);
+    const timeouts = GENERATION_STEPS.map((_, index) =>
+      setTimeout(() => {
+        setCompletedSteps(index + 1);
+        if (index === GENERATION_STEPS.length - 1) {
+          setChecklistFinished(true);
+        }
+      }, (index + 1) * STEP_DURATION_MS)
+    );
+    return () => {
+      timeouts.forEach(clearTimeout);
+    };
+  }, [checklistRun, showChecklist]);
 
-  if (loading) {
+  if (loading && !holdForChecklist) {
     return (
       <View style={[styles.container, { backgroundColor: "transparent" }]}>
         <ActivityIndicator size="large" color={colors.accent} />
@@ -50,17 +73,21 @@ export default function GeneratingScreen() {
     );
   }
 
-  if (appState === "plan_ready") {
+  // Expo can restore this route after an OTA reload, even when the plan was
+  // generated long ago. Never make an existing member wait for the cosmetic
+  // checklist before returning them to their ready workout.
+  if (appState === "plan_ready" && (!holdForChecklist || checklistFinished)) {
     return <Redirect href="/(tabs)/days" />;
   }
-  if (appState === "onboarding_incomplete") {
+  if (!loading && appState === "onboarding_incomplete") {
     return <Redirect href="/onboarding" />;
   }
-  if (appState === "logged_out") {
+  if (!loading && appState === "logged_out") {
     return <Redirect href="/welcome" />;
   }
 
   const handleRetry = async () => {
+    setChecklistRun((run) => run + 1);
     setRetrying(true);
     try {
       await requestPlanGeneration();
@@ -77,7 +104,7 @@ export default function GeneratingScreen() {
           <SmileySadIcon size={64} color={colors.textSecondary} weight="duotone" />
         ) : null}
 
-        {isBuilding && (
+        {showChecklist && (
           <>
             <Text style={[styles.title, { color: colors.text }]}>Building your first five workouts...</Text>
             <View style={styles.steps}>
@@ -94,11 +121,15 @@ export default function GeneratingScreen() {
                   >
                     {complete ? (
                       <CheckCircleIcon size={25} color="#35B96F" weight="fill" />
+                    ) : active ? (
+                      <View style={styles.stepIndicator}>
+                        <ActivityIndicator size="small" color={colors.accent} />
+                      </View>
                     ) : (
                       <CircleIcon
                         size={25}
-                        color={active ? colors.accent : colors.textMuted}
-                        weight={active ? "bold" : "regular"}
+                        color={colors.textMuted}
+                        weight="regular"
                       />
                     )}
                     <Text
@@ -114,7 +145,9 @@ export default function GeneratingScreen() {
               })}
             </View>
             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-              You can leave the app — we&apos;ll notify you when your plan is ready.
+              {checklistFinished && appState !== "plan_ready"
+                ? "Putting the finishing touches on your plan."
+                : "Personalizing your first five workouts."}
             </Text>
           </>
         )}
@@ -128,16 +161,6 @@ export default function GeneratingScreen() {
               </Text>
             ) : null}
             <Button title="Try Again" onPress={handleRetry} loading={retrying} style={styles.button} />
-          </>
-        )}
-
-        {hasNoRequestYet && (
-          <>
-            <Text style={[styles.title, { color: colors.text }]}>Ready to build your plan?</Text>
-            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-              We&apos;ll create your first five personalized workouts based on your answers.
-            </Text>
-            <Button title="Generate My Plan" onPress={handleRetry} loading={retrying} style={styles.button} />
           </>
         )}
       </View>
@@ -178,6 +201,12 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     fontWeight: "700",
+  },
+  stepIndicator: {
+    width: 25,
+    height: 25,
+    alignItems: "center",
+    justifyContent: "center",
   },
   subtitle: {
     fontSize: 14,

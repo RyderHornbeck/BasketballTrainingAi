@@ -228,6 +228,9 @@ export function aggregateSetLogs(
   let hasMinutes = false;
 
   for (const entry of normalized) {
+    // Empty rows carry target attempts for display. They are not recorded
+    // attempts until that set has actually been completed.
+    if (plan.logType === "makes_attempts" && !entry.completed) continue;
     if (entry.makes != null) {
       makes += entry.makes;
       hasMakes = true;

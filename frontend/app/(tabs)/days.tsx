@@ -25,6 +25,7 @@ import {
   saveExerciseLog,
   WeeklyWorkoutStats,
 } from "@/lib/plan";
+import { ExerciseLog } from "@/types/database";
 import { WorkoutDayWithExercises } from "@/types/plan";
 import {
   CaretLeftIcon,
@@ -65,7 +66,7 @@ type DaysViewMode = "overview" | "workout";
 type SlideDirection = "forward" | "backward";
 
 export default function DaysScreen() {
-  const { colors } = useTheme();
+  const { colors, scheme } = useTheme();
   const router = useRouter();
   const {
     plan,
@@ -93,6 +94,7 @@ export default function DaysScreen() {
   const detailRequestsRef = useRef<Map<string, Promise<WorkoutDayWithExercises | null>>>(new Map());
   const selectedDayIdRef = useRef<string | null>(null);
   const logSaveQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const logSaveErrorShownRef = useRef(false);
   const viewTransitionFrameRef = useRef<number | null>(null);
   const finishingRef = useRef(false);
   const [finishingWorkout, setFinishingWorkout] = useState(false);
@@ -157,6 +159,29 @@ export default function DaysScreen() {
       .finally(() => detailRequestsRef.current.delete(dayId));
     detailRequestsRef.current.set(dayId, request);
     return request;
+  }, []);
+
+  // Day details are cached so navigating between overview and workout is
+  // instant. Persist the server-returned row into that cache after every
+  // successful save; otherwise reopening a workout can show its pre-save log
+  // until a full app reload triggers a fresh fetch.
+  const updateCachedExerciseLog = useCallback((dayId: string, savedLog: ExerciseLog) => {
+    const applySavedLog = (detail: WorkoutDayWithExercises) => ({
+      ...detail,
+      exercises: detail.exercises.map((exercise) =>
+        exercise.id === savedLog.exercise_id ? { ...exercise, log: savedLog } : exercise
+      ),
+    });
+
+    const cached = detailCacheRef.current.get(dayId);
+    if (cached) detailCacheRef.current.set(dayId, applySavedLog(cached));
+
+    // The overview/workout toggle keeps this screen mounted. Keep the active
+    // detail in sync too, otherwise it renders the old row until a tab focus
+    // event happens to reload it.
+    setDayDetail((current) =>
+      current?.id === dayId ? applySavedLog(current) : current
+    );
   }, []);
 
   const loadDetail = useCallback(
@@ -300,7 +325,7 @@ export default function DaysScreen() {
             }
         );
         await finishWorkoutDay(detail, logs);
-        await refreshPlan();
+        await Promise.all([refreshPlan(), loadDetail(false, true)]);
       } catch (err) {
         console.error("Auto-finish day failed:", err);
       } finally {
@@ -378,17 +403,26 @@ export default function DaysScreen() {
       const save = previous
         .catch(() => undefined)
         .then(async () => {
-          await saveExerciseLog(dayDetail.id, log);
+          const savedLog = await saveExerciseLog(dayDetail.id, log);
+          updateCachedExerciseLog(dayDetail.id, savedLog);
+          logSaveErrorShownRef.current = false;
           if (!dayDetail.completed) {
             await tryAutoFinishDay(dayDetail);
           }
         })
         .catch((err) => {
           console.error("Failed to save exercise log:", err);
+          if (!logSaveErrorShownRef.current) {
+            logSaveErrorShownRef.current = true;
+            Alert.alert(
+              "Could not save workout progress",
+              err instanceof Error ? err.message : "Please try again."
+            );
+          }
         });
       logSaveQueuesRef.current.set(log.exercise_id, save);
     },
-    [dayDetail, tryAutoFinishDay]
+    [dayDetail, tryAutoFinishDay, updateCachedExerciseLog]
   );
 
   const handleSelectDay = useCallback(
@@ -584,14 +618,18 @@ export default function DaysScreen() {
           onPress={() => router.push("/achievements")}
           style={({ pressed }) => [
             styles.streakBadge,
-            { opacity: pressed ? 0.82 : 1, shadowColor: colors.shadow },
+            {
+              backgroundColor: scheme === "dark" ? colors.card : "#FFFFFF",
+              opacity: pressed ? 0.82 : 1,
+              shadowColor: colors.shadow,
+            },
           ]}
         >
           <FireIcon size={23} color="#F7B379" weight="fill" />
           <Text
             style={[
               styles.streakValue,
-              { color: currentStreak > 0 ? "#111113" : "#8E8E93" },
+              { color: currentStreak > 0 ? (scheme === "dark" ? "#FFFFFF" : "#111113") : "#8E8E93" },
             ]}
           >
             {currentStreak}
@@ -963,7 +1001,6 @@ const styles = StyleSheet.create({
     height: 38,
     paddingHorizontal: 11,
     borderRadius: 14,
-    backgroundColor: "#FFFFFF",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",

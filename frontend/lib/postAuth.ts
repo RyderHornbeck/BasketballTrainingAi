@@ -31,5 +31,5 @@ export async function routeAfterSocialAuth(
   await clearOnboardingDraft();
   await refreshProfile();
   await requestPlanGeneration();
-  router.replace("/generating");
+  router.replace({ pathname: "/generating", params: { checklist: "1" } });
 }

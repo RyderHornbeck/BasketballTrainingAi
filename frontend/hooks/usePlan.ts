@@ -70,10 +70,20 @@ export function usePlan(): UsePlanResult {
 
     try {
       setLoadError(null);
-      const [activePlan, latestRequest] = await Promise.all([
+      const [queriedPlan, latestRequest] = await Promise.all([
         withTimeout(getActivePlan(), "Plan loading"),
         withTimeout(getLatestGenerationRequest(), "Plan status loading"),
       ]);
+
+      // These two requests run concurrently. Generation can commit between
+      // them, leaving us with a completed request but a stale null/old plan.
+      // Once completion is visible, a follow-up plan read is guaranteed to
+      // observe that committed transaction.
+      const activePlan =
+        latestRequest?.status === "completed" &&
+        latestRequest.generation_type === "initial"
+          ? await withTimeout(getActivePlan(), "Generated plan loading")
+          : queriedPlan;
 
       setPlan(activePlan);
       setGenerationRequest(latestRequest);

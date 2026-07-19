@@ -114,10 +114,10 @@ export default function OnboardingScreen() {
 
   // Already finished onboarding — don't make them answer again.
   useEffect(() => {
-    if (!authLoading && profile?.onboarding_completed) {
+    if (!authLoading && profile?.onboarding_completed && !submitting) {
       router.replace("/");
     }
-  }, [authLoading, profile]);
+  }, [authLoading, profile, submitting]);
 
   // If someone lands back here (e.g. tapped "Back" from the signup screen,
   // or resumed the app before creating an account), restore anything they'd
@@ -196,7 +196,7 @@ export default function OnboardingScreen() {
         await submitOnboardingAnswers(user.id, form);
         await refreshProfile();
         await requestPlanGeneration();
-        router.replace("/generating");
+        router.replace({ pathname: "/generating", params: { checklist: "1" } });
         return;
       }
 

@@ -145,6 +145,7 @@ export class RealtimeCoachSession {
   private disconnectGraceTimeout: ReturnType<typeof setTimeout> | null = null;
   private disconnectPromise: Promise<void> | null = null;
   private contextRefreshPromise: Promise<void> | null = null;
+  private contextRefreshPending = false;
   private responseDoneQueue: Promise<void> = Promise.resolve();
   private connectionGeneration = 0;
   private dailySpentBaseline = 0;
@@ -194,6 +195,7 @@ export class RealtimeCoachSession {
     this.activeResponseId = null;
     this.responseCreatePending = false;
     this.queuedResponseInstruction = null;
+    this.contextRefreshPending = false;
     this.usageTracker = createUsageTracker(this.model);
     callbacks.onStatus("connecting");
 
@@ -367,6 +369,10 @@ export class RealtimeCoachSession {
   async refreshWorkoutContext(): Promise<void> {
     if (this.contextRefreshPromise) return this.contextRefreshPromise;
     if (!this.active || !this.dayId || !this.sessionKey) return;
+    if (this.generationActive || this.toolBusy || this.playbackActive) {
+      this.contextRefreshPending = true;
+      return;
+    }
     this.contextRefreshPromise = (async () => {
       const { data, error } = await supabase.functions.invoke<{
         updated_instructions?: string | null;
@@ -377,6 +383,7 @@ export class RealtimeCoachSession {
           session_key: this.sessionKey,
           tool_name: "get_workout_position",
           arguments: {},
+          refresh_context: true,
         },
       });
       if (error) throw new Error(await edgeFunctionErrorMessage(error));
@@ -398,6 +405,13 @@ export class RealtimeCoachSession {
         this.contextRefreshPromise = null;
       });
     return this.contextRefreshPromise;
+  }
+
+  private flushPendingContextRefresh(): void {
+    if (!this.contextRefreshPending) return;
+    if (this.generationActive || this.toolBusy || this.playbackActive || !this.active) return;
+    this.contextRefreshPending = false;
+    void this.refreshWorkoutContext();
   }
 
   markTimerSetComplete(exerciseId: string, setNumber: number): void {
@@ -458,6 +472,7 @@ export class RealtimeCoachSession {
       this.toolBusy = false;
       this.responseCreatePending = false;
       this.queuedResponseInstruction = null;
+      this.contextRefreshPending = false;
       this.pendingEvents = [];
 
       if (this.disconnectGraceTimeout) clearTimeout(this.disconnectGraceTimeout);
@@ -612,13 +627,9 @@ export class RealtimeCoachSession {
         break;
 
       case "input_audio_buffer.speech_started": {
-        // With WebRTC and interrupt_response enabled, OpenAI automatically
-        // cancels and truncates any unplayed assistant audio.
-        this.sendTimerContext();
-        // Rebuild instructions from the database for every user turn. Workout
-        // events normally refresh this eagerly; this catches changes from
-        // another screen/device before the next response.
-        void this.refreshWorkoutContext();
+        // VAD is transport state only. Adding synthetic user messages or
+        // racing a session.update here makes an automatic VAD response see
+        // conflicting instructions and can trigger state-check loops.
         this.callbacks?.onStatus("listening");
         break;
       }
@@ -667,6 +678,7 @@ export class RealtimeCoachSession {
       case "output_audio_buffer.cleared":
         this.playbackActive = false;
         this.updateStatus();
+        this.flushPendingContextRefresh();
         this.flushQueuedResponse();
         break;
 
@@ -682,27 +694,6 @@ export class RealtimeCoachSession {
         break;
       }
     }
-  }
-
-  private sendTimerContext(): void {
-    if (!this.timer.running || !this.timer.duration_seconds) return;
-    const remainingSeconds = Math.max(
-      0,
-      Math.ceil(this.timer.duration_seconds - this.timer.elapsed_seconds)
-    );
-    this.sendEvent({
-      type: "conversation.item.create",
-      item: {
-        type: "message",
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: `Timer context: ${remainingSeconds} seconds remain on the active workout timer.`,
-          },
-        ],
-      },
-    });
   }
 
   private async handleResponseDone(event: {
@@ -778,10 +769,10 @@ export class RealtimeCoachSession {
     if (functionCalls.length > 0) {
       this.toolBusy = true;
       this.updateStatus();
-      let shouldConfirm = false;
+      let hasMutation = false;
       try {
         for (const call of functionCalls) {
-          shouldConfirm = (await this.executeToolCall(call, generation)) || shouldConfirm;
+          hasMutation = (await this.executeToolCall(call, generation)) || hasMutation;
         }
       } finally {
         if (generation === this.connectionGeneration) {
@@ -790,17 +781,16 @@ export class RealtimeCoachSession {
         }
       }
       if (generation !== this.connectionGeneration) return;
-      if (shouldConfirm) {
-        this.requestResponse(
-          "Give one short, natural spoken confirmation of the completed actions. Never mention tools, internal state, context, JSON, or refreshes."
-        );
-      } else {
-        this.flushQueuedResponse();
-      }
+      this.requestResponse(
+        hasMutation
+          ? "Answer the athlete's latest request in one short natural sentence using the tool results. Confirm any completed actions, but never mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless the results are genuinely ambiguous."
+          : "Answer the athlete's latest request directly and briefly using the lookup result. Do not mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless the lookup result is genuinely ambiguous."
+      );
       return;
     }
 
     this.updateStatus();
+    this.flushPendingContextRefresh();
     this.flushQueuedResponse();
   }
 
@@ -835,6 +825,8 @@ export class RealtimeCoachSession {
         deduplicated?: boolean;
         updated_context?: string | null;
         updated_instructions?: string | null;
+        tool_kind?: "read_only" | "mutation";
+        requires_spoken_confirmation?: boolean;
         error?: string;
       }>("coach-tools", {
         body: {
@@ -853,25 +845,19 @@ export class RealtimeCoachSession {
         this.callbacks?.onTimerAction(data.client_action);
       }
       if (data.db_changed) {
-        emitWorkoutUpdated();
+        emitWorkoutUpdated("coach");
       }
       if (generation !== this.connectionGeneration) return false;
-      if (data.updated_instructions) {
-        this.sendEvent({
-          type: "session.update",
-          session: {
-            type: "realtime",
-            instructions: data.updated_instructions,
-          },
-        });
-      }
+      const output = data.updated_context
+        ? `${data.result}\n\nAuthoritative workout state after this call: ${data.updated_context}`
+        : data.result;
 
       this.sendEvent({
         type: "conversation.item.create",
         item: {
           type: "function_call_output",
           call_id: call.call_id,
-          output: data.result,
+          output,
         },
       });
 
@@ -883,7 +869,7 @@ export class RealtimeCoachSession {
         this.callbacks?.onConversationSummary?.(this.conversationSummary);
       }
 
-      return !data.skip_model_response;
+      return data.requires_spoken_confirmation ?? !data.skip_model_response;
     } catch (err) {
       console.error(`Tool ${call.name} failed:`, err);
       if (generation !== this.connectionGeneration) return false;

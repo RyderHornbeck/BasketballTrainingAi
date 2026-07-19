@@ -2,12 +2,14 @@ import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { emitWorkoutUpdated } from "@/lib/coachEvents";
 import { supabase } from "@/lib/supabase";
-import { ArrowLeftIcon, PaperPlaneRightIcon } from "phosphor-react-native";
+import { ArrowCounterClockwiseIcon, ArrowLeftIcon, PaperPlaneRightIcon } from "phosphor-react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -23,6 +25,53 @@ interface ChatMessage {
   content: string;
 }
 
+function TypingBubble({ colors }: { colors: ReturnType<typeof useTheme>["colors"] }) {
+  const [dotOne] = useState(() => new Animated.Value(0));
+  const [dotTwo] = useState(() => new Animated.Value(0));
+  const [dotThree] = useState(() => new Animated.Value(0));
+
+  useEffect(() => {
+    const dots = [dotOne, dotTwo, dotThree];
+    const animations = dots.map((dot, index) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(index * 120),
+          Animated.timing(dot, {
+            toValue: -5,
+            duration: 210,
+            useNativeDriver: true,
+          }),
+          Animated.timing(dot, {
+            toValue: 0,
+            duration: 210,
+            useNativeDriver: true,
+          }),
+          Animated.delay((2 - index) * 120),
+        ])
+      )
+    );
+    animations.forEach((animation) => animation.start());
+    return () => animations.forEach((animation) => animation.stop());
+  }, [dotOne, dotThree, dotTwo]);
+
+  return (
+    <View
+      accessibilityLabel="AI is typing"
+      style={[styles.typingBubble, { backgroundColor: colors.card, borderColor: colors.border }]}
+    >
+      {[dotOne, dotTwo, dotThree].map((dot, index) => (
+        <Animated.View
+          key={index}
+          style={[
+            styles.typingDot,
+            { backgroundColor: colors.textMuted, transform: [{ translateY: dot }] },
+          ]}
+        />
+      ))}
+    </View>
+  );
+}
+
 export default function WorkoutEditAIScreen() {
   const { colors } = useTheme();
   const router = useRouter();
@@ -31,19 +80,41 @@ export default function WorkoutEditAIScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [undoing, setUndoing] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
   const [remaining, setRemaining] = useState(50);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!dayId) return;
-    void supabase
-      .from("workout_edit_messages")
-      .select("id, role, content")
-      .eq("day_id", dayId)
-      .order("created_at", { ascending: true })
-      .limit(100)
-      .then(({ data }) => setMessages((data as ChatMessage[]) ?? []));
+    void Promise.all([
+      supabase
+        .from("workout_edit_messages")
+        .select("id, role, content")
+        .eq("day_id", dayId)
+        .order("created_at", { ascending: true })
+        .limit(100),
+      supabase.functions.invoke<{ can_undo?: boolean }>("workout-editor", {
+        body: { action: "status", day_id: dayId },
+      }),
+    ]).then(([{ data }, { data: status }]) => {
+      setMessages((data as ChatMessage[]) ?? []);
+      setCanUndo(Boolean(status?.can_undo));
+    });
   }, [dayId]);
+
+  useEffect(() => {
+    const scrollToLatest = () => {
+      setTimeout(() => listRef.current?.scrollToEnd({ animated: false }), 80);
+    };
+    scrollToLatest();
+    const keyboardWillShow = Keyboard.addListener("keyboardWillShow", scrollToLatest);
+    const keyboardDidShow = Keyboard.addListener("keyboardDidShow", scrollToLatest);
+    return () => {
+      keyboardWillShow.remove();
+      keyboardDidShow.remove();
+    };
+  }, [messages.length, sending]);
 
   const send = async () => {
     const content = draft.trim();
@@ -61,6 +132,7 @@ export default function WorkoutEditAIScreen() {
       const { data, error: invokeError } = await supabase.functions.invoke<{
         reply?: string;
         remaining_messages?: number;
+        can_undo?: boolean;
         error?: string;
       }>("workout-editor", {
         body: {
@@ -81,11 +153,49 @@ export default function WorkoutEditAIScreen() {
         },
       ]);
       setRemaining(data?.remaining_messages ?? Math.max(0, remaining - 1));
+      setCanUndo(Boolean(data?.can_undo));
       emitWorkoutUpdated();
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : "Could not update workout.");
     } finally {
       setSending(false);
+      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
+    }
+  };
+
+  const undoLastEdit = async () => {
+    if (!dayId || undoing || !canUndo) return;
+    setUndoing(true);
+    setError(null);
+    try {
+      const { data, error: invokeError } = await supabase.functions.invoke<{
+        reply?: string;
+        changes?: string[];
+        can_undo?: boolean;
+        error?: string;
+      }>("workout-editor", {
+        body: { action: "undo", day_id: dayId },
+      });
+      if (invokeError) {
+        const response = (invokeError as { context?: Response }).context;
+        const errorBody = response ? await response.clone().json().catch(() => null) : null;
+        throw new Error(errorBody?.error ?? invokeError.message);
+      }
+      if (data?.error) throw new Error(data.error);
+      setMessages((current) => [
+        ...current,
+        {
+          id: `undo-${Date.now()}`,
+          role: "assistant",
+          content: data?.reply ?? "Undid the last AI workout edit.",
+        },
+      ]);
+      setCanUndo(Boolean(data?.can_undo));
+      emitWorkoutUpdated();
+    } catch (undoError) {
+      setError(undoError instanceof Error ? undoError.message : "Could not undo the last AI edit.");
+    } finally {
+      setUndoing(false);
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
     }
   };
@@ -100,7 +210,28 @@ export default function WorkoutEditAIScreen() {
           <Text style={[styles.title, { color: colors.text }]}>Edit with AI</Text>
           <Text style={[styles.limit, { color: colors.textMuted }]}>{remaining} messages left today</Text>
         </View>
-        <View style={styles.headerSpacer} />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Undo last AI workout edit"
+          disabled={!canUndo || undoing}
+          onPress={() => void undoLastEdit()}
+          style={({ pressed }) => [
+            styles.undoButton,
+            {
+              borderColor: colors.border,
+              opacity: !canUndo || undoing ? 0.4 : pressed ? 0.72 : 1,
+            },
+          ]}
+        >
+          {undoing ? (
+            <ActivityIndicator size="small" color={colors.accent} />
+          ) : (
+            <>
+              <ArrowCounterClockwiseIcon size={16} color={colors.accent} weight="bold" />
+              <Text style={[styles.undoText, { color: colors.accent }]}>Undo</Text>
+            </>
+          )}
+        </Pressable>
       </View>
 
       <KeyboardAvoidingView
@@ -122,6 +253,7 @@ export default function WorkoutEditAIScreen() {
               </Text>
             </View>
           }
+          ListFooterComponent={sending ? <TypingBubble colors={colors} /> : null}
           renderItem={({ item }) => (
             <View
               style={[
@@ -186,7 +318,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   headerCopy: { flex: 1, alignItems: "center" },
-  headerSpacer: { width: 24 },
+  undoButton: {
+    minWidth: 62,
+    height: 32,
+    borderWidth: 1,
+    borderRadius: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  undoText: { fontSize: 12, fontWeight: "800" },
   title: { fontSize: 19, fontWeight: "800" },
   limit: { fontSize: 11, fontWeight: "600", marginTop: 1 },
   messages: { flexGrow: 1, padding: 18, gap: 10 },
@@ -196,6 +338,20 @@ const styles = StyleSheet.create({
   bubble: { maxWidth: "84%", borderRadius: 18, paddingHorizontal: 14, paddingVertical: 11 },
   userBubble: { alignSelf: "flex-end", borderBottomRightRadius: 5 },
   assistantBubble: { alignSelf: "flex-start", borderBottomLeftRadius: 5, borderWidth: 1 },
+  typingBubble: {
+    alignSelf: "flex-start",
+    minWidth: 62,
+    height: 42,
+    borderRadius: 18,
+    borderBottomLeftRadius: 5,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  typingDot: { width: 6, height: 6, borderRadius: 3 },
   composer: {
     borderTopWidth: StyleSheet.hairlineWidth,
     padding: 12,

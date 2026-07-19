@@ -58,13 +58,6 @@
           "imageWidth": 160
         }
       ],
-      [
-        "expo-notifications",
-        {
-          "icon": "./assets/images/icon.png",
-          "color": "#FF7A1A"
-        }
-      ],
       "expo-font",
       [
         "@config-plugins/react-native-webrtc",

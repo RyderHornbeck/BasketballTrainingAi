@@ -1,7 +1,6 @@
 import { ScreenBackground } from "@/components/ScreenBackground";
 import { ThemeMode, ThemeProvider, useThemeContext } from "@/components/ThemeProvider";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
-import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { buildNavigationTheme } from "@/lib/navigationTheme";
 import {
   Poppins_400Regular,
@@ -22,7 +21,6 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 function RootNavigator() {
-  usePushNotifications();
   const { scheme, colors, setMode } = useThemeContext();
   const { profile } = useAuth();
   const syncedFromProfile = useRef(false);

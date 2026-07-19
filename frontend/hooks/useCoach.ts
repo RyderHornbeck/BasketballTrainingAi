@@ -351,7 +351,10 @@ export function useCoach(dayId: string | null): UseCoachResult {
 
   useEffect(() => {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-    const unsubscribe = onWorkoutUpdated(() => {
+    const unsubscribe = onWorkoutUpdated((source) => {
+      // The coach tool response already contains the canonical post-mutation
+      // state. Refreshing again here causes a competing session.update.
+      if (source === "coach") return;
       if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
