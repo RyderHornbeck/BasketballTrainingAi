@@ -170,6 +170,8 @@ function SetShootingRow({
         <View style={styles.shootingCol}>
           <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Makes</Text>
           <RNTextInput
+            allowFontScaling={false}
+            maxFontSizeMultiplier={1}
             value={makesDraft ?? makes}
             onChangeText={readOnly ? undefined : onMakesChange}
             onBlur={onMakesBlur}
@@ -188,6 +190,8 @@ function SetShootingRow({
         <View style={styles.shootingCol}>
           <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Attempts</Text>
           <RNTextInput
+            allowFontScaling={false}
+            maxFontSizeMultiplier={1}
             value={attemptsDraft ?? attempts}
             onChangeText={readOnly ? undefined : onAttemptsChange}
             onBlur={onAttemptsBlur}
@@ -762,6 +766,8 @@ export function ExerciseCard({
               <View style={styles.notesWrapper}>
                 <Text style={[styles.smallLabel, { color: colors.textSecondary }]}>Notes (optional)</Text>
                 <RNTextInput
+                  allowFontScaling={false}
+                  maxFontSizeMultiplier={1}
                   value={userNotes}
                   onChangeText={(text) => {
                     hasUserEditsRef.current = true;

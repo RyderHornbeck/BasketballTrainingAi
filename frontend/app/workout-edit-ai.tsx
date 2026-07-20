@@ -301,6 +301,8 @@ export default function WorkoutEditAIScreen() {
         {error ? <Text style={styles.error}>{error}</Text> : null}
         <View style={[styles.composer, { borderTopColor: colors.border }]}>
           <TextInput
+            allowFontScaling={false}
+            maxFontSizeMultiplier={1}
             value={draft}
             onChangeText={setDraft}
             placeholder="Describe what you want to change..."

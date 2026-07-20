@@ -9,6 +9,26 @@ import { Redirect, router } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 
+const SETUP_STEP_TIMEOUT_MS = 15_000;
+
+function withSetupTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`${label} is taking too long. Check your connection and try again.`));
+    }, SETUP_STEP_TIMEOUT_MS);
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    );
+  });
+}
+
 export default function FinishSetupScreen() {
   const { colors } = useTheme();
   const { user, refreshProfile } = useAuth();
@@ -23,16 +43,21 @@ export default function FinishSetupScreen() {
     try {
       const draft = await loadOnboardingDraft();
       if (!draft) {
-        await refreshProfile();
+        await withSetupTimeout(refreshProfile(), "Refreshing your profile");
         router.replace("/");
         return;
       }
 
-      await submitOnboardingAnswers(user.id, draft);
+      await withSetupTimeout(
+        submitOnboardingAnswers(user.id, draft),
+        "Saving your preferences"
+      );
       await clearOnboardingDraft();
-      await refreshProfile();
-      await requestPlanGeneration();
+      await withSetupTimeout(refreshProfile(), "Refreshing your profile");
       router.replace("/generating");
+      void requestPlanGeneration().catch((generationError) => {
+        console.error("Unable to start initial plan generation:", generationError);
+      });
     } catch (nextError) {
       setError(
         nextError instanceof Error

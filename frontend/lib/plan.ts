@@ -164,6 +164,18 @@ async function getInFlightGenerationRequest(): Promise<PlanGenerationRequest | n
   return (data as PlanGenerationRequest) ?? null;
 }
 
+async function invokePlanGeneration(requestId: string): Promise<void> {
+  const { error: invokeError } = await supabase.functions.invoke("generate-plan", {
+    body: { request_id: requestId },
+  });
+
+  if (invokeError) {
+    // Status is server-controlled. A later retry can safely invoke the same
+    // pending request again because generation requests are idempotent.
+    console.error("Plan generation invocation failed:", invokeError.message);
+  }
+}
+
 /** Creates or reuses an idempotent five-workout generation request. */
 export async function requestPlanGeneration(
   options: PlanGenerationOptions = {}
@@ -178,7 +190,12 @@ export async function requestPlanGeneration(
   }
 
   const existing = await getInFlightGenerationRequest();
-  if (existing) return existing;
+  if (existing) {
+    if (existing.status === "pending") {
+      await invokePlanGeneration(existing.id);
+    }
+    return existing;
+  }
 
   const { data: requestData, error: insertError } = await supabase.rpc(
     "create_my_plan_generation_request",
@@ -196,15 +213,7 @@ export async function requestPlanGeneration(
     throw new Error(insertError?.message ?? "Failed to create generation request");
   }
 
-  const { error: invokeError } = await supabase.functions.invoke("generate-plan", {
-    body: { request_id: request.id },
-  });
-
-  if (invokeError) {
-    // Status is server-controlled. If invocation never reached the server, a
-    // later retry safely reuses this pending request.
-    console.error("Plan generation invocation failed:", invokeError.message);
-  }
+  await invokePlanGeneration(request.id);
 
   return request as PlanGenerationRequest;
 }

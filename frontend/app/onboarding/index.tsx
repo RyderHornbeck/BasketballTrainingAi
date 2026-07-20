@@ -3,7 +3,12 @@ import { SkillSlider } from "@/components/SkillSlider";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { requestOnboardingReviewOnce } from "@/lib/appReview";
-import { loadOnboardingDraft, saveOnboardingDraft } from "@/lib/onboardingDraft";
+import {
+  clearOnboardingDraft,
+  loadOnboardingDraft,
+  saveOnboardingDraft,
+} from "@/lib/onboardingDraft";
+import { requestPlanGeneration, submitOnboardingAnswers } from "@/lib/plan";
 import { OnboardingFormData } from "@/types/plan";
 import { Text } from "@/components/Text";
 import { router } from "expo-router";
@@ -119,7 +124,7 @@ const initialForm: OnboardingFormData = {
 
 export default function OnboardingScreen() {
   const { colors } = useTheme();
-  const { user, profile, loading: authLoading } = useAuth();
+  const { user, profile, refreshProfile, loading: authLoading } = useAuth();
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<OnboardingFormData>(initialForm);
   const [submitting, setSubmitting] = useState(false);
@@ -236,12 +241,17 @@ export default function OnboardingScreen() {
     setError(null);
     try {
       if (user) {
-        // Preserve the completed answers until premium is verified. This
-        // also covers accounts created through the Login path.
-        await saveOnboardingDraft(form);
+        // Existing authenticated accounts can complete onboarding here.
+        // Start their real plan behind the paywall so it can be ready after purchase.
+        await submitOnboardingAnswers(user.id, form);
+        await clearOnboardingDraft();
+        await refreshProfile();
         router.replace({
           pathname: "/paywall",
-          params: { next: "finish-setup" },
+          params: { next: "app" },
+        });
+        void requestPlanGeneration().catch((generationError) => {
+          console.error("Unable to start initial plan generation:", generationError);
         });
         return;
       }

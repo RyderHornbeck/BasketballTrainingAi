@@ -31,6 +31,8 @@ export function TextInput({ label, error, style, ...rest }: TextInputProps) {
           style,
         ]}
         {...rest}
+        allowFontScaling={false}
+        maxFontSizeMultiplier={1}
       />
       {error ? <Text style={[styles.error, { color: colors.danger }]}>{error}</Text> : null}
     </View>

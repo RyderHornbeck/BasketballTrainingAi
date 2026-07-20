@@ -24,5 +24,12 @@ export function Text({ style, ...rest }: TextProps) {
   const flat = StyleSheet.flatten(style) ?? {};
   const fontFamily = flat.fontFamily ?? WEIGHT_TO_FONT[String(flat.fontWeight ?? "400")] ?? "Poppins_400Regular";
 
-  return <RNText {...rest} style={[style, { fontFamily }]} />;
+  return (
+    <RNText
+      {...rest}
+      allowFontScaling={false}
+      maxFontSizeMultiplier={1}
+      style={[style, { fontFamily }]}
+    />
+  );
 }

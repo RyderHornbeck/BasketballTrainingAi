@@ -149,6 +149,8 @@ export default function WorkoutEditManualScreen() {
       <View style={[styles.searchBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <MagnifyingGlassIcon size={20} color={colors.textMuted} />
         <TextInput
+          allowFontScaling={false}
+          maxFontSizeMultiplier={1}
           value={query}
           onChangeText={setQuery}
           placeholder="Search name, instructions, category, or court spot"

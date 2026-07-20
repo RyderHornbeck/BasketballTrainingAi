@@ -5,28 +5,43 @@ import { usePlan } from "@/hooks/usePlan";
 import { requestPlanGeneration } from "@/lib/plan";
 import { Redirect } from "expo-router";
 import { BasketballIcon, SmileySadIcon } from "phosphor-react-native";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { StyleSheet, View } from "react-native";
 
 export default function GeneratingScreen() {
   const { colors } = useTheme();
   const { appState, generationRequest, loading, refresh } = usePlan();
   const [retrying, setRetrying] = useState(false);
+  const ensuredRequestsRef = useRef(new Set<string>());
   const isFailed = appState === "plan_failed";
   const hasNoRequestYet = !loading && appState === "no_plan" && !generationRequest;
+  const hasPendingRequest = !loading && generationRequest?.status === "pending";
 
   useEffect(() => {
-    if (!hasNoRequestYet || retrying) return;
-    void (async () => {
+    if (!hasNoRequestYet && !hasPendingRequest) return;
+    const requestKey = generationRequest?.id ?? "new-request";
+    if (ensuredRequestsRef.current.has(requestKey)) return;
+    ensuredRequestsRef.current.add(requestKey);
+    let cancelled = false;
+    const frame = requestAnimationFrame(() => {
       setRetrying(true);
-      try {
-        await requestPlanGeneration();
-        await refresh();
-      } finally {
-        setRetrying(false);
-      }
-    })();
-  }, [hasNoRequestYet, refresh, retrying]);
+      void requestPlanGeneration()
+        .then((request) => {
+          ensuredRequestsRef.current.add(request.id);
+          return refresh();
+        })
+        .catch((generationError) => {
+          console.error("Unable to continue plan generation:", generationError);
+        })
+        .finally(() => {
+          if (!cancelled) setRetrying(false);
+        });
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [generationRequest?.id, hasNoRequestYet, hasPendingRequest, refresh]);
 
   if (appState === "plan_ready") {
     return <Redirect href="/(tabs)/days" />;

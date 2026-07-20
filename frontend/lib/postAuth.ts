@@ -1,4 +1,5 @@
-import { loadOnboardingDraft } from "@/lib/onboardingDraft";
+import { clearOnboardingDraft, loadOnboardingDraft } from "@/lib/onboardingDraft";
+import { requestPlanGeneration, submitOnboardingAnswers } from "@/lib/plan";
 import { supabase } from "@/lib/supabase";
 import { router } from "expo-router";
 
@@ -26,9 +27,14 @@ export async function routeAfterSocialAuth(
     return;
   }
 
+  await submitOnboardingAnswers(userId, draft);
+  await clearOnboardingDraft();
   await refreshProfile();
   router.replace({
     pathname: "/paywall",
-    params: { next: "finish-setup" },
+    params: { next: "app" },
+  });
+  void requestPlanGeneration().catch((generationError) => {
+    console.error("Unable to start initial plan generation:", generationError);
   });
 }
