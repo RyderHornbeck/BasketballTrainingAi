@@ -17,7 +17,6 @@ import {
   resolveAttemptsOverride,
   resolveMinutesOverride,
 } from "./exerciseSetLogs.ts";
-import { hasVideoDemoFromClip, isCatalogOnlyVideoId } from "./exerciseClip.ts";
 import { sortWorkoutExercisesForDisplay } from "./workoutOrder.ts";
 
 export interface TimerState {
@@ -109,8 +108,7 @@ Rules:
 - A single athlete request may require several actions. Make every needed tool call, in dependency order, and wait for each result before the next call so later actions use the latest saved workout state.
 - Every tool result includes an Authoritative workout state snapshot. Use that snapshot silently for the rest of the turn. Do not call get_workout_position again after a tool result unless the athlete explicitly asks for a new progress/location check or the returned state is ambiguous.
 - For a progress, location, or “what's next” question, call get_workout_position at most once, then answer directly from its result. Never say “let me check the workout state” aloud.
-- Context includes has_video_demo per drill. Video drills have an in-app demo on the exercise card; text-only drills do not. For text-only drills, use drill_description and coaching_notes from context instead of telling them to watch a video.
-- For video drills, if they seem confused by your verbal description, briefly tell them to watch the video demo on that exercise card.
+- Use drill_description and coaching_notes from context when the athlete needs a drill explanation. Do not tell them to watch an in-app video.
 - For drill-list questions, call list_workout_drills with an optional category (e.g. shooting) if helpful.
 - When the athlete asks to add or remove workout exercises, use search_exercise_catalog, add_workout_exercise, and remove_workout_exercise. Search before adding. After editing, briefly name every exercise added or removed; never answer with only "workout updated."
 - When they want to remember something about a drill, call save_note with the natural drill reference and note.
@@ -505,12 +503,10 @@ function resolveClip(row: ExerciseRow): ClipInfo | null {
   return raw;
 }
 
-function videoDemoContext(row: ExerciseRow) {
+function drillInstructionContext(row: ExerciseRow) {
   const clip = resolveClip(row);
-  const catalogOnly = clip ? isCatalogOnlyVideoId(clip.youtube_video_id) : true;
   return {
-    has_video_demo: hasVideoDemoFromClip(clip),
-    drill_description: catalogOnly ? (clip?.description ?? row.instructions) : null,
+    drill_description: clip?.description ?? row.instructions ?? null,
     coaching_notes: clip?.coaching_notes ?? null,
   };
 }
@@ -543,7 +539,7 @@ export function buildContextSummary(
     const setLogs = hydrateSetLogs(buildSetPlan(ex), meta, log ?? undefined);
     const totals = aggregateSetLogs(setLogs, plan);
     const currentSet = getCurrentSetNumber(setLogs, plan);
-    const video = videoDemoContext(ex);
+    const instructions = drillInstructionContext(ex);
 
     return {
       exercise_id: ex.id,
@@ -569,9 +565,8 @@ export function buildContextSummary(
       current_set: currentSet,
       set_logs: totals.set_logs,
       notes: meta.user_notes ?? null,
-      has_video_demo: video.has_video_demo,
-      drill_description: video.drill_description,
-      coaching_notes: video.coaching_notes,
+      drill_description: instructions.drill_description,
+      coaching_notes: instructions.coaching_notes,
     };
   });
 
@@ -607,7 +602,6 @@ export function buildContextSummary(
           per_set_target_makes: current.per_set_target_makes,
           per_set_target_attempts: current.per_set_target_attempts,
           per_set_attempts_override: current.per_set_attempts_override,
-          has_video_demo: current.has_video_demo,
           drill_description: current.drill_description,
         }
       : null,
@@ -629,15 +623,14 @@ export function buildContextSummary(
 
 function drillPlanFields(ex: ExerciseRow, log?: LogRow) {
   const plan = effectivePlanForExercise(ex, log);
-  const video = videoDemoContext(ex);
+  const instructions = drillInstructionContext(ex);
   return {
     sets_total: plan.setCount,
     per_set_target_makes: plan.perSetMakes,
     per_set_target_attempts: plan.perSetAttempts,
     per_set_minutes: isTimedExercise(ex) ? plan.perSetMinutes : null,
     log_type: ex.log_type,
-    has_video_demo: video.has_video_demo,
-    drill_description: video.drill_description,
+    drill_description: instructions.drill_description,
   };
 }
 
@@ -656,14 +649,13 @@ function summarizeDrill(
   target_attempts: number | null;
   per_set_minutes: number | null;
   log_type: string | null;
-  has_video_demo: boolean;
   drill_description: string | null;
 } {
   const plan = effectivePlanForExercise(ex, log);
   const meta = decodeExerciseLogMeta(log?.notes ?? null);
   const setLogs = hydrateSetLogs(buildSetPlan(ex), meta, log ?? undefined);
   const totals = aggregateSetLogs(setLogs, plan);
-  const video = videoDemoContext(ex);
+  const instructions = drillInstructionContext(ex);
   return {
     exercise_id: ex.id,
     name: ex.name,
@@ -676,8 +668,7 @@ function summarizeDrill(
     target_attempts: plan.perSetAttempts,
     per_set_minutes: isTimedExercise(ex) ? plan.perSetMinutes : null,
     log_type: ex.log_type,
-    has_video_demo: video.has_video_demo,
-    drill_description: video.drill_description,
+    drill_description: instructions.drill_description,
   };
 }
 
@@ -749,7 +740,7 @@ function findNextExercise(ctx: WorkoutContext, afterId?: string): ExerciseRow | 
 
 function drillContext(state: OrderedDrillState) {
   const { exercise, position, plan, totals } = state;
-  const video = videoDemoContext(exercise);
+  const instructions = drillInstructionContext(exercise);
   const completedSets = totals.set_logs.filter((set) => set.completed).length;
   const nextUnfinishedSet = getCurrentSetNumber(totals.set_logs, plan);
   return {
@@ -789,8 +780,7 @@ function drillContext(state: OrderedDrillState) {
     },
     log_type: exercise.log_type,
     instructions: (exercise.instructions ?? "").slice(0, 240),
-    has_video_demo: video.has_video_demo,
-    drill_description: video.drill_description,
+    drill_description: instructions.drill_description,
   };
 }
 

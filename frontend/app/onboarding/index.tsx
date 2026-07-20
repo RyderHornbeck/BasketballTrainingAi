@@ -2,6 +2,7 @@ import { OnboardingStep } from "@/components/OnboardingStep";
 import { SkillSlider } from "@/components/SkillSlider";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
+import { requestOnboardingReviewOnce } from "@/lib/appReview";
 import { loadOnboardingDraft, saveOnboardingDraft } from "@/lib/onboardingDraft";
 import { requestPlanGeneration, submitOnboardingAnswers } from "@/lib/plan";
 import { OnboardingFormData } from "@/types/plan";
@@ -44,7 +45,7 @@ import {
   WatchIcon,
 } from "phosphor-react-native";
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, StyleSheet, View } from "react-native";
 
 const SKILL_LEVELS = ["beginner", "intermediate", "advanced", "elite"];
 const GOALS = [
@@ -83,6 +84,9 @@ const MINUTES_OPTIONS = [15, 30, 45, 60, 75, 90];
 
 const QUESTION_STEPS = 9;
 const PRE_SIGNUP_STEP = 10;
+const COACH_INTRO_STEP = 11;
+const REVIEW_STEP = 12;
+const PRE_SIGNUP_TOTAL_STEPS = REVIEW_STEP;
 const GENERATION_STEPS = [
   "Calculating your workout length",
   "Reading your goals and skill levels",
@@ -123,7 +127,7 @@ export default function OnboardingScreen() {
   const [error, setError] = useState<string | null>(null);
   const [completedChecklistSteps, setCompletedChecklistSteps] = useState(0);
   const [checklistRun, setChecklistRun] = useState(0);
-  const totalSteps = user ? QUESTION_STEPS : PRE_SIGNUP_STEP;
+  const totalSteps = user ? QUESTION_STEPS : PRE_SIGNUP_TOTAL_STEPS;
 
   // Already finished onboarding — don't make them answer again.
   useEffect(() => {
@@ -151,6 +155,11 @@ export default function OnboardingScreen() {
     );
     return () => timeouts.forEach(clearTimeout);
   }, [checklistRun, step]);
+
+  useEffect(() => {
+    if (user || step !== REVIEW_STEP) return;
+    void requestOnboardingReviewOnce();
+  }, [step, user]);
 
   const update = <K extends keyof OnboardingFormData>(key: K, value: OnboardingFormData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -212,6 +221,14 @@ export default function OnboardingScreen() {
       setStep(PRE_SIGNUP_STEP);
       return;
     }
+    if (step === PRE_SIGNUP_STEP && !user) {
+      setStep(COACH_INTRO_STEP);
+      return;
+    }
+    if (step === COACH_INTRO_STEP && !user) {
+      setStep(REVIEW_STEP);
+      return;
+    }
     await handleSubmit();
   };
 
@@ -244,7 +261,10 @@ export default function OnboardingScreen() {
 
   const handleBack = () => {
     if (step > 1) {
-      if (step === PRE_SIGNUP_STEP) setCompletedChecklistSteps(0);
+      if (step === PRE_SIGNUP_STEP || step === COACH_INTRO_STEP) {
+        setCompletedChecklistSteps(0);
+        setChecklistRun((run) => run + 1);
+      }
       setStep(step - 1);
       return;
     }
@@ -261,7 +281,13 @@ export default function OnboardingScreen() {
       onBack={handleBack}
       nextDisabled={!canGoNext()}
       nextLoading={submitting}
-      nextLabel={step === QUESTION_STEPS && user ? "Build My Plan" : "Continue"}
+      nextLabel={
+        step === REVIEW_STEP
+          ? "I rated"
+          : step === QUESTION_STEPS && user
+            ? "Build My Plan"
+            : "Continue"
+      }
     >
       {error ? <Text style={[styles.error, { color: colors.danger }]}>{error}</Text> : null}
 
@@ -417,6 +443,61 @@ export default function OnboardingScreen() {
           })}
         </View>
       )}
+
+      {step === COACH_INTRO_STEP && !user && (
+        <View style={styles.infoSlide}>
+          <Image
+            source={require("../../assets/images/AppLogo.png")}
+            style={styles.appLogo}
+            resizeMode="contain"
+          />
+          <Text style={[styles.infoLead, { color: colors.text }]}>
+            Court Coach helps you move through every workout more smoothly, stay organized, and
+            focus on improving your game.
+          </Text>
+          <View style={styles.coachFeatures}>
+            <CoachFeature
+              icon={<TargetIcon />}
+              title="Log as you train"
+              description="Tell Court Coach your makes and attempts, and it saves the result for you."
+            />
+            <CoachFeature
+              icon={<ArrowsOutIcon />}
+              title="Adjust your workout"
+              description="Change, add, remove, or skip drills whenever your workout needs to adapt."
+            />
+            <CoachFeature
+              icon={<QuestionIcon />}
+              title="Get instant guidance"
+              description="Ask for a drill explanation, what comes next, or how much work is left."
+            />
+            <CoachFeature
+              icon={<TimerIcon />}
+              title="Keep everything moving"
+              description="Start timers and mark sets or entire drills complete without losing your flow."
+            />
+          </View>
+        </View>
+      )}
+
+      {step === REVIEW_STEP && !user && (
+        <View style={styles.ratingSlide}>
+          <View style={styles.ratingStars}>
+            {Array.from({ length: 5 }, (_, index) => (
+              <StarIcon key={index} size={34} color="#FBBF24" weight="fill" />
+            ))}
+          </View>
+          <Image
+            source={require("../../assets/images/AppLogo.png")}
+            style={styles.ratingLogo}
+            resizeMode="contain"
+          />
+          <Text style={[styles.ratingCopy, { color: colors.textSecondary }]}>
+            Your rating helps more basketball players discover smarter, easier training with Court
+            Coach.
+          </Text>
+        </View>
+      )}
     </OnboardingStep>
   );
 }
@@ -435,6 +516,14 @@ const STEP_TITLES = [
     title: "Preparing your first workouts",
     subtitle: "Reviewing your answers and preparing your personalized training setup.",
   },
+  {
+    title: "Train smarter with Court Coach",
+    subtitle: "Your AI coach keeps each workout simple, flexible, and on track.",
+  },
+  {
+    title: "Give Court Coach a rating",
+    subtitle: "If you’re excited to start training, support Court Coach with a quick rating.",
+  },
 ];
 
 function capitalize(s: string) {
@@ -445,6 +534,39 @@ interface ChipOption {
   label: string;
   value: string;
   icon?: React.ReactElement;
+}
+
+function CoachFeature({
+  icon,
+  title,
+  description,
+}: {
+  icon: React.ReactElement<{
+    size?: number;
+    color?: string;
+    weight?: "duotone";
+  }>;
+  title: string;
+  description: string;
+}) {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.coachFeature, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={[styles.coachFeatureIcon, { backgroundColor: colors.accentMuted }]}>
+        {React.cloneElement(icon, {
+          size: 22,
+          color: colors.accent,
+          weight: "duotone",
+        })}
+      </View>
+      <View style={styles.coachFeatureCopy}>
+        <Text style={[styles.coachFeatureTitle, { color: colors.text }]}>{title}</Text>
+        <Text style={[styles.coachFeatureDescription, { color: colors.textSecondary }]}>
+          {description}
+        </Text>
+      </View>
+    </View>
+  );
 }
 
 function ChipGroup({
@@ -686,5 +808,73 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     fontWeight: "700",
+  },
+  infoSlide: {
+    alignItems: "center",
+    gap: 18,
+  },
+  appLogo: {
+    width: 150,
+    height: 150,
+  },
+  infoLead: {
+    maxWidth: 340,
+    fontSize: 15,
+    fontWeight: "600",
+    lineHeight: 22,
+    textAlign: "center",
+  },
+  coachFeatures: {
+    alignSelf: "stretch",
+    gap: 10,
+  },
+  coachFeature: {
+    minHeight: 76,
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  coachFeatureIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  coachFeatureCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  coachFeatureTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  coachFeatureDescription: {
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  ratingSlide: {
+    minHeight: 390,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 24,
+  },
+  ratingStars: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 5,
+  },
+  ratingLogo: {
+    width: 190,
+    height: 190,
+  },
+  ratingCopy: {
+    maxWidth: 330,
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: "center",
   },
 });

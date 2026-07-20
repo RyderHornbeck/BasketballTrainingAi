@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { requireOptionalNativeModule } from "expo-modules-core";
 
-export type AppReviewMilestone = "account_created" | "badge_5" | "badge_10";
+export type AppReviewMilestone = "badge_5" | "badge_10";
 
 interface StoreReviewModule {
   isAvailableAsync?: () => Promise<boolean>;
@@ -10,9 +10,9 @@ interface StoreReviewModule {
 
 const storeReview = requireOptionalNativeModule<StoreReviewModule>("ExpoStoreReview");
 const requestedStorageKey = (userId: string) => `court-coach.app-review.requested.${userId}`;
-const pendingAccountStorageKey = (userId: string) =>
-  `court-coach.app-review.pending-account.${userId}`;
+const onboardingReviewStorageKey = "court-coach.app-review.onboarding-requested";
 const inFlight = new Map<string, Promise<boolean>>();
+let onboardingRequest: Promise<boolean> | null = null;
 
 async function requestedMilestones(userId: string): Promise<Set<AppReviewMilestone>> {
   try {
@@ -22,7 +22,7 @@ async function requestedMilestones(userId: string): Promise<Set<AppReviewMilesto
     return new Set(
       parsed.filter(
         (value): value is AppReviewMilestone =>
-          value === "account_created" || value === "badge_5" || value === "badge_10"
+          value === "badge_5" || value === "badge_10"
       )
     );
   } catch {
@@ -30,16 +30,31 @@ async function requestedMilestones(userId: string): Promise<Set<AppReviewMilesto
   }
 }
 
-export async function markAccountReviewPending(userId: string): Promise<void> {
-  await AsyncStorage.setItem(pendingAccountStorageKey(userId), "1");
-}
+export function requestOnboardingReviewOnce(): Promise<boolean> {
+  if (onboardingRequest) return onboardingRequest;
+  onboardingRequest = (async () => {
+    if ((await AsyncStorage.getItem(onboardingReviewStorageKey)) === "1") return true;
+    if (
+      !storeReview?.isAvailableAsync ||
+      !storeReview.requestReview ||
+      !(await storeReview.isAvailableAsync())
+    ) {
+      return false;
+    }
 
-export async function requestPendingAccountReview(userId: string): Promise<void> {
-  const pending = await AsyncStorage.getItem(pendingAccountStorageKey(userId));
-  if (pending !== "1") return;
-  if (await requestAppReviewOnce(userId, "account_created")) {
-    await AsyncStorage.removeItem(pendingAccountStorageKey(userId));
-  }
+    await AsyncStorage.setItem(onboardingReviewStorageKey, "1");
+    try {
+      await storeReview.requestReview();
+      return true;
+    } catch (error) {
+      await AsyncStorage.removeItem(onboardingReviewStorageKey);
+      console.warn("Unable to request an onboarding app review:", error);
+      return false;
+    }
+  })().finally(() => {
+    onboardingRequest = null;
+  });
+  return onboardingRequest;
 }
 
 export function requestAppReviewOnce(

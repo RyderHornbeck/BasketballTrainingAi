@@ -3,24 +3,17 @@ import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
 import { getAnalyticsSummary, prepareAnalyticsSummary } from "@/lib/analytics";
-import { requestPendingAccountReview } from "@/lib/appReview";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { isDayUnlocked } from "@/lib/plan";
-import {
-  BasketballIcon,
-  ChartLineUpIcon,
-  CourtBasketballIcon,
-  UserCircleIcon,
-} from "phosphor-react-native";
+import { ChartLineUpIcon, CourtBasketballIcon, UserCircleIcon } from "phosphor-react-native";
 import { Tabs } from "expo-router";
 import { BottomTabBar } from "expo-router/build/react-navigation/bottom-tabs";
 import React, { useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
+import { Image, Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const TAB_BAR_HEIGHT = 72;
 const TAB_ICON_SIZE = 28;
-const COACH_ICON_SIZE = 56;
 const NAV_BORDER_COLOR = "#F7B379";
 const EDGE_INSET = 12;
 const COACH_BUTTON_SIZE = TAB_BAR_HEIGHT;
@@ -33,14 +26,6 @@ export default function TabsLayout() {
   const { width: screenWidth } = useWindowDimensions();
   const { days } = usePlan();
   const [coachOpen, setCoachOpen] = useState(false);
-
-  useEffect(() => {
-    if (!user?.id) return;
-    const timeout = setTimeout(() => {
-      void requestPendingAccountReview(user.id);
-    }, 750);
-    return () => clearTimeout(timeout);
-  }, [user?.id]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -190,7 +175,11 @@ export default function TabsLayout() {
           },
         ]}
       >
-        <BasketballIcon size={COACH_ICON_SIZE} color="#FFFFFF" weight="fill" />
+        <Image
+          source={require("../../assets/images/WhiteAppLogoForButton.png")}
+          style={styles.coachLogo}
+          resizeMode="contain"
+        />
       </Pressable>
 
       {coachOpen ? (
@@ -241,5 +230,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.45,
     shadowRadius: 16,
     elevation: 12,
+  },
+  coachLogo: {
+    width: 54,
+    height: 54,
   },
 });
