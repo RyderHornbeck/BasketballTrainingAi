@@ -1,6 +1,7 @@
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { reportNetworkFailure } from "@/lib/connectivity";
+import { actionHaptic } from "@/lib/haptics";
 import {
   addCatalogExerciseToWorkout,
   getExerciseCatalog,
@@ -120,6 +121,7 @@ export default function WorkoutEditManualScreen() {
 
   const addExercise = async (clip: ExerciseVideoClip) => {
     if (!dayId || addedIds.has(clip.id) || addingId) return;
+    actionHaptic();
     setAddingId(clip.id);
     try {
       await addCatalogExerciseToWorkout(dayId, clip);
@@ -195,9 +197,12 @@ export default function WorkoutEditManualScreen() {
                 <Pressable
                   disabled={added || addingId != null}
                   onPress={() => void addExercise(item)}
-                  style={[
+                  style={({ pressed }) => [
                     styles.addButton,
-                    { backgroundColor: added ? colors.accentMuted : colors.accent },
+                    {
+                      backgroundColor: added ? colors.accentMuted : colors.accent,
+                      opacity: !added && addingId != null ? 0.45 : pressed ? 0.72 : 1,
+                    },
                   ]}
                 >
                   {addingId === item.id ? (

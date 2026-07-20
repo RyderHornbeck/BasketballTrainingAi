@@ -5,7 +5,10 @@ import { ThemeMode } from "@/components/ThemeProvider";
 import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
+import { actionHaptic } from "@/lib/haptics";
+import { PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL } from "@/lib/legal";
 import { clearOnboardingDraft } from "@/lib/onboardingDraft";
+import { logOutRevenueCatUser } from "@/lib/revenueCat";
 import { supabase } from "@/lib/supabase";
 import {
   defaultWorkoutReminder,
@@ -30,9 +33,6 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-const PRIVACY_POLICY_URL = "https://www.courtcoachai.org/privacy-policy";
-const TERMS_OF_SERVICE_URL = "https://www.courtcoachai.org/terms-of-service";
 
 const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
   { label: "Light", value: "light" },
@@ -191,7 +191,10 @@ export default function ProfileScreen() {
               if (error) throw error;
               if (data?.error) throw new Error(data.error);
               await clearOnboardingDraft();
-              await supabase.auth.signOut({ scope: "local" });
+              await Promise.allSettled([
+                supabase.auth.signOut({ scope: "local" }),
+                logOutRevenueCatUser(),
+              ]);
               router.replace("/auth/login");
             } catch (err) {
               Alert.alert(
@@ -291,7 +294,10 @@ export default function ProfileScreen() {
         <Button
           title="How to use Court Coach AI"
           variant="secondary"
-          onPress={() => router.push("/coach-guide")}
+          onPress={() => {
+            actionHaptic();
+            router.push("/coach-guide");
+          }}
           style={styles.actionButton}
         />
 

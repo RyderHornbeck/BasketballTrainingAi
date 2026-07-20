@@ -3,15 +3,22 @@ import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
+import { useSubscription } from "@/hooks/useSubscription";
 import { prepareAnalyticsSummary } from "@/lib/analytics";
+import { loadOnboardingDraft } from "@/lib/onboardingDraft";
 import { Redirect } from "expo-router";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 
 export default function Index() {
   const { colors } = useTheme();
-  const { user, startupError, retryStartup } = useAuth();
+  const { user, profile, loading: authLoading, startupError, retryStartup } = useAuth();
   const { appState, loading, loadError, refresh } = usePlan();
+  const { hasPremium, isLoadingSubscription } = useSubscription();
+  const [draftState, setDraftState] = useState<{
+    userId: string;
+    exists: boolean;
+  } | null>(null);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -19,6 +26,17 @@ export default function Index() {
       console.warn("Unable to prepare analytics during startup:", error);
     });
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || authLoading || profile?.onboarding_completed) return;
+    let cancelled = false;
+    void loadOnboardingDraft().then((draft) => {
+      if (!cancelled) setDraftState({ userId: user.id, exists: Boolean(draft) });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, profile?.onboarding_completed, user?.id]);
 
   if (startupError) {
     return (
@@ -28,6 +46,25 @@ export default function Index() {
         <Button title="Try Again" onPress={retryStartup} style={styles.retryButton} />
       </View>
     );
+  }
+
+  if (authLoading) return null;
+  if (!user) return <Redirect href="/welcome" />;
+  if (isLoadingSubscription) return null;
+
+  if (!profile?.onboarding_completed) {
+    const draftExists =
+      draftState && draftState.userId === user.id ? draftState.exists : null;
+    if (draftExists === null) return null;
+    if (!draftExists) return <Redirect href="/onboarding" />;
+    if (!hasPremium) {
+      return <Redirect href={{ pathname: "/paywall", params: { next: "finish-setup" } }} />;
+    }
+    return <Redirect href="/finish-setup" />;
+  }
+
+  if (!hasPremium) {
+    return <Redirect href={{ pathname: "/paywall", params: { next: "app" } }} />;
   }
 
   if (loadError) {

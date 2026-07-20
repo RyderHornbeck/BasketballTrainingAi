@@ -80,9 +80,14 @@ function SetCheckboxRow({
     <Pressable
       onPress={readOnly ? undefined : onToggle}
       disabled={readOnly}
-      style={[
+      hitSlop={4}
+      style={({ pressed }) => [
         styles.setRow,
-        { backgroundColor: completed ? colors.accentMuted : colors.cardAlt, borderColor: colors.border },
+        {
+          backgroundColor: completed ? colors.accentMuted : colors.cardAlt,
+          borderColor: colors.border,
+          opacity: pressed ? 0.72 : 1,
+        },
       ]}
     >
       <View
@@ -582,7 +587,11 @@ export function ExerciseCard({
         </Pressable>
 
         <View style={styles.headerActions}>
-          <Pressable onPress={editMode ? onDelete : toggleExpand} hitSlop={8}>
+          <Pressable
+            onPress={editMode ? onDelete : toggleExpand}
+            hitSlop={8}
+            style={({ pressed }) => ({ opacity: pressed ? 0.65 : 1 })}
+          >
             <Animated.View
               style={[
                 styles.headerCheck,

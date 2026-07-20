@@ -2,6 +2,7 @@ import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { reportNetworkFailure } from "@/lib/connectivity";
 import { emitWorkoutUpdated } from "@/lib/coachEvents";
+import { actionHaptic } from "@/lib/haptics";
 import { supabase } from "@/lib/supabase";
 import { ArrowCounterClockwiseIcon, ArrowLeftIcon, PaperPlaneRightIcon } from "phosphor-react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -131,6 +132,7 @@ export default function WorkoutEditAIScreen() {
   const send = async () => {
     const content = draft.trim();
     if (!dayId || !content || sending || remaining <= 0) return;
+    actionHaptic();
     const optimistic: ChatMessage = {
       id: `local-${Date.now()}`,
       role: "user",
@@ -313,11 +315,12 @@ export default function WorkoutEditAIScreen() {
           <Pressable
             disabled={!draft.trim() || sending || remaining <= 0}
             onPress={() => void send()}
-            style={[
+            style={({ pressed }) => [
               styles.sendButton,
               {
                 backgroundColor: colors.accent,
-                opacity: !draft.trim() || sending || remaining <= 0 ? 0.45 : 1,
+                opacity:
+                  !draft.trim() || sending || remaining <= 0 ? 0.45 : pressed ? 0.72 : 1,
               },
             ]}
           >

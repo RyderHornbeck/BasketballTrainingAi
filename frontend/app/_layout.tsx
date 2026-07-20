@@ -1,7 +1,9 @@
 import { ScreenBackground } from "@/components/ScreenBackground";
 import { ConnectivityProvider } from "@/components/NoConnectionBanner";
+import { SubscriptionRouteGuard } from "@/components/SubscriptionRouteGuard";
 import { ThemeMode, ThemeProvider, useThemeContext } from "@/components/ThemeProvider";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
+import { SubscriptionProvider } from "@/hooks/useSubscription";
 import { buildNavigationTheme } from "@/lib/navigationTheme";
 import {
   Poppins_400Regular,
@@ -43,32 +45,36 @@ function RootNavigator() {
     <NavigationThemeProvider value={navTheme}>
       <ScreenBackground>
         <StatusBar style={scheme === "dark" ? "light" : "dark"} />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: colors.background },
-            animation: "default",
-          }}
-        >
-          <Stack.Screen name="index" />
-          <Stack.Screen name="welcome" />
-          <Stack.Screen name="auth/login" />
-          <Stack.Screen name="auth/signup" />
-          <Stack.Screen name="onboarding/index" />
-          <Stack.Screen name="generating" />
-          <Stack.Screen name="drill-timer" />
-          <Stack.Screen name="drill-detail" />
-          <Stack.Screen name="workout-edit-manual" />
-          <Stack.Screen name="achievements" />
-          <Stack.Screen name="workout-edit-ai" />
-          <Stack.Screen name="coach-guide" />
-          <Stack.Screen
-            name="(tabs)"
-            options={{
+        <SubscriptionRouteGuard>
+          <Stack
+            screenOptions={{
+              headerShown: false,
               contentStyle: { backgroundColor: colors.background },
+              animation: "default",
             }}
-          />
-        </Stack>
+          >
+            <Stack.Screen name="index" />
+            <Stack.Screen name="welcome" />
+            <Stack.Screen name="auth/login" />
+            <Stack.Screen name="auth/signup" />
+            <Stack.Screen name="onboarding/index" />
+            <Stack.Screen name="paywall" />
+            <Stack.Screen name="finish-setup" />
+            <Stack.Screen name="generating" />
+            <Stack.Screen name="drill-timer" />
+            <Stack.Screen name="drill-detail" />
+            <Stack.Screen name="workout-edit-manual" />
+            <Stack.Screen name="achievements" />
+            <Stack.Screen name="workout-edit-ai" />
+            <Stack.Screen name="coach-guide" />
+            <Stack.Screen
+              name="(tabs)"
+              options={{
+                contentStyle: { backgroundColor: colors.background },
+              }}
+            />
+          </Stack>
+        </SubscriptionRouteGuard>
       </ScreenBackground>
     </NavigationThemeProvider>
   );
@@ -81,7 +87,9 @@ function AppShell() {
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
       <ConnectivityProvider>
         <AuthProvider>
-          <RootNavigator />
+          <SubscriptionProvider>
+            <RootNavigator />
+          </SubscriptionProvider>
         </AuthProvider>
       </ConnectivityProvider>
     </GestureHandlerRootView>

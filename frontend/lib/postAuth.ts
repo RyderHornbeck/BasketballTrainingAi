@@ -1,5 +1,4 @@
-import { clearOnboardingDraft, loadOnboardingDraft } from "@/lib/onboardingDraft";
-import { requestPlanGeneration, submitOnboardingAnswers } from "@/lib/plan";
+import { loadOnboardingDraft } from "@/lib/onboardingDraft";
 import { supabase } from "@/lib/supabase";
 import { router } from "expo-router";
 
@@ -27,9 +26,9 @@ export async function routeAfterSocialAuth(
     return;
   }
 
-  await submitOnboardingAnswers(userId, draft);
-  await clearOnboardingDraft();
   await refreshProfile();
-  await requestPlanGeneration();
-  router.replace("/generating");
+  router.replace({
+    pathname: "/paywall",
+    params: { next: "finish-setup" },
+  });
 }

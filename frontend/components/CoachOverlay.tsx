@@ -4,6 +4,7 @@ import { Text } from "@/components/Text";
 import { NoConnectionBanner } from "@/components/NoConnectionBanner";
 import { useCoach } from "@/hooks/useCoach";
 import { useTheme } from "@/hooks/useTheme";
+import { actionHaptic } from "@/lib/haptics";
 import { Ionicons } from "@expo/vector-icons";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { router } from "expo-router";
@@ -80,6 +81,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
   };
 
   const handleOpenGuide = () => {
+    actionHaptic();
     void stopSession();
     onClose();
     requestAnimationFrame(() => router.push("/coach-guide"));
@@ -236,9 +238,13 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
         <Pressable
           onPress={handleOpenGuide}
           hitSlop={10}
-          style={[
+          style={({ pressed }) => [
             styles.guideLink,
-            { bottom: insets.bottom + 10, borderColor: "#FFFFFF" },
+            {
+              bottom: insets.bottom + 10,
+              borderColor: "#FFFFFF",
+              opacity: pressed ? 0.68 : 1,
+            },
           ]}
         >
           <Text style={[styles.guideLinkText, { color: colors.accent }]}>

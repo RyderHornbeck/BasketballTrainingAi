@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { logOutRevenueCatUser } from "@/lib/revenueCat";
 import { Profile } from "@/types/database";
 import * as AppleAuthentication from "expo-apple-authentication";
 import * as Crypto from "expo-crypto";
@@ -316,8 +317,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [ensureProfile]);
 
   const signOut = useCallback(async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
+    const [supabaseResult] = await Promise.allSettled([
+      supabase.auth.signOut(),
+      logOutRevenueCatUser(),
+    ]);
+    if (supabaseResult.status === "rejected") throw supabaseResult.reason;
+    if (supabaseResult.value.error) throw supabaseResult.value.error;
   }, []);
 
   const refreshProfile = useCallback(async () => {

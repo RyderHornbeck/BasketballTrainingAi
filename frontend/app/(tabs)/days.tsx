@@ -97,6 +97,7 @@ export default function DaysScreen() {
   const detailRequestsRef = useRef<Map<string, Promise<WorkoutDayWithExercises | null>>>(new Map());
   const selectedDayIdRef = useRef<string | null>(null);
   const logSaveQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const latestLogInputRef = useRef<Map<string, ExerciseLogInput>>(new Map());
   const logSaveErrorShownRef = useRef(false);
   const viewTransitionFrameRef = useRef<number | null>(null);
   const finishingRef = useRef(false);
@@ -341,6 +342,7 @@ export default function DaysScreen() {
 
   const confirmFinishWorkout = useCallback(() => {
     if (!dayDetail || dayDetail.completed || finishingRef.current) return;
+    actionHaptic();
 
     const logs = dayDetail.exercises.map(
       (exercise) =>
@@ -393,6 +395,7 @@ export default function DaysScreen() {
         logsRef.current.get(log.exercise_id) ??
         dayDetail?.exercises.find((exercise) => exercise.id === log.exercise_id)?.log;
       logsRef.current.set(log.exercise_id, log);
+      latestLogInputRef.current.set(log.exercise_id, log);
       setProgressVersion((v) => v + 1);
       if (!dayDetail) return;
       if (!previousLog?.completed && log.completed) {
@@ -409,6 +412,7 @@ export default function DaysScreen() {
         .catch(() => undefined)
         .then(async () => {
           const savedLog = await saveExerciseLog(dayDetail.id, log);
+          if (latestLogInputRef.current.get(log.exercise_id) !== log) return;
           updateCachedExerciseLog(dayDetail.id, savedLog);
           logSaveErrorShownRef.current = false;
           if (!dayDetail.completed) {
@@ -484,6 +488,7 @@ export default function DaysScreen() {
   const confirmDeleteExercise = useCallback(
     (exerciseId: string, exerciseName: string | null) => {
       if (!dayDetail) return;
+      actionHaptic();
       Alert.alert(
         "Delete exercise?",
         `Are you sure you want to delete ${exerciseName ?? "this exercise"}? Its logged results will also be removed from analytics.`,
@@ -824,11 +829,12 @@ export default function DaysScreen() {
           <View>
             <Pressable
               onPress={() => {
+                actionHaptic();
                 setEditingWorkout(false);
                 // Both pages move left-to-right back into the overview.
                 switchViewMode("overview", "backward");
               }}
-              style={styles.backRow}
+              style={({ pressed }) => [styles.backRow, { opacity: pressed ? 0.65 : 1 }]}
               hitSlop={8}
             >
               <CaretLeftIcon size={22} color={colors.accent} weight="bold" />
@@ -840,7 +846,10 @@ export default function DaysScreen() {
                 Day {dayDetail.day_number} Workout
               </Text>
               <Pressable
-                onPress={() => setEditingWorkout((value) => !value)}
+                onPress={() => {
+                  actionHaptic();
+                  setEditingWorkout((value) => !value);
+                }}
                 style={({ pressed }) => [
                   styles.editWorkoutButton,
                   {
@@ -894,29 +903,38 @@ export default function DaysScreen() {
             {editingWorkout ? (
               <View style={styles.addWorkoutActions}>
                 <Pressable
-                  onPress={() =>
+                  onPress={() => {
+                    actionHaptic();
                     router.push({
                       pathname: "/workout-edit-ai",
                       params: { dayId: dayDetail.id },
-                    })
-                  }
-                  style={[
+                    });
+                  }}
+                  style={({ pressed }) => [
                     styles.addWorkoutButton,
                     styles.addWorkoutAIButton,
-                    { backgroundColor: colors.accentMuted },
+                    { backgroundColor: colors.accentMuted, opacity: pressed ? 0.72 : 1 },
                   ]}
                 >
                   <MagicWandIcon size={18} color={colors.accent} weight="bold" />
                   <Text style={[styles.addWorkoutButtonText, { color: colors.accent }]}>Add with AI</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() =>
+                  onPress={() => {
+                    actionHaptic();
                     router.push({
                       pathname: "/workout-edit-manual",
                       params: { dayId: dayDetail.id },
-                    })
-                  }
-                  style={[styles.addWorkoutButton, { backgroundColor: colors.card, borderColor: colors.border }]}
+                    });
+                  }}
+                  style={({ pressed }) => [
+                    styles.addWorkoutButton,
+                    {
+                      backgroundColor: colors.card,
+                      borderColor: colors.border,
+                      opacity: pressed ? 0.72 : 1,
+                    },
+                  ]}
                 >
                   <PlusIcon size={18} color={colors.text} weight="bold" />
                   <Text style={[styles.addWorkoutButtonText, { color: colors.text }]}>Add manually</Text>
