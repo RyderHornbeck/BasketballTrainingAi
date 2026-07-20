@@ -4,6 +4,7 @@ import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
 import { getAnalyticsSummary, prepareAnalyticsSummary } from "@/lib/analytics";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
+import { actionHaptic, selectionHaptic } from "@/lib/haptics";
 import { isDayUnlocked } from "@/lib/plan";
 import { ChartLineUpIcon, CourtBasketballIcon, UserCircleIcon } from "phosphor-react-native";
 import { Tabs } from "expo-router";
@@ -119,6 +120,7 @@ export default function TabsLayout() {
       >
         <Tabs.Screen
           name="days"
+          listeners={{ tabPress: selectionHaptic }}
           options={{
             title: "Workouts",
             tabBarIcon: ({ color, focused }) => (
@@ -132,6 +134,7 @@ export default function TabsLayout() {
         />
         <Tabs.Screen
           name="analytics"
+          listeners={{ tabPress: selectionHaptic }}
           options={{
             title: "Analytics",
             tabBarIcon: ({ color, focused }) => (
@@ -145,6 +148,7 @@ export default function TabsLayout() {
         />
         <Tabs.Screen
           name="profile"
+          listeners={{ tabPress: selectionHaptic }}
           options={{
             title: "Profile",
             tabBarIcon: ({ color, focused }) => (
@@ -159,7 +163,10 @@ export default function TabsLayout() {
       </Tabs>
 
       <Pressable
-        onPress={() => setCoachOpen(true)}
+        onPress={() => {
+          actionHaptic();
+          setCoachOpen(true);
+        }}
         style={({ pressed }) => [
           styles.coachButton,
           {

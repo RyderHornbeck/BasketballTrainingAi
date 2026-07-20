@@ -1,5 +1,6 @@
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
+import { reportNetworkFailure } from "@/lib/connectivity";
 import {
   addCatalogExerciseToWorkout,
   getExerciseCatalog,
@@ -124,6 +125,7 @@ export default function WorkoutEditManualScreen() {
       await addCatalogExerciseToWorkout(dayId, clip);
       setAddedIds((current) => new Set(current).add(clip.id));
     } catch (error) {
+      reportNetworkFailure("add-exercise");
       Alert.alert(
         "Could not add exercise",
         error instanceof Error ? error.message : "Please try again."

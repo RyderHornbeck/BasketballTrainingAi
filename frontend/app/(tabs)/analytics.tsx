@@ -5,6 +5,7 @@ import {
   WorkoutActivityHeatmap,
 } from "@/components/analytics/AnalyticsCharts";
 import { ShotMap } from "@/components/analytics/ShotMap";
+import { Skeleton } from "@/components/Skeleton";
 import { StatCard } from "@/components/StatCard";
 import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
@@ -18,7 +19,7 @@ import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { useFocusEffect } from "expo-router";
 import { BarbellIcon, FlameIcon } from "phosphor-react-native";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
+import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const ANALYTICS_ORANGE = "#F7B379";
@@ -70,11 +71,7 @@ export default function AnalyticsScreen() {
   );
 
   if (loading && !summary) {
-    return (
-      <SafeAreaView style={[styles.center, { backgroundColor: "transparent" }]} edges={["top"]}>
-        <ActivityIndicator size="large" color={colors.accent} />
-      </SafeAreaView>
-    );
+    return <AnalyticsSkeleton />;
   }
 
   if (!summary) {
@@ -145,6 +142,29 @@ export default function AnalyticsScreen() {
   );
 }
 
+function AnalyticsSkeleton() {
+  return (
+    <SafeAreaView style={[styles.container, { backgroundColor: "transparent" }]} edges={["top"]}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        scrollEnabled={false}
+        showsVerticalScrollIndicator={false}
+      >
+        <Skeleton width={140} height={34} borderRadius={10} />
+        <Skeleton width="88%" height={18} borderRadius={8} style={styles.skeletonSubtitle} />
+        <View style={styles.statsGrid}>
+          <Skeleton width="auto" height={105} style={styles.skeletonStat} />
+          <Skeleton width="auto" height={105} style={styles.skeletonStat} />
+        </View>
+        <Skeleton height={285} style={styles.skeletonChart} />
+        <Skeleton height={300} style={styles.skeletonChart} />
+        <Skeleton height={260} style={styles.skeletonChart} />
+        <Skeleton height={220} style={styles.skeletonChart} />
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: {
@@ -170,6 +190,16 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 12,
     marginBottom: 8,
+  },
+  skeletonSubtitle: {
+    marginTop: 10,
+    marginBottom: 22,
+  },
+  skeletonStat: {
+    flex: 1,
+  },
+  skeletonChart: {
+    marginTop: 12,
   },
   chartCard: {
     marginTop: 12,

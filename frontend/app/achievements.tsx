@@ -1,3 +1,4 @@
+import { Skeleton } from "@/components/Skeleton";
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { ACHIEVEMENTS, AchievementDefinition, getUserAchievements } from "@/lib/achievements";
@@ -7,7 +8,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { ArrowLeftIcon, FireIcon, LockIcon } from "phosphor-react-native";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function AchievementsScreen() {
@@ -42,7 +43,7 @@ export default function AchievementsScreen() {
       </View>
 
       {loading ? (
-        <ActivityIndicator style={styles.loader} color={colors.accent} />
+        <AchievementsSkeleton />
       ) : (
         <ScrollView contentContainerStyle={styles.scroll}>
           <View style={[styles.streakCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -75,6 +76,45 @@ export default function AchievementsScreen() {
         </ScrollView>
       )}
     </SafeAreaView>
+  );
+}
+
+function AchievementsSkeleton() {
+  const { colors } = useTheme();
+  return (
+    <ScrollView
+      contentContainerStyle={styles.scroll}
+      scrollEnabled={false}
+      showsVerticalScrollIndicator={false}
+    >
+      <View
+        style={[
+          styles.streakCard,
+          { backgroundColor: colors.card, borderColor: colors.border },
+        ]}
+      >
+        <Skeleton width={56} height={56} borderRadius={18} />
+        <View style={styles.streakSkeletonCopy}>
+          <Skeleton width={100} height={13} borderRadius={6} />
+          <Skeleton width={82} height={27} borderRadius={8} />
+        </View>
+      </View>
+
+      <View style={styles.collectionHeader}>
+        <Skeleton width={155} height={24} borderRadius={8} />
+        <Skeleton width={48} height={17} borderRadius={7} />
+      </View>
+      <View style={styles.grid}>
+        {Array.from({ length: 12 }, (_, index) => (
+          <View key={index} style={styles.badgeSkeleton}>
+            <Skeleton width={80} height={80} borderRadius={40} />
+            <Skeleton width="82%" height={13} borderRadius={6} style={styles.badgeSkeletonTitle} />
+            <Skeleton width="96%" height={10} borderRadius={5} />
+            <Skeleton width="70%" height={10} borderRadius={5} style={styles.badgeSkeletonLine} />
+          </View>
+        ))}
+      </View>
+    </ScrollView>
   );
 }
 
@@ -185,7 +225,6 @@ const styles = StyleSheet.create({
   },
   headerTitle: { flex: 1, textAlign: "center", fontSize: 19, fontWeight: "800" },
   headerSpacer: { width: 24 },
-  loader: { marginTop: 60 },
   scroll: { padding: 18, paddingBottom: 60 },
   streakCard: {
     borderWidth: 1,
@@ -204,6 +243,9 @@ const styles = StyleSheet.create({
   },
   streakLabel: { fontSize: 12, fontWeight: "600" },
   streakValue: { marginTop: 2, fontSize: 24, fontWeight: "800" },
+  streakSkeletonCopy: {
+    gap: 7,
+  },
   collectionHeader: {
     marginTop: 28,
     marginBottom: 14,
@@ -224,6 +266,18 @@ const styles = StyleSheet.create({
     width: "30.8%",
     minHeight: 182,
     alignItems: "center",
+  },
+  badgeSkeleton: {
+    width: "30.8%",
+    minHeight: 182,
+    alignItems: "center",
+  },
+  badgeSkeletonTitle: {
+    marginTop: 12,
+    marginBottom: 7,
+  },
+  badgeSkeletonLine: {
+    marginTop: 5,
   },
   badgeShape: {
     width: 80,

@@ -1,5 +1,6 @@
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
+import { reportNetworkFailure } from "@/lib/connectivity";
 import { emitWorkoutUpdated } from "@/lib/coachEvents";
 import { supabase } from "@/lib/supabase";
 import { ArrowCounterClockwiseIcon, ArrowLeftIcon, PaperPlaneRightIcon } from "phosphor-react-native";
@@ -167,6 +168,7 @@ export default function WorkoutEditAIScreen() {
       setCanUndo(Boolean(data?.can_undo));
       emitWorkoutUpdated();
     } catch (sendError) {
+      reportNetworkFailure("workout-editor");
       setError(sendError instanceof Error ? sendError.message : "Could not update workout.");
     } finally {
       setSending(false);
@@ -204,6 +206,7 @@ export default function WorkoutEditAIScreen() {
       setCanUndo(Boolean(data?.can_undo));
       emitWorkoutUpdated();
     } catch (undoError) {
+      reportNetworkFailure("workout-editor");
       setError(undoError instanceof Error ? undoError.message : "Could not undo the last AI edit.");
     } finally {
       setUndoing(false);

@@ -1,5 +1,4 @@
 import { supabase } from "@/lib/supabase";
-import { reportNetworkFailure } from "@/lib/connectivity";
 import { Profile } from "@/types/database";
 import * as AppleAuthentication from "expo-apple-authentication";
 import * as Crypto from "expo-crypto";
@@ -39,7 +38,6 @@ function getDeviceTimezone(): string | null {
 function withTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      reportNetworkFailure("auth-timeout");
       reject(new Error(`${label} timed out. Check your connection and try again.`));
     }, STARTUP_TIMEOUT_MS);
     Promise.resolve(promise).then(

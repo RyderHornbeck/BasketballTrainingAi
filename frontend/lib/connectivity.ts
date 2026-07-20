@@ -42,8 +42,6 @@ export function updateNetworkConnectivity(offline: boolean): void {
       ...snapshot,
       offline: true,
       networkKnown: true,
-      failureRevision: snapshot.failureRevision + 1,
-      source: "device",
     });
     return;
   }
@@ -84,10 +82,8 @@ export function reportNetworkFailure(source = "network"): void {
 }
 
 function showConfirmedNetworkFailure(source: string): void {
-  // NetInfo's offline transition already owns the visible banner. Background
-  // polling can keep failing while offline, but it must not repeatedly
-  // retrigger or reanimate the same banner.
-  if (snapshot.offline) return;
+  // Passive reachability changes never open the banner. Only a caller that
+  // reports a failed user action reaches this function.
   if (snapshot.failureRevision > snapshot.dismissedRevision) return;
 
   const now = Date.now();

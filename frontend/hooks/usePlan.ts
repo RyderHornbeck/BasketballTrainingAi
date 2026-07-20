@@ -4,7 +4,6 @@ import {
   getWorkoutDays,
   requestNextBlockGeneration,
 } from "@/lib/plan";
-import { reportNetworkFailure } from "@/lib/connectivity";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { PlanGenerationRequest, WorkoutDay, WorkoutPlan } from "@/types/database";
 import { AppState } from "@/types/plan";
@@ -28,7 +27,6 @@ const PLAN_LOAD_TIMEOUT_MS = 10_000;
 function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      reportNetworkFailure("plan-timeout");
       reject(new Error(`${label} timed out. Check your connection and try again.`));
     }, PLAN_LOAD_TIMEOUT_MS);
     promise.then(

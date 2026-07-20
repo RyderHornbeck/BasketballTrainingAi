@@ -2,16 +2,19 @@ import { Card } from "@/components/Card";
 import { DaySelector } from "@/components/DaySelector";
 import { ExerciseCard } from "@/components/ExerciseCard";
 import { ProgressRing } from "@/components/ProgressRing";
+import { Skeleton } from "@/components/Skeleton";
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
+import { reportNetworkFailure } from "@/lib/connectivity";
 import { calculateDayPerformance, getPerformanceColor } from "@/lib/dayPerformance";
 import {
   buildSetPlan,
   decodeExerciseLogMeta,
   hydrateSetLogs,
 } from "@/lib/exerciseSetLogs";
+import { actionHaptic, selectionHaptic } from "@/lib/haptics";
 import { sortWorkoutExercisesForDisplay } from "@/lib/workoutOrder";
 import {
   ExerciseLogInput,
@@ -52,7 +55,6 @@ import Animated, {
 } from "react-native-reanimated";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   Pressable,
   RefreshControl,
@@ -82,6 +84,7 @@ export default function DaysScreen() {
   const [contentTransitionKey, setContentTransitionKey] = useState(0);
   const [dayDetail, setDayDetail] = useState<WorkoutDayWithExercises | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailRefreshing, setDetailRefreshing] = useState(false);
   const [progressVersion, setProgressVersion] = useState(0);
   const [weeklyStats, setWeeklyStats] = useState<WeeklyWorkoutStats>({
     shots: 0,
@@ -328,6 +331,7 @@ export default function DaysScreen() {
         await Promise.all([refreshPlan(), loadDetail(false, true)]);
       } catch (err) {
         console.error("Auto-finish day failed:", err);
+        reportNetworkFailure("finish-workout");
       } finally {
         finishingRef.current = false;
       }
@@ -368,6 +372,7 @@ export default function DaysScreen() {
                 loadCurrentStreak(),
               ]);
             } catch (err) {
+              reportNetworkFailure("finish-workout");
               Alert.alert(
                 "Could not finish workout",
                 err instanceof Error ? err.message : "Please try again."
@@ -412,6 +417,7 @@ export default function DaysScreen() {
         })
         .catch((err) => {
           console.error("Failed to save exercise log:", err);
+          reportNetworkFailure("save-workout-progress");
           if (!logSaveErrorShownRef.current) {
             logSaveErrorShownRef.current = true;
             Alert.alert(
@@ -429,6 +435,7 @@ export default function DaysScreen() {
     (dayNumber: number) => {
       const currentDayNumber = selectedDayNumber ?? dayNumber;
       if (dayNumber === currentDayNumber) return;
+      selectionHaptic();
 
       if (viewTransitionFrameRef.current != null) {
         cancelAnimationFrame(viewTransitionFrameRef.current);
@@ -488,6 +495,7 @@ export default function DaysScreen() {
             onPress: () => {
               void removeExerciseFromWorkout(dayDetail.id, exerciseId).catch((err) => {
                 console.error("Failed to delete exercise:", err);
+                reportNetworkFailure("delete-exercise");
                 Alert.alert("Could not delete exercise", err instanceof Error ? err.message : "Try again.");
               });
             },
@@ -588,11 +596,7 @@ export default function DaysScreen() {
     slideDirection === "forward" ? SlideOutLeft.duration(180) : SlideOutRight.duration(180);
 
   if (planLoading) {
-    return (
-      <SafeAreaView style={[styles.center, { backgroundColor: "transparent" }]} edges={["top"]}>
-        <ActivityIndicator size="large" color={colors.accent} />
-      </SafeAreaView>
-    );
+    return <DaysSkeleton />;
   }
 
   if (!plan || days.length === 0) {
@@ -615,7 +619,10 @@ export default function DaysScreen() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`View achievements. Current streak ${currentStreak} days`}
-          onPress={() => router.push("/achievements")}
+          onPress={() => {
+            actionHaptic();
+            router.push("/achievements");
+          }}
           style={({ pressed }) => [
             styles.streakBadge,
             {
@@ -640,7 +647,7 @@ export default function DaysScreen() {
       generationRequest?.generation_type === "extend" &&
       (generationRequest.status === "pending" || generationRequest.status === "generating") ? (
         <View style={[styles.blockBanner, { backgroundColor: colors.accentMuted }]}>
-          <ActivityIndicator size="small" color={colors.accent} />
+          <Skeleton width={22} height={22} borderRadius={11} />
           <Text style={{ color: colors.accent }}>Building your next five workouts...</Text>
         </View>
       ) : null}
@@ -663,7 +670,7 @@ export default function DaysScreen() {
             style={[styles.retryButton, { backgroundColor: colors.accent }]}
           >
             {retryingBlock ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
+              <Text style={styles.retryButtonText}>Retrying...</Text>
             ) : (
               <Text style={styles.retryButtonText}>Retry</Text>
             )}
@@ -678,10 +685,11 @@ export default function DaysScreen() {
         nestedScrollEnabled
         refreshControl={
           <RefreshControl
-            refreshing={detailLoading}
+            refreshing={detailRefreshing}
             onRefresh={() => {
               if (selectedDayId) detailCacheRef.current.delete(selectedDayId);
-              void loadDetail(true, true);
+              setDetailRefreshing(true);
+              void loadDetail(false, true).finally(() => setDetailRefreshing(false));
             }}
             tintColor={colors.accent}
           />
@@ -700,7 +708,7 @@ export default function DaysScreen() {
             </Text>
           </Card>
         ) : detailLoading || !dayDetail ? (
-          <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
+          <DayContentSkeleton viewMode={viewMode} />
         ) : viewMode === "overview" ? (
           <View>
             <Text style={[styles.dayLabel, { color: colors.textSecondary }]}>
@@ -775,6 +783,7 @@ export default function DaysScreen() {
 
             <Pressable
               onPress={() => {
+                actionHaptic();
                 // Both pages move right-to-left into the workout view.
                 switchViewMode("workout", "forward");
               }}
@@ -965,10 +974,7 @@ export default function DaysScreen() {
                 ]}
               >
                 {finishingWorkout ? (
-                  <>
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                    <Text style={styles.finishWorkoutButtonText}>Saving workout...</Text>
-                  </>
+                  <Text style={styles.finishWorkoutButtonText}>Saving workout...</Text>
                 ) : (
                   <>
                     <CheckCircleIcon size={20} color="#FFFFFF" weight="fill" />
@@ -982,6 +988,63 @@ export default function DaysScreen() {
         </Animated.View>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function DaysSkeleton() {
+  return (
+    <SafeAreaView style={[styles.container, { backgroundColor: "transparent" }]} edges={["top"]}>
+      <View style={styles.daysSkeletonSelector}>
+        <View style={styles.daysSkeletonPills}>
+          {Array.from({ length: 5 }, (_, index) => (
+            <Skeleton key={index} width={46} height={46} borderRadius={23} />
+          ))}
+        </View>
+        <Skeleton width={58} height={42} borderRadius={21} />
+      </View>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        scrollEnabled={false}
+        showsVerticalScrollIndicator={false}
+      >
+        <DayContentSkeleton viewMode="overview" />
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function DayContentSkeleton({ viewMode }: { viewMode: DaysViewMode }) {
+  if (viewMode === "workout") {
+    return (
+      <View>
+        <Skeleton width={175} height={20} borderRadius={8} style={styles.skeletonLineBottom} />
+        <View style={styles.skeletonWorkoutHeading}>
+          <Skeleton width={115} height={18} borderRadius={7} />
+          <Skeleton width={78} height={34} borderRadius={17} />
+        </View>
+        <Skeleton height={112} borderRadius={18} style={styles.skeletonSection} />
+        <View style={styles.skeletonWorkoutMeta}>
+          <Skeleton width={90} height={22} borderRadius={8} />
+          <Skeleton width={120} height={16} borderRadius={7} />
+        </View>
+        {Array.from({ length: 4 }, (_, index) => (
+          <Skeleton key={index} height={150} borderRadius={18} style={styles.skeletonSection} />
+        ))}
+      </View>
+    );
+  }
+
+  return (
+    <View>
+      <Skeleton width={125} height={18} borderRadius={7} style={styles.skeletonLineBottom} />
+      <View style={styles.statsSquareRow}>
+        <Skeleton width="auto" height={170} style={styles.skeletonStatSquare} />
+        <Skeleton width="auto" height={170} style={styles.skeletonStatSquare} />
+      </View>
+      <Skeleton width={82} height={17} borderRadius={7} style={styles.skeletonLabel} />
+      <Skeleton height={126} borderRadius={18} />
+      <Skeleton height={92} borderRadius={18} style={styles.skeletonSection} />
+    </View>
   );
 }
 
@@ -1029,6 +1092,46 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingTop: 4,
     paddingBottom: 120,
+  },
+  daysSkeletonSelector: {
+    minHeight: 74,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  daysSkeletonPills: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-around",
+    gap: 6,
+  },
+  skeletonLineBottom: {
+    marginBottom: 14,
+  },
+  skeletonStatSquare: {
+    flex: 1,
+  },
+  skeletonLabel: {
+    marginBottom: 10,
+  },
+  skeletonSection: {
+    marginTop: 14,
+  },
+  skeletonWorkoutHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  skeletonWorkoutMeta: {
+    marginTop: 22,
+    marginBottom: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   blockBanner: {
     marginHorizontal: 20,

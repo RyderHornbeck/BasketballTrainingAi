@@ -1,5 +1,6 @@
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
+import { Skeleton } from "@/components/Skeleton";
 import { ThemeMode } from "@/components/ThemeProvider";
 import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
@@ -19,7 +20,6 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   Linking,
   Platform,
@@ -215,7 +215,7 @@ export default function ProfileScreen() {
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Athlete</Text>
         <Card style={styles.card}>
           {detailsLoading ? (
-            <ActivityIndicator color={colors.accent} />
+            <ProfileRowsSkeleton rows={3} />
           ) : (
             <>
               <ProfileRow
@@ -236,7 +236,13 @@ export default function ProfileScreen() {
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Workout Reminders</Text>
         <Card style={styles.card}>
           {reminderLoading ? (
-            <ActivityIndicator color={colors.accent} />
+            <View style={styles.reminderSkeletonRow}>
+              <View style={styles.reminderSkeletonCopy}>
+                <Skeleton width={175} height={17} borderRadius={7} />
+                <Skeleton width={230} height={14} borderRadius={7} />
+              </View>
+              <Skeleton width={50} height={30} borderRadius={15} />
+            </View>
           ) : (
             <>
               <View style={styles.reminderToggleRow}>
@@ -367,6 +373,22 @@ export default function ProfileScreen() {
   );
 }
 
+function ProfileRowsSkeleton({ rows }: { rows: number }) {
+  return (
+    <View>
+      {Array.from({ length: rows }, (_, index) => (
+        <React.Fragment key={index}>
+          <View style={styles.row}>
+            <Skeleton width={105} height={14} borderRadius={6} />
+            <Skeleton width={index === rows - 1 ? 125 : 82} height={16} borderRadius={6} />
+          </View>
+          {index < rows - 1 ? <Divider /> : null}
+        </React.Fragment>
+      ))}
+    </View>
+  );
+}
+
 function ProfileRow({ label, value }: { label: string; value: string }) {
   const { colors } = useTheme();
   return (
@@ -440,6 +462,17 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginBottom: 12,
     marginTop: 4,
+  },
+  reminderSkeletonRow: {
+    minHeight: 52,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  reminderSkeletonCopy: {
+    flex: 1,
+    gap: 9,
   },
   themeRow: {
     flexDirection: "row",

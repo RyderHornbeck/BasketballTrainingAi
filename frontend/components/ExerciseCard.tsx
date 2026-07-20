@@ -14,6 +14,7 @@ import {
 } from "@/lib/exerciseSetLogs";
 import { ExerciseLogInput } from "@/lib/plan";
 import { reportNetworkFailure } from "@/lib/connectivity";
+import { completionHaptic } from "@/lib/haptics";
 import { buildYouTubeClipHtml } from "@/lib/youtubePlayer";
 import { hasVideoDemo } from "@/lib/exerciseClip";
 import { parseDrillDescription } from "@/lib/drillDescription";
@@ -465,6 +466,7 @@ export function ExerciseCard({
     const row = setLogs.find((s) => s.set_number === setNumber);
     if (!row) return;
     const next = !row.completed;
+    if (next) completionHaptic();
     updateSet(setNumber, {
       completed: next,
       minutes: next ? setPlan.perSetMinutes : null,
