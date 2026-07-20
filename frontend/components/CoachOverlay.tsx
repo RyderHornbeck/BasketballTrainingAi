@@ -7,7 +7,7 @@ import { useTheme } from "@/hooks/useTheme";
 import { Ionicons } from "@expo/vector-icons";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { router } from "expo-router";
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Animated, Modal, Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -26,7 +26,7 @@ function formatTimer(totalSeconds: number): string {
 export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const pulse = useRef(new Animated.Value(1)).current;
+  const [pulse] = useState(() => new Animated.Value(1));
 
   const {
     status,
@@ -225,7 +225,12 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
             </Animated.View>
           </Pressable>
 
-          <Text style={[styles.hint, { color: colors.textSecondary }]}>{hint}</Text>
+          <View style={styles.hints}>
+            <Text style={[styles.hint, { color: colors.textSecondary }]}>{hint}</Text>
+            <Text style={[styles.hint, { color: colors.textSecondary }]}>
+              Make sure headphones are connected
+            </Text>
+          </View>
         </View>
 
         <Pressable
@@ -330,9 +335,12 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     elevation: 14,
   },
+  hints: {
+    marginTop: 28,
+    gap: 4,
+  },
   hint: {
     fontSize: 14,
-    marginTop: 28,
     textAlign: "center",
     lineHeight: 20,
   },

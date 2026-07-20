@@ -1,3 +1,5 @@
+import NetInfo from "@react-native-community/netinfo";
+
 export interface ConnectivitySnapshot {
   offline: boolean;
   networkKnown: boolean;
@@ -16,6 +18,7 @@ let snapshot: ConnectivitySnapshot = {
   source: null,
 };
 let lastFailureAt = 0;
+let reachabilityCheckInFlight = false;
 const listeners = new Set<Listener>();
 
 function publish(next: ConnectivitySnapshot): void {
@@ -56,6 +59,31 @@ export function updateNetworkConnectivity(offline: boolean): void {
 }
 
 export function reportNetworkFailure(source = "network"): void {
+  // A request can fail while the device still has internet access (for
+  // example a video provider, WebRTC peer, or server is temporarily down).
+  // Confirm the device's actual reachability before showing an app-wide
+  // "No connection" warning.
+  if (reachabilityCheckInFlight) return;
+  reachabilityCheckInFlight = true;
+  void NetInfo.fetch()
+    .then((state) => {
+      const offline = state.isConnected === false || state.isInternetReachable === false;
+      updateNetworkConnectivity(offline);
+      if (!offline) return;
+
+      showConfirmedNetworkFailure(source);
+    })
+    .catch(() => {
+      // Preserve a banner for an actual reachability-check failure, while
+      // still avoiding a false offline message for ordinary service errors.
+      showConfirmedNetworkFailure(source);
+    })
+    .finally(() => {
+      reachabilityCheckInFlight = false;
+    });
+}
+
+function showConfirmedNetworkFailure(source: string): void {
   // NetInfo's offline transition already owns the visible banner. Background
   // polling can keep failing while offline, but it must not repeatedly
   // retrigger or reanimate the same banner.

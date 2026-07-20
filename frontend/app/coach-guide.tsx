@@ -77,7 +77,6 @@ const GUIDE_SECTIONS = [
     examples: [
       '"Add a cone dribbling drill."',
       '"Remove this drill."',
-      '"Add 10 minutes to my workout."',
       '"Save a note that my left hand felt weak."',
     ],
   },
@@ -87,11 +86,11 @@ const GUIDE_SECTIONS = [
     description:
       "Ask about targets, results, technique, progress, or any drill in today’s workout.",
     examples: [
-      '"How many makes do I have on this drill?"',
+      '"How many attempts do I have on this drill?"',
+      '"Whats my target for this set?"',
       '"How many exercises do I have left?"',
       '"What drill am I on?"',
       '"What’s my shooting percentage so far in this workout?"',
-      '"What is the target for set three?"',
       '"How do I keep my elbow aligned?"',
     ],
   },
@@ -115,21 +114,6 @@ export default function CoachGuideScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={[styles.intro, { color: colors.textSecondary }]}>
-          Open Coach and speak naturally. It listens while the Coach screen is open and can answer
-          questions or update your current workout.
-        </Text>
-
-        <Card style={styles.tipCard} variant="alt" elevated={false}>
-          <View style={styles.tipRow}>
-            <Ionicons name="sparkles" size={22} color={colors.accent} />
-            <Text style={[styles.tipText, { color: colors.text }]}>
-              For the most accurate result, name the drill or set and wait for the coach to confirm
-              what it saved.
-            </Text>
-          </View>
-        </Card>
-
         {GUIDE_SECTIONS.map((section) => (
           <Card key={section.title} style={styles.guideCard}>
             <View style={styles.sectionHeader}>

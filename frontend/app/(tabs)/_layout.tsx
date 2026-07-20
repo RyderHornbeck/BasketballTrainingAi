@@ -2,7 +2,9 @@ import { AchievementUnlockQueue } from "@/components/AchievementUnlockQueue";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
+import { getAnalyticsSummary, prepareAnalyticsSummary } from "@/lib/analytics";
 import { requestPendingAccountReview } from "@/lib/appReview";
+import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { isDayUnlocked } from "@/lib/plan";
 import {
   BasketballIcon,
@@ -38,6 +40,22 @@ export default function TabsLayout() {
       void requestPendingAccountReview(user.id);
     }, 750);
     return () => clearTimeout(timeout);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    void prepareAnalyticsSummary(user.id).catch((error) => {
+      console.warn("Unable to preload analytics:", error);
+    });
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    return onWorkoutUpdated(() => {
+      void getAnalyticsSummary().catch((error) => {
+        console.warn("Unable to refresh preloaded analytics:", error);
+      });
+    });
   }, [user?.id]);
 
   // Tab bar stops before the coach button: [12px edge][tab bar][12px gap][64px button][12px edge]

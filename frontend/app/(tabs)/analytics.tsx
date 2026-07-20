@@ -7,8 +7,13 @@ import {
 import { ShotMap } from "@/components/analytics/ShotMap";
 import { StatCard } from "@/components/StatCard";
 import { Text } from "@/components/Text";
+import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
-import { AnalyticsSummary, getAnalyticsSummary } from "@/lib/analytics";
+import {
+  AnalyticsSummary,
+  getAnalyticsSummary,
+  getCachedAnalyticsSummary,
+} from "@/lib/analytics";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { useFocusEffect } from "expo-router";
 import { BarbellIcon, FlameIcon } from "phosphor-react-native";
@@ -20,8 +25,10 @@ const ANALYTICS_ORANGE = "#F7B379";
 
 export default function AnalyticsScreen() {
   const { colors } = useTheme();
-  const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
+  const initialSummary = user?.id ? getCachedAnalyticsSummary(user.id) : null;
+  const [summary, setSummary] = useState<AnalyticsSummary | null>(initialSummary);
+  const [loading, setLoading] = useState(initialSummary == null);
   const [refreshing, setRefreshing] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
@@ -40,7 +47,10 @@ export default function AnalyticsScreen() {
   }, []);
 
   useEffect(() => {
-    load();
+    const frame = requestAnimationFrame(() => {
+      void load();
+    });
+    return () => cancelAnimationFrame(frame);
   }, [load]);
 
   useEffect(() => {
@@ -54,7 +64,7 @@ export default function AnalyticsScreen() {
       const frame = requestAnimationFrame(() => {
         scrollRef.current?.scrollTo({ x: 0, y: 0, animated: false });
       });
-      void load("refresh");
+      void load("silent");
       return () => cancelAnimationFrame(frame);
     }, [load])
   );

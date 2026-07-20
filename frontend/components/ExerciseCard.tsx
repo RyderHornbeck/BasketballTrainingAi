@@ -643,7 +643,7 @@ export function ExerciseCard({
               ) : videoHtml ? (
                 <View style={[styles.videoWrapper, { borderColor: colors.border }]}>
                   <WebView
-                    source={{ html: videoHtml, baseUrl: "https://hoopplan.app" }}
+                    source={{ html: videoHtml, baseUrl: "https://www.courtcoachai.org" }}
                     style={styles.webview}
                     originWhitelist={["*"]}
                     allowsFullscreenVideo
@@ -658,6 +658,14 @@ export function ExerciseCard({
                       reportNetworkFailure("video");
                     }}
                     onHttpError={() => setVideoError(true)}
+                    onMessage={(event) => {
+                      try {
+                        const message = JSON.parse(event.nativeEvent.data) as { type?: string };
+                        if (message.type === "youtube_error") setVideoError(true);
+                      } catch {
+                        // Ignore unexpected messages from the embedded player.
+                      }
+                    }}
                     startInLoadingState
                     renderLoading={() => (
                       <View style={[styles.webviewLoading, { backgroundColor: colors.cardAlt }]}>

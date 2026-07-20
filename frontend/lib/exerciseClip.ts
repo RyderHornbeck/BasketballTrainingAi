@@ -7,6 +7,9 @@ export function isCatalogOnlyClip(clip: ExerciseVideoClip | null | undefined): b
 }
 
 export function hasVideoDemo(clip: ExerciseVideoClip | null | undefined): boolean {
-  if (!clip?.youtube_video_id) return false;
-  return !isCatalogOnlyClip(clip);
+  // Video embeds are temporarily disabled while the drill catalog's YouTube
+  // sources are reviewed. Keep the helper so callers consistently hide video
+  // UI without needing per-screen feature flags.
+  void clip;
+  return false;
 }

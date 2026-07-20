@@ -100,7 +100,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (fontsLoaded || fontLoadTimedOut) return;
-    const timeout = setTimeout(() => setFontLoadTimedOut(true), 1_000);
+    const timeout = setTimeout(() => setFontLoadTimedOut(true), 1_200);
     return () => clearTimeout(timeout);
   }, [fontsLoaded, fontLoadTimedOut]);
 
@@ -109,7 +109,7 @@ export default function RootLayout() {
     // if authentication or workout data are still finishing in the background.
     const timeout = setTimeout(() => {
       SplashScreen.hideAsync().catch(() => {});
-    }, 1_000);
+    }, 1_200);
     return () => clearTimeout(timeout);
   }, []);
 

@@ -3,14 +3,22 @@ import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
+import { prepareAnalyticsSummary } from "@/lib/analytics";
 import { Redirect } from "expo-router";
-import React from "react";
+import React, { useEffect } from "react";
 import { StyleSheet, View } from "react-native";
 
 export default function Index() {
   const { colors } = useTheme();
-  const { startupError, retryStartup } = useAuth();
+  const { user, startupError, retryStartup } = useAuth();
   const { appState, loading, loadError, refresh } = usePlan();
+
+  useEffect(() => {
+    if (!user?.id) return;
+    void prepareAnalyticsSummary(user.id).catch((error) => {
+      console.warn("Unable to prepare analytics during startup:", error);
+    });
+  }, [user?.id]);
 
   if (startupError) {
     return (

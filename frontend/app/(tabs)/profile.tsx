@@ -32,6 +32,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const PRIVACY_POLICY_URL = "https://www.courtcoachai.org/privacy-policy";
+const TERMS_OF_SERVICE_URL = "https://www.courtcoachai.org/terms-of-service";
 
 const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
   { label: "Light", value: "light" },
@@ -347,6 +348,16 @@ export default function ProfileScreen() {
           onPress={() => {
             void Linking.openURL(PRIVACY_POLICY_URL).catch(() => {
               Alert.alert("Unable to open link", "Please visit courtcoachai.org/privacy-policy.");
+            });
+          }}
+          style={styles.actionButton}
+        />
+        <Button
+          title="Terms of Service"
+          variant="outline"
+          onPress={() => {
+            void Linking.openURL(TERMS_OF_SERVICE_URL).catch(() => {
+              Alert.alert("Unable to open link", "Please visit courtcoachai.org/terms-of-service.");
             });
           }}
           style={styles.actionButton}

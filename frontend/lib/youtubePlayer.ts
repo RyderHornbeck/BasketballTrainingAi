@@ -49,8 +49,9 @@ export function buildYouTubeClipHtml(
           fs: 1,
           start: startSeconds,
           ${endPlayerVar}
-          origin: "https://hoopplan.app"
+          origin: "https://www.courtcoachai.org"
         },
+        host: "https://www.youtube-nocookie.com",
         events: {
           onReady: function(e) {
             e.target.seekTo(startSeconds, true);
@@ -70,6 +71,14 @@ export function buildYouTubeClipHtml(
             }
             if (e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.ENDED) {
               if (pollId) { clearInterval(pollId); pollId = null; }
+            }
+          },
+          onError: function(e) {
+            if (window.ReactNativeWebView) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: "youtube_error",
+                code: e.data
+              }));
             }
           }
         }

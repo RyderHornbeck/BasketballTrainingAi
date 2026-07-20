@@ -70,7 +70,10 @@ export function NoConnectionBanner() {
   const panResponder = useMemo(
     () =>
       PanResponder.create({
-        onMoveShouldSetPanResponder: (_, gesture) => gesture.dy < -5,
+        // Capture upward drags before a parent Modal or ScrollView can claim
+        // them. This matters for the separately rendered coach-modal banner.
+        onMoveShouldSetPanResponderCapture: (_, gesture) => gesture.dy < -2,
+        onMoveShouldSetPanResponder: (_, gesture) => gesture.dy < -2,
         onPanResponderMove: (_, gesture) => {
           translateY.setValue(Math.min(0, gesture.dy));
         },

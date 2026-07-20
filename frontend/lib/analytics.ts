@@ -1,4 +1,5 @@
 import { OnboardingAnswers } from "@/types/database";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { decodeExerciseLogMeta } from "./exerciseSetLogs";
 import {
   computeSkillProfile,
@@ -134,13 +135,74 @@ function completedShotTotals(log: any): CompletedShotTotals | null {
   return { makes: log.makes ?? 0, attempts };
 }
 
+let cachedAnalytics: { userId: string; summary: AnalyticsSummary } | null = null;
+let analyticsRequest: { userId: string; promise: Promise<AnalyticsSummary> } | null = null;
+const hydratedAnalyticsUsers = new Set<string>();
+const analyticsStorageKey = (userId: string) => `court-coach.analytics-cache.${userId}`;
+
+function isAnalyticsSummary(value: unknown): value is AnalyticsSummary {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "totalWorkoutsCompleted" in value &&
+    typeof value.totalWorkoutsCompleted === "number" &&
+    "skillProfile" in value &&
+    typeof value.skillProfile === "object" &&
+    value.skillProfile !== null
+  );
+}
+
+export function getCachedAnalyticsSummary(userId: string): AnalyticsSummary | null {
+  return cachedAnalytics?.userId === userId ? cachedAnalytics.summary : null;
+}
+
+export async function prepareAnalyticsSummary(userId: string): Promise<AnalyticsSummary> {
+  if (!hydratedAnalyticsUsers.has(userId)) {
+    hydratedAnalyticsUsers.add(userId);
+    try {
+      const raw = await AsyncStorage.getItem(analyticsStorageKey(userId));
+      const stored = raw ? JSON.parse(raw) : null;
+      if (isAnalyticsSummary(stored)) cachedAnalytics = { userId, summary: stored };
+    } catch (error) {
+      console.warn("Unable to restore analytics cache:", error);
+    }
+  }
+  return getAnalyticsSummary();
+}
+
 export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
   const { data: userData } = await supabase.auth.getUser();
   const userId = userData.user?.id;
   if (!userId) throw new Error("Not authenticated");
 
-  const [dayLogsResult, allDaysResult, exerciseLogsResult, onboardingResult, ratingResult] =
-    await Promise.all([
+  if (analyticsRequest?.userId === userId) return analyticsRequest.promise;
+
+  const promise = fetchAnalyticsSummary(userId)
+    .then((summary) => {
+      cachedAnalytics = { userId, summary };
+      void AsyncStorage.setItem(analyticsStorageKey(userId), JSON.stringify(summary)).catch(
+        (error) => {
+          console.warn("Unable to persist analytics cache:", error);
+        }
+      );
+      return summary;
+    })
+    .finally(() => {
+      if (analyticsRequest?.promise === promise) analyticsRequest = null;
+    });
+  analyticsRequest = { userId, promise };
+  return promise;
+}
+
+async function fetchAnalyticsSummary(userId: string): Promise<AnalyticsSummary> {
+  const [
+    dayLogsResult,
+    allDaysResult,
+    exerciseLogsResult,
+    onboardingResult,
+    ratingResult,
+    workoutExercisesResult,
+  ] = await Promise.all([
       supabase
         .from("workout_day_logs")
         .select("*")
@@ -169,13 +231,20 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
         )
         .eq("user_id", userId)
         .maybeSingle(),
+      supabase
+        .from("workout_exercises")
+        .select(
+          "id, day_id, category, name, instructions, sets, reps, duration, target_makes, target_attempts, log_type, set_side_labels"
+        )
+        .eq("user_id", userId),
     ]);
   const firstError =
     dayLogsResult.error ??
     allDaysResult.error ??
     exerciseLogsResult.error ??
     onboardingResult.error ??
-    ratingResult.error;
+    ratingResult.error ??
+    workoutExercisesResult.error;
   if (firstError) throw new Error(firstError.message);
 
   const dayLogs = dayLogsResult.data;
@@ -189,16 +258,6 @@ export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
       .filter((log: any) => log.day_id && log.completed_at)
       .map((log: any) => [log.day_id as string, workoutActivityTimestamp(log)])
   );
-  const workoutDayIds = (allDays ?? []).map((day: any) => day.id).filter(Boolean);
-  const workoutExercisesResult = workoutDayIds.length
-    ? await supabase
-        .from("workout_exercises")
-        .select(
-          "id, day_id, category, name, instructions, sets, reps, duration, target_makes, target_attempts, log_type, set_side_labels"
-        )
-        .in("day_id", workoutDayIds)
-    : { data: [], error: null };
-  if (workoutExercisesResult.error) throw new Error(workoutExercisesResult.error.message);
   const workoutExercises = workoutExercisesResult.data ?? [];
   const exerciseById = new Map(
     workoutExercises.map((exercise: any) => [String(exercise.id), exercise])

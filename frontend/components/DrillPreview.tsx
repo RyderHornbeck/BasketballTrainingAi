@@ -7,12 +7,13 @@ import { reportNetworkFailure } from "@/lib/connectivity";
 import { ExerciseVideoClip } from "@/types/database";
 import { PlayIcon } from "phosphor-react-native";
 import React, { useMemo, useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Linking, Pressable, StyleSheet, View } from "react-native";
 import { WebView } from "react-native-webview";
 
 export function DrillPreview({ clip }: { clip: ExerciseVideoClip }) {
   const { colors } = useTheme();
   const [playing, setPlaying] = useState(false);
+  const [videoFailed, setVideoFailed] = useState(false);
   const description = clip.description ?? clip.coaching_notes ?? "";
   const parsed = useMemo(() => parseDrillDescription(description), [description]);
   const videoHtml = useMemo(
@@ -24,14 +25,26 @@ export function DrillPreview({ clip }: { clip: ExerciseVideoClip }) {
         : null,
     [clip, playing]
   );
+  const watchUrl = `https://www.youtube.com/watch?v=${clip.youtube_video_id}&t=${clip.start_seconds}s`;
+
+  const openInYouTube = () => {
+    void Linking.openURL(watchUrl);
+  };
 
   return (
     <View style={styles.content}>
       {hasVideoDemo(clip) ? (
-        playing && videoHtml ? (
+        videoFailed ? (
+          <Pressable
+            onPress={openInYouTube}
+            style={[styles.playCard, { backgroundColor: "#000000", borderColor: colors.border }]}
+          >
+            <Text style={[styles.playText, { color: "#FFFFFF" }]}>Watch on YouTube</Text>
+          </Pressable>
+        ) : playing && videoHtml ? (
           <View style={[styles.video, { borderColor: colors.border }]}>
             <WebView
-              source={{ html: videoHtml, baseUrl: "https://courtcoach.app" }}
+              source={{ html: videoHtml, baseUrl: "https://www.courtcoachai.org" }}
               originWhitelist={["*"]}
               allowsFullscreenVideo
               javaScriptEnabled
@@ -40,14 +53,25 @@ export function DrillPreview({ clip }: { clip: ExerciseVideoClip }) {
               allowsInlineMediaPlayback
               scrollEnabled={false}
               onError={() => {
-                setPlaying(false);
+                setVideoFailed(true);
                 reportNetworkFailure("video");
+              }}
+              onMessage={(event) => {
+                try {
+                  const message = JSON.parse(event.nativeEvent.data) as { type?: string };
+                  if (message.type === "youtube_error") setVideoFailed(true);
+                } catch {
+                  // Ignore unexpected messages from the embedded player.
+                }
               }}
             />
           </View>
         ) : (
           <Pressable
-            onPress={() => setPlaying(true)}
+            onPress={() => {
+              setVideoFailed(false);
+              setPlaying(true);
+            }}
             style={[styles.playCard, { backgroundColor: "#000000", borderColor: colors.border }]}
           >
             <View style={[styles.playCircle, { backgroundColor: colors.accent }]}>
