@@ -114,7 +114,7 @@ export function pluralizedPeriod(period: CalendarPeriod): string {
 
 function titlePeriod(period: CalendarPeriod): string {
   const unit = `${period.unit.charAt(0).toUpperCase()}${period.unit.slice(1)}`;
-  return `${period.count}-${unit}${period.count === 1 ? "" : "s"}`;
+  return `${period.count}-${unit}`;
 }
 
 export function formatCurrency(

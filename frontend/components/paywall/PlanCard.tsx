@@ -1,7 +1,7 @@
 import { Text } from "@/components/Text";
 import { NormalizedSubscriptionPackage } from "@/lib/subscriptionFormatting";
 import React from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet } from "react-native";
 
 interface PlanCardProps {
   plan: NormalizedSubscriptionPackage;
@@ -9,9 +9,7 @@ interface PlanCardProps {
   onPress: () => void;
   accentColor: string;
   textColor: string;
-  mutedColor: string;
   backgroundColor: string;
-  badge?: string | null;
   disabled?: boolean;
 }
 
@@ -21,20 +19,23 @@ export function PlanCard({
   onPress,
   accentColor,
   textColor,
-  mutedColor,
   backgroundColor,
-  badge,
   disabled,
 }: PlanCardProps) {
   const title = plan.duration === "annual" ? "Annual" : "Monthly";
+  const trialText =
+    plan.hasEligibleFreeTrial && plan.introDurationCount && plan.introDurationUnit
+      ? `${plan.introDurationCount} ${
+          plan.introDurationUnit.charAt(0).toUpperCase() +
+          plan.introDurationUnit.slice(1)
+        } Free Trial`
+      : null;
 
   return (
     <Pressable
       accessibilityRole="radio"
       accessibilityState={{ selected, disabled }}
-      accessibilityLabel={`${title}, ${plan.localizedRegularPrice} per ${plan.periodLabel}${
-        badge ? `, ${badge}` : ""
-      }`}
+      accessibilityLabel={`${title}${trialText ? `, ${trialText}` : ""}`}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
@@ -47,29 +48,9 @@ export function PlanCard({
         },
       ]}
     >
-      <View style={styles.headingRow}>
-        <View>
-          <Text style={[styles.title, { color: textColor }]}>{title}</Text>
-          {plan.hasEligibleFreeTrial && plan.trialLabel ? (
-            <Text style={[styles.trial, { color: accentColor }]}>{plan.trialLabel}</Text>
-          ) : null}
-        </View>
-        {badge ? (
-          <View style={[styles.badge, { backgroundColor: accentColor }]}>
-            <Text style={styles.badgeText}>{badge}</Text>
-          </View>
-        ) : null}
-      </View>
-      <View style={styles.priceRow}>
-        <Text style={[styles.price, { color: textColor }]}>
-          {plan.localizedRegularPrice}
-        </Text>
-        <Text style={[styles.period, { color: mutedColor }]}> / {plan.periodLabel}</Text>
-      </View>
-      {plan.duration === "annual" && plan.localizedMonthlyEquivalent ? (
-        <Text style={[styles.equivalent, { color: mutedColor }]}>
-          {plan.localizedMonthlyEquivalent} per month
-        </Text>
+      <Text style={[styles.title, { color: textColor }]}>{title}</Text>
+      {trialText ? (
+        <Text style={[styles.trial, { color: accentColor }]}>{trialText}</Text>
       ) : null}
     </Pressable>
   );
@@ -77,16 +58,11 @@ export function PlanCard({
 
 const styles = StyleSheet.create({
   card: {
-    minHeight: 112,
+    minHeight: 82,
     borderRadius: 22,
     paddingHorizontal: 17,
     paddingVertical: 14,
-  },
-  headingRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 8,
+    justifyContent: "center",
   },
   title: {
     fontSize: 17,
@@ -96,32 +72,5 @@ const styles = StyleSheet.create({
     marginTop: 1,
     fontSize: 11,
     fontWeight: "700",
-  },
-  badge: {
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  badgeText: {
-    color: "#FFFFFF",
-    fontSize: 10,
-    fontWeight: "800",
-  },
-  priceRow: {
-    marginTop: 11,
-    flexDirection: "row",
-    alignItems: "baseline",
-  },
-  price: {
-    fontSize: 20,
-    fontWeight: "800",
-  },
-  period: {
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  equivalent: {
-    marginTop: 1,
-    fontSize: 11,
   },
 });

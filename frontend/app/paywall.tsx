@@ -16,8 +16,8 @@ import {
   trackRevenueCatPaywallImpression,
 } from "@/lib/revenueCat";
 import {
-  calculateAnnualSavingsPercent,
   calculateDiscountPercent,
+  formatCurrency,
   formatSubscriptionDate,
   normalizeSubscriptionPackage,
   NormalizedSubscriptionPackage,
@@ -25,6 +25,7 @@ import {
   SubscriptionDuration,
 } from "@/lib/subscriptionFormatting";
 import { Redirect, router, useLocalSearchParams } from "expo-router";
+import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -225,11 +226,6 @@ export default function PaywallScreen() {
 
   const selectedPlan =
     plans.find((plan) => plan.duration === selectedDuration) ?? plans[0] ?? null;
-  const annualPlan = plans.find((plan) => plan.duration === "annual");
-  const monthlyPlan = plans.find((plan) => plan.duration === "monthly");
-  const annualSavings = annualPlan
-    ? calculateAnnualSavingsPercent(annualPlan.regularPrice, monthlyPlan?.regularPrice)
-    : null;
 
   const defaultPrices = useMemo(() => {
     const prices = new Map<SubscriptionDuration, number>();
@@ -240,17 +236,45 @@ export default function PaywallScreen() {
     return prices;
   }, [defaultOffering]);
 
-  const badgeForPlan = (plan: NormalizedSubscriptionPackage): string | null => {
-    if (mode === "deal") {
-      const discount = calculateDiscountPercent(
-        defaultPrices.get(plan.duration),
-        plan.regularPrice
-      );
-      if (discount) return `${discount}% OFF`;
-    }
-    if (plan.duration === "annual" && annualSavings) return `SAVE ${annualSavings}%`;
-    return null;
-  };
+  const selectedDealDiscount =
+    mode === "deal" && selectedPlan
+      ? calculateDiscountPercent(
+          defaultPrices.get(selectedPlan.duration),
+          selectedPlan.regularPrice
+        )
+      : null;
+  const dealRate =
+    mode === "deal" && selectedPlan
+      ? selectedPlan.duration === "annual"
+        ? {
+            price:
+              selectedPlan.localizedMonthlyEquivalent ??
+              formatCurrency(
+                selectedPlan.regularPrice / 12,
+                selectedPlan.currencyCode,
+                `${(selectedPlan.regularPrice / 12).toFixed(2)} ${
+                  selectedPlan.currencyCode
+                }`
+              ),
+            period: "month",
+          }
+        : {
+            price: formatCurrency(
+              (selectedPlan.regularPrice * 12) / 52,
+              selectedPlan.currencyCode,
+              `${((selectedPlan.regularPrice * 12) / 52).toFixed(2)} ${
+                selectedPlan.currencyCode
+              }`
+            ),
+            period: "week",
+          }
+      : null;
+  const dealBillingDetail =
+    mode === "deal" && selectedPlan && dealRate
+      ? `${selectedPlan.localizedRegularPrice} per ${
+          selectedPlan.duration === "annual" ? "year" : "month"
+        } (${dealRate.price}/${dealRate.period})`
+      : null;
 
   const verifyAndContinue = useCallback(
     async (customerInfo: Awaited<ReturnType<typeof refreshCustomerInfo>>) => {
@@ -375,7 +399,7 @@ export default function PaywallScreen() {
     ? [
         {
           title: "Today",
-          description: "Unlock your personalized plans and live AI coach.",
+          description: "Unlock your personalized plan and a live AI coach.",
         },
         {
           title: trialDate ? `On ${trialDate}` : "When your trial ends",
@@ -390,7 +414,7 @@ export default function PaywallScreen() {
       ? [
           {
             title: "Today",
-            description: "Unlock your personalized plans and live AI coach.",
+            description: "Unlock your personalized plan and a live AI coach.",
           },
           {
             title: "Secure Apple billing",
@@ -402,8 +426,10 @@ export default function PaywallScreen() {
           },
         ]
       : [];
-  const cta = selectedPlan?.hasEligibleFreeTrial && selectedPlan.trialLabel
-    ? `Start ${selectedPlan.trialLabel}`
+  const cta = mode === "default" && selectedPlan?.hasEligibleFreeTrial
+    ? "Try Now For $0.00"
+    : selectedPlan?.hasEligibleFreeTrial && selectedPlan.trialLabel
+      ? `Start ${selectedPlan.trialLabel}`
     : selectedPlan
       ? `Continue with ${selectedPlan.duration === "annual" ? "Annual" : "Monthly"}`
       : "Continue";
@@ -441,32 +467,62 @@ export default function PaywallScreen() {
               resizeMode="contain"
               style={styles.logo}
             />
-            {mode === "deal" ? (
-              <View style={[styles.dealPill, { backgroundColor: palette.accent }]}>
-                <Text style={styles.dealPillText}>SPECIAL OFFER</Text>
-              </View>
-            ) : null}
             <Text style={[styles.title, { color: palette.text }]}>
               {mode === "deal"
-                ? "Wait — keep Court Coach for less"
-                : "Your smarter workout starts now"}
+                ? "Special Offer"
+                : "Your smarter training starts now"}
             </Text>
             <Text style={[styles.subtitle, { color: palette.muted }]}>
-              Adaptive workouts, easier tracking, and a live coach that keeps every session moving.
+              {mode === "deal"
+                ? "Adaptive workouts, easier tracking, and a live coach that keeps every session moving at a special price."
+                : "Adaptive workouts, easier tracking, and a live coach that keeps every session moving."}
             </Text>
 
-            {timeline.map((item, index) => (
-              <TimelineItem
-                key={`${item.title}-${index}`}
-                step={index + 1}
-                title={item.title}
-                description={item.description}
-                accentColor={palette.accent}
-                textColor={palette.text}
-                mutedColor={palette.muted}
-                isLast={index === timeline.length - 1}
-              />
-            ))}
+            {mode === "deal" ? (
+              <LinearGradient
+                accessible
+                accessibilityLabel={`${selectedDealDiscount ?? "Special"} percent off. ${
+                  dealRate ? `${dealRate.price} per ${dealRate.period}.` : ""
+                } ${dealBillingDetail ?? ""}`}
+                colors={["#4B1FA3", "#7048E8", "#9B6DFF"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.dealSummary}
+              >
+                <Text style={[styles.sparkle, styles.sparkleTopLeft]}>✦</Text>
+                <Text style={[styles.sparkle, styles.sparkleTopRight]}>✧</Text>
+                <Text style={[styles.sparkle, styles.sparkleBottomLeft]}>✧</Text>
+                <Text style={[styles.sparkle, styles.sparkleBottomRight]}>✦</Text>
+                <Text style={styles.dealDiscount}>
+                  {selectedDealDiscount
+                    ? `${selectedDealDiscount}% Off`
+                    : "Special Pricing"}
+                </Text>
+                {dealRate ? (
+                  <View style={styles.dealRateBubble}>
+                    <Text style={styles.dealRate}>
+                      {dealRate.price}/{dealRate.period === "month" ? "mo" : "wk"}
+                    </Text>
+                  </View>
+                ) : null}
+                {dealBillingDetail ? (
+                  <Text style={styles.dealBillingDetail}>{dealBillingDetail}</Text>
+                ) : null}
+              </LinearGradient>
+            ) : (
+              timeline.map((item, index) => (
+                <TimelineItem
+                  key={`${item.title}-${index}`}
+                  step={index + 1}
+                  title={item.title}
+                  description={item.description}
+                  accentColor={palette.accent}
+                  textColor={palette.text}
+                  mutedColor={palette.muted}
+                  isLast={index === timeline.length - 1}
+                />
+              ))
+            )}
 
             <View accessibilityRole="radiogroup" style={styles.plans}>
               {plans.map((plan) => (
@@ -480,9 +536,7 @@ export default function PaywallScreen() {
                   }}
                   accentColor={palette.accent}
                   textColor={palette.text}
-                  mutedColor={palette.muted}
                   backgroundColor={palette.card}
-                  badge={badgeForPlan(plan)}
                   disabled={isWorking}
                 />
               ))}
@@ -582,19 +636,6 @@ const styles = StyleSheet.create({
     width: 70,
     height: 70,
   },
-  dealPill: {
-    alignSelf: "center",
-    marginTop: 8,
-    borderRadius: 999,
-    paddingHorizontal: 13,
-    paddingVertical: 5,
-  },
-  dealPillText: {
-    color: "#FFFFFF",
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 1,
-  },
   title: {
     marginTop: 12,
     fontSize: 27,
@@ -608,6 +649,74 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
     textAlign: "center",
+  },
+  dealSummary: {
+    minHeight: 190,
+    borderRadius: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    paddingHorizontal: 22,
+    paddingVertical: 24,
+    shadowColor: "#4B1FA3",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 18,
+    elevation: 8,
+  },
+  dealDiscount: {
+    color: "#FFFFFF",
+    fontSize: 26,
+    lineHeight: 34,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  dealRateBubble: {
+    minWidth: 160,
+    marginTop: 14,
+    borderRadius: 999,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+  },
+  dealRate: {
+    color: "#111111",
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  dealBillingDetail: {
+    marginTop: 10,
+    color: "#DED7EE",
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  sparkle: {
+    position: "absolute",
+    color: "rgba(255,255,255,0.78)",
+    fontSize: 24,
+    fontWeight: "700",
+  },
+  sparkleTopLeft: {
+    top: 16,
+    left: 19,
+  },
+  sparkleTopRight: {
+    top: 24,
+    right: 22,
+    fontSize: 19,
+  },
+  sparkleBottomLeft: {
+    bottom: 20,
+    left: 30,
+    fontSize: 17,
+  },
+  sparkleBottomRight: {
+    right: 19,
+    bottom: 15,
   },
   plans: {
     gap: 11,

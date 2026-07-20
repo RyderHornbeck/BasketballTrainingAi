@@ -4,9 +4,17 @@ import { useTheme } from "@/hooks/useTheme";
 import { routeAfterSocialAuth } from "@/lib/postAuth";
 import * as AppleAuthentication from "expo-apple-authentication";
 import { Link } from "expo-router";
-import { BasketballIcon, GoogleLogoIcon } from "phosphor-react-native";
+import { GoogleLogoIcon } from "phosphor-react-native";
 import React, { useState } from "react";
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import {
+  ActivityIndicator,
+  Image,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from "react-native";
 
 type Provider = "google" | "apple";
 
@@ -47,7 +55,12 @@ export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <View style={styles.brand}>
-        <BasketballIcon size={56} color={colors.accent} weight="duotone" />
+        <Image
+          accessibilityLabel="Court Coach AI"
+          source={require("../assets/images/AppLogo.png")}
+          resizeMode="contain"
+          style={styles.appLogo}
+        />
         <Text style={[styles.title, { color: colors.text }]}>
           {mode === "login" ? "Welcome back" : "Create your account"}
         </Text>
@@ -157,6 +170,10 @@ const styles = StyleSheet.create({
   brand: {
     alignItems: "center",
     marginBottom: 40,
+  },
+  appLogo: {
+    width: 56,
+    height: 56,
   },
   title: {
     marginTop: 10,
