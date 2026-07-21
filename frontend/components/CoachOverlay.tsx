@@ -9,7 +9,15 @@ import { Ionicons } from "@expo/vector-icons";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { router } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Animated, Modal, Pressable, StyleSheet, View } from "react-native";
+import {
+  ActivityIndicator,
+  Animated,
+  Image,
+  Modal,
+  Pressable,
+  StyleSheet,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 interface CoachOverlayProps {
@@ -28,6 +36,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const [pulse] = useState(() => new Animated.Value(1));
+  const [thinkingStep, setThinkingStep] = useState(0);
 
   const {
     status,
@@ -75,6 +84,14 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     pulse.setValue(1);
   }, [status, pulse]);
 
+  useEffect(() => {
+    if (status !== "thinking") return;
+    const interval = setInterval(() => {
+      setThinkingStep((step) => (step + 1) % 6);
+    }, 170);
+    return () => clearInterval(interval);
+  }, [status]);
+
   const handleClose = () => {
     void stopSession();
     onClose();
@@ -105,25 +122,20 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
                   ? "Tap to retry"
                   : "Starting coach…";
 
-  const centerColor = budgetExhausted
-    ? colors.cardAlt
-    : status === "speaking"
-      ? colors.accentMuted
-      : status === "listening"
-        ? colors.accent
-        : status === "connecting" || status === "thinking"
-          ? colors.cardAlt
-          : colors.card;
-
+  const isRedState =
+    budgetExhausted || status === "muted" || status === "disconnecting" || status === "error";
+  const centerColor = isRedState ? colors.danger : colors.accent;
   const centerIcon = budgetExhausted
     ? "hourglass-outline"
-    : status === "connecting" || status === "thinking"
-      ? null
-      : status === "speaking"
-        ? "volume-high"
-        : status === "muted" || status === "error"
-          ? "mic-off"
-          : "mic";
+    : status === "muted"
+      ? "mic-off"
+      : status === "disconnecting"
+        ? "cloud-offline-outline"
+        : status === "error"
+          ? "refresh"
+          : status === "listening" || status === "idle"
+            ? "mic"
+            : null;
 
   const orbDisabled =
     budgetExhausted || status === "connecting" || status === "disconnecting" || status === "thinking";
@@ -199,6 +211,8 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
           <Text style={[styles.statusLabel, { color: colors.text }]}>{statusLabel}</Text>
 
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={statusLabel}
             onPress={() => {
               if (budgetExhausted) return;
               if (status === "error" && !error?.toLowerCase().includes("limit reached")) {
@@ -214,13 +228,32 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
                 styles.coachOrb,
                 {
                   backgroundColor: centerColor,
-                  shadowColor: colors.accent,
+                  shadowColor: isRedState ? colors.danger : colors.accent,
                   transform: [{ scale: pulse }],
                 },
               ]}
             >
-              {status === "connecting" || status === "thinking" ? (
-                <ActivityIndicator size="large" color={colors.accent} />
+              {status === "connecting" ? (
+                <ActivityIndicator size="large" color="#FFFFFF" />
+              ) : status === "thinking" ? (
+                <View style={styles.thinkingDots} accessibilityLabel="Coach is thinking">
+                  {[0, 1, 2].map((dotIndex) => {
+                    const phase = (thinkingStep - dotIndex + 6) % 6;
+                    const translateY = [0, -6, -10, -6, 0, 3][phase];
+                    return (
+                      <View
+                        key={dotIndex}
+                        style={[styles.thinkingDot, { transform: [{ translateY }] }]}
+                      />
+                    );
+                  })}
+                </View>
+              ) : status === "speaking" ? (
+                <Image
+                  source={require("../assets/images/WhiteAppLogoForButton.png")}
+                  style={styles.coachSpeakingLogo}
+                  resizeMode="contain"
+                />
               ) : centerIcon ? (
                 <Ionicons name={centerIcon} size={52} color="#FFFFFF" />
               ) : null}
@@ -340,6 +373,23 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 24,
     elevation: 14,
+  },
+  thinkingDots: {
+    height: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  thinkingDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: "#FFFFFF",
+  },
+  coachSpeakingLogo: {
+    width: 78,
+    height: 78,
   },
   hints: {
     marginTop: 28,
