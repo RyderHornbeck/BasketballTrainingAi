@@ -88,8 +88,9 @@ export default function Index() {
     case "onboarding_incomplete":
       return <Redirect href="/onboarding" />;
     case "plan_generating":
-    case "plan_failed":
     case "no_plan":
+      return <Redirect href="/(tabs)/days" />;
+    case "plan_failed":
       return <Redirect href="/generating" />;
     case "plan_ready":
       return <Redirect href="/(tabs)/days" />;

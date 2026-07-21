@@ -24,6 +24,7 @@ import {
   getWeeklyWorkoutStats,
   isDayUnlocked,
   removeExerciseFromWorkout,
+  requestPlanGeneration,
   requestNextBlockGeneration,
   saveExerciseLog,
   WeeklyWorkoutStats,
@@ -100,6 +101,7 @@ export default function DaysScreen() {
   const latestLogInputRef = useRef<Map<string, ExerciseLogInput>>(new Map());
   const logSaveErrorShownRef = useRef(false);
   const viewTransitionFrameRef = useRef<number | null>(null);
+  const initialGenerationAttemptedRef = useRef(false);
   const finishingRef = useRef(false);
   const [finishingWorkout, setFinishingWorkout] = useState(false);
   const [retryingBlock, setRetryingBlock] = useState(false);
@@ -115,6 +117,23 @@ export default function DaysScreen() {
     if (lastCompleted) return lastCompleted.day_number;
     return sorted[0].day_number;
   }, [days]);
+
+  useEffect(() => {
+    if (
+      planLoading ||
+      plan ||
+      generationRequest ||
+      initialGenerationAttemptedRef.current
+    ) {
+      return;
+    }
+    initialGenerationAttemptedRef.current = true;
+    void requestPlanGeneration()
+      .then(refreshPlan)
+      .catch((generationError) => {
+        console.error("Unable to start initial plan generation:", generationError);
+      });
+  }, [generationRequest, plan, planLoading, refreshPlan]);
 
   useEffect(() => {
     if (selectedDayNumber == null && defaultDayNumber != null) {
@@ -466,14 +485,10 @@ export default function DaysScreen() {
   const switchViewMode = useCallback((nextMode: DaysViewMode, direction: SlideDirection) => {
     if (viewTransitionFrameRef.current != null) {
       cancelAnimationFrame(viewTransitionFrameRef.current);
+      viewTransitionFrameRef.current = null;
     }
     setSlideDirection(direction);
-    // The exiting view uses its props from its final render. Stage the
-    // direction first so the old and new pages always travel together.
-    viewTransitionFrameRef.current = requestAnimationFrame(() => {
-      viewTransitionFrameRef.current = null;
-      setViewMode(nextMode);
-    });
+    setViewMode(nextMode);
   }, []);
 
   useEffect(
@@ -600,7 +615,14 @@ export default function DaysScreen() {
   const viewExiting =
     slideDirection === "forward" ? SlideOutLeft.duration(180) : SlideOutRight.duration(180);
 
-  if (planLoading) {
+  const initialPlanBuilding =
+    !plan &&
+    (!generationRequest ||
+      (generationRequest.generation_type === "initial" &&
+        (generationRequest.status === "pending" ||
+          generationRequest.status === "generating")));
+
+  if (planLoading || initialPlanBuilding) {
     return <DaysSkeleton />;
   }
 
