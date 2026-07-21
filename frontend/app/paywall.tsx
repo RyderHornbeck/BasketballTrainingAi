@@ -568,7 +568,7 @@ export default function PaywallScreen() {
                 {message}
               </Text>
             ) : null}
-            <Text style={[styles.cancelText, { color: palette.muted }]}>Cancel anytime.</Text>
+            <Text style={[styles.cancelText, { color: palette.muted }]}></Text>
             <Pressable
               accessibilityRole="button"
               accessibilityState={{ disabled: isWorking || !selectedPlan }}
@@ -591,7 +591,7 @@ export default function PaywallScreen() {
               </Text>
             </Pressable>
             <Text style={[styles.billingText, { color: palette.muted }]}>
-              Payment is charged to your Apple ID. Subscriptions renew automatically unless canceled.
+              
             </Text>
             <View style={styles.linkRow}>
               <Pressable
