@@ -787,8 +787,9 @@ export default function DaysScreen() {
             </Card>
 
             <Pressable
+              accessibilityRole="button"
+              onPressIn={actionHaptic}
               onPress={() => {
-                actionHaptic();
                 // Both pages move right-to-left into the workout view.
                 switchViewMode("workout", "forward");
               }}
@@ -796,8 +797,9 @@ export default function DaysScreen() {
                 styles.startWorkoutCard,
                 {
                   backgroundColor: colors.accent,
-                  opacity: pressed ? 0.92 : 1,
+                  opacity: pressed ? 0.84 : 1,
                   shadowColor: colors.shadow,
+                  transform: [{ scale: pressed ? 0.985 : 1 }],
                 },
               ]}
             >

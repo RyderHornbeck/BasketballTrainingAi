@@ -7,6 +7,11 @@ import { useSubscription } from "@/hooks/useSubscription";
 import { actionHaptic, completionHaptic, selectionHaptic } from "@/lib/haptics";
 import { PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL } from "@/lib/legal";
 import {
+  getActivePlan,
+  getLatestGenerationRequest,
+  requestPlanGeneration,
+} from "@/lib/plan";
+import {
   getIntroEligibility,
   hasPremiumEntitlement,
   isPurchaseCancelled,
@@ -47,6 +52,14 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 type PaywallMode = "default" | "deal";
 type PaywallStatus = "loading" | "ready" | "purchasing" | "restoring" | "success" | "error";
+
+const POST_PURCHASE_TIMEOUT_MS = 10_000;
+const POST_PURCHASE_STAGES = [
+  "Finishing up your account",
+  "Pulling your workout drills",
+  "Saving your personalized five-day plan",
+  "Getting your first workout ready",
+] as const;
 
 const DEFAULT_COLORS = {
   background: "#FFF2E7",
@@ -100,9 +113,11 @@ function logPaywallEvent(event: string, data?: Record<string, string | null>) {
 
 export default function PaywallScreen() {
   const { next } = useLocalSearchParams<{ next?: string | string[] }>();
-  const continuation = (Array.isArray(next) ? next[0] : next) === "finish-setup"
-    ? "finish-setup"
-    : "app";
+  const requestedContinuation = Array.isArray(next) ? next[0] : next;
+  const continuation =
+    requestedContinuation === "finish-setup" || requestedContinuation === "generating"
+      ? requestedContinuation
+      : "app";
   const { user, signOut } = useAuth();
   const {
     hasPremium,
@@ -120,9 +135,17 @@ export default function PaywallScreen() {
   const [selectedDuration, setSelectedDuration] =
     useState<SubscriptionDuration>("annual");
   const [message, setMessage] = useState<string | null>(null);
+  const [postPurchaseProgress, setPostPurchaseProgress] = useState(0.08);
+  const [postPurchaseTimedOut, setPostPurchaseTimedOut] = useState(false);
+  const [postPurchaseError, setPostPurchaseError] = useState<string | null>(null);
+  const [postPurchaseAttempt, setPostPurchaseAttempt] = useState(0);
   const [contentOpacity] = useState(() => new Animated.Value(0));
   const requestLockRef = useRef(false);
   const impressionIdsRef = useRef(new Set<string>());
+  const postPurchaseStartedAtRef = useRef<number | null>(null);
+  const postPurchasePollInFlightRef = useRef(false);
+  const postPurchaseNavigationRef = useRef(false);
+  const postPurchaseGenerationEnsuredRef = useRef(false);
 
   const palette = mode === "deal" ? DEAL_COLORS : DEFAULT_COLORS;
 
@@ -130,12 +153,111 @@ export default function PaywallScreen() {
     setStatus("success");
     if (event !== "entitlement_active") completionHaptic();
     logPaywallEvent(event, { continuation });
-    router.replace(continuation === "finish-setup" ? "/finish-setup" : "/");
+    if (continuation === "generating") return;
+    router.replace(
+      continuation === "finish-setup"
+        ? "/finish-setup"
+        : "/"
+    );
   }, [continuation]);
 
   useEffect(() => {
     if (hasPremium && !requestLockRef.current) continueToApp("entitlement_active");
   }, [continueToApp, hasPremium]);
+
+  useEffect(() => {
+    if (
+      status !== "success" ||
+      continuation !== "generating" ||
+      postPurchaseTimedOut
+    ) {
+      return;
+    }
+
+    if (postPurchaseStartedAtRef.current === null) {
+      postPurchaseStartedAtRef.current = Date.now();
+    }
+
+    let cancelled = false;
+    let navigationTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const checkForSavedPlan = async () => {
+      if (postPurchasePollInFlightRef.current || postPurchaseNavigationRef.current) return;
+      postPurchasePollInFlightRef.current = true;
+      try {
+        const [plan, request] = await Promise.all([
+          getActivePlan(),
+          getLatestGenerationRequest(),
+        ]);
+        if (cancelled) return;
+        if (plan) {
+          postPurchaseNavigationRef.current = true;
+          setPostPurchaseProgress(1);
+          navigationTimeout = setTimeout(() => {
+            router.replace("/(tabs)/days");
+          }, 400);
+          return;
+        }
+        if (request?.status === "failed") {
+          setPostPurchaseError(
+            request.error_message ?? "Your workout plan could not be generated."
+          );
+          setPostPurchaseTimedOut(true);
+          return;
+        }
+        if (!postPurchaseGenerationEnsuredRef.current) {
+          postPurchaseGenerationEnsuredRef.current = true;
+          void requestPlanGeneration().catch((generationError) => {
+            if (!cancelled) {
+              setPostPurchaseError(
+                generationError instanceof Error
+                  ? generationError.message
+                  : "Unable to start plan generation."
+              );
+            }
+          });
+        }
+      } catch (pollError) {
+        if (!cancelled) {
+          setPostPurchaseError(
+            pollError instanceof Error
+              ? pollError.message
+              : "Unable to check your saved plan."
+          );
+        }
+      } finally {
+        postPurchasePollInFlightRef.current = false;
+      }
+    };
+
+    void checkForSavedPlan();
+
+    const interval = setInterval(() => {
+      const elapsed =
+        Date.now() - (postPurchaseStartedAtRef.current ?? Date.now());
+      const nextProgress = Math.min(
+        0.92,
+        0.08 + (elapsed / POST_PURCHASE_TIMEOUT_MS) * 0.84
+      );
+      setPostPurchaseProgress((current) => Math.max(current, nextProgress));
+      if (elapsed >= POST_PURCHASE_TIMEOUT_MS) {
+        setPostPurchaseTimedOut(true);
+        return;
+      }
+      void checkForSavedPlan();
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      if (navigationTimeout) clearTimeout(navigationTimeout);
+    };
+  }, [
+    continuation,
+    postPurchaseAttempt,
+    postPurchaseTimedOut,
+    status,
+  ]);
 
   const loadPaywall = useCallback(async () => {
     setStatus("loading");
@@ -388,6 +510,18 @@ export default function PaywallScreen() {
     }
   };
 
+  const retryPostPurchase = () => {
+    actionHaptic();
+    postPurchaseStartedAtRef.current = null;
+    postPurchaseNavigationRef.current = false;
+    postPurchasePollInFlightRef.current = false;
+    postPurchaseGenerationEnsuredRef.current = false;
+    setPostPurchaseProgress(0.08);
+    setPostPurchaseTimedOut(false);
+    setPostPurchaseError(null);
+    setPostPurchaseAttempt((attempt) => attempt + 1);
+  };
+
   if (!user) return <Redirect href="/welcome" />;
 
   const isWorking = status === "purchasing" || status === "restoring" || status === "success";
@@ -433,6 +567,14 @@ export default function PaywallScreen() {
     : selectedPlan
       ? `Continue with ${selectedPlan.duration === "annual" ? "Annual" : "Monthly"}`
       : "Continue";
+  const postPurchaseStageIndex =
+    postPurchaseProgress < 0.3
+      ? 0
+      : postPurchaseProgress < 0.55
+        ? 1
+        : postPurchaseProgress < 0.78
+          ? 2
+          : 3;
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]}>
@@ -454,6 +596,117 @@ export default function PaywallScreen() {
           onRetry={() => void loadPaywall()}
           onSignOut={() => void handleSignOut()}
         />
+      ) : status === "success" && continuation === "generating" ? (
+        <View style={styles.postPurchaseContainer}>
+          <Image
+            accessibilityLabel="Court Coach AI"
+            source={require("../assets/images/AppLogo.png")}
+            resizeMode="contain"
+            style={styles.postPurchaseLogo}
+          />
+          <Text style={[styles.postPurchaseTitle, { color: palette.text }]}>
+            {postPurchaseTimedOut
+              ? "This is taking longer than expected."
+              : "Finishing up your account…"}
+          </Text>
+          <Text style={[styles.postPurchaseSubtitle, { color: palette.muted }]}>
+            {postPurchaseTimedOut
+              ? "Your purchase is safe. Check your connection and try loading the saved plan again."
+              : "We’ll open Workouts only after your complete five-day plan is safely saved."}
+          </Text>
+
+          {!postPurchaseTimedOut ? (
+            <>
+              <View
+                accessibilityRole="progressbar"
+                accessibilityValue={{
+                  min: 0,
+                  max: 100,
+                  now: Math.round(postPurchaseProgress * 100),
+                }}
+                style={[
+                  styles.postPurchaseProgressTrack,
+                  { backgroundColor: "rgba(112,72,232,0.16)" },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.postPurchaseProgressFill,
+                    {
+                      backgroundColor: palette.accent,
+                      width: `${Math.round(postPurchaseProgress * 100)}%` as `${number}%`,
+                    },
+                  ]}
+                />
+              </View>
+              <Text style={[styles.postPurchasePercent, { color: palette.muted }]}>
+                {Math.round(postPurchaseProgress * 100)}%
+              </Text>
+              <View style={styles.postPurchaseStages}>
+                {POST_PURCHASE_STAGES.map((stage, index) => {
+                  const completed =
+                    index < postPurchaseStageIndex || postPurchaseProgress === 1;
+                  const active =
+                    index === postPurchaseStageIndex && postPurchaseProgress < 1;
+                  return (
+                    <View key={stage} style={styles.postPurchaseStageRow}>
+                      <Text
+                        style={[
+                          styles.postPurchaseStageMarker,
+                          {
+                            color:
+                              completed || active
+                                ? palette.accent
+                                : palette.muted,
+                          },
+                        ]}
+                      >
+                        {completed ? "✓" : active ? "●" : "○"}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.postPurchaseStageText,
+                          {
+                            color:
+                              completed || active ? palette.text : palette.muted,
+                          },
+                          active && styles.postPurchaseActiveStage,
+                        ]}
+                      >
+                        {stage}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </>
+          ) : (
+            <>
+              {postPurchaseError ? (
+                <Text
+                  accessibilityRole="alert"
+                  style={styles.postPurchaseError}
+                  numberOfLines={3}
+                >
+                  {postPurchaseError}
+                </Text>
+              ) : null}
+              <Pressable
+                accessibilityRole="button"
+                onPress={retryPostPurchase}
+                style={({ pressed }) => [
+                  styles.postPurchaseRetry,
+                  {
+                    backgroundColor: palette.accent,
+                    opacity: pressed ? 0.82 : 1,
+                  },
+                ]}
+              >
+                <Text style={styles.postPurchaseRetryText}>Try Again</Text>
+              </Pressable>
+            </>
+          )}
+        </View>
       ) : (
         <Animated.View style={[styles.safeArea, { opacity: contentOpacity }]}>
           <ScrollView
@@ -524,33 +777,6 @@ export default function PaywallScreen() {
               ))
             )}
 
-            <View accessibilityRole="radiogroup" style={styles.plans}>
-              {plans.map((plan) => (
-                <PlanCard
-                  key={plan.package.identifier}
-                  plan={plan}
-                  selected={plan.duration === selectedPlan?.duration}
-                  onPress={() => {
-                    selectionHaptic();
-                    setSelectedDuration(plan.duration);
-                  }}
-                  accentColor={palette.accent}
-                  textColor={palette.text}
-                  backgroundColor={palette.card}
-                  disabled={isWorking}
-                />
-              ))}
-            </View>
-
-            {message ? (
-              <Text accessibilityRole="alert" style={styles.operationMessage}>
-                {message}
-              </Text>
-            ) : null}
-            <Text style={[styles.cancelText, { color: palette.muted }]}>Cancel anytime.</Text>
-            <Text style={[styles.billingText, { color: palette.muted }]}>
-              Payment is charged to your Apple ID. Subscriptions renew automatically unless canceled.
-            </Text>
           </ScrollView>
 
           <View
@@ -562,6 +788,30 @@ export default function PaywallScreen() {
               },
             ]}
           >
+            <View accessibilityRole="radiogroup" style={styles.plans}>
+              {plans.map((plan) => (
+                <View key={plan.package.identifier} style={styles.planOption}>
+                  <PlanCard
+                    plan={plan}
+                    selected={plan.duration === selectedPlan?.duration}
+                    onPress={() => {
+                      selectionHaptic();
+                      setSelectedDuration(plan.duration);
+                    }}
+                    accentColor={palette.accent}
+                    textColor={palette.text}
+                    backgroundColor={palette.card}
+                    disabled={isWorking}
+                  />
+                </View>
+              ))}
+            </View>
+            {message ? (
+              <Text accessibilityRole="alert" style={styles.operationMessage}>
+                {message}
+              </Text>
+            ) : null}
+            <Text style={[styles.cancelText, { color: palette.muted }]}>Cancel anytime.</Text>
             <Pressable
               accessibilityRole="button"
               accessibilityState={{ disabled: isWorking || !selectedPlan }}
@@ -583,6 +833,9 @@ export default function PaywallScreen() {
                     : cta}
               </Text>
             </Pressable>
+            <Text style={[styles.billingText, { color: palette.muted }]}>
+              Payment is charged to your Apple ID. Subscriptions renew automatically unless canceled.
+            </Text>
             <View style={styles.linkRow}>
               <Pressable
                 accessibilityRole="button"
@@ -630,6 +883,94 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     paddingTop: 8,
     paddingBottom: 18,
+  },
+  postPurchaseContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 28,
+  },
+  postPurchaseLogo: {
+    width: 92,
+    height: 92,
+    marginBottom: 22,
+  },
+  postPurchaseTitle: {
+    fontSize: 23,
+    lineHeight: 31,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  postPurchaseSubtitle: {
+    maxWidth: 350,
+    marginTop: 10,
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: "center",
+  },
+  postPurchaseProgressTrack: {
+    width: "100%",
+    maxWidth: 350,
+    height: 12,
+    marginTop: 30,
+    borderRadius: 6,
+    overflow: "hidden",
+  },
+  postPurchaseProgressFill: {
+    height: "100%",
+    borderRadius: 6,
+  },
+  postPurchasePercent: {
+    marginTop: 8,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  postPurchaseStages: {
+    width: "100%",
+    maxWidth: 350,
+    marginTop: 24,
+    gap: 13,
+  },
+  postPurchaseStageRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  postPurchaseStageMarker: {
+    width: 24,
+    fontSize: 15,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  postPurchaseStageText: {
+    flex: 1,
+    marginLeft: 10,
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  postPurchaseActiveStage: {
+    fontWeight: "700",
+  },
+  postPurchaseError: {
+    maxWidth: 350,
+    marginTop: 18,
+    color: "#B42318",
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
+  },
+  postPurchaseRetry: {
+    minWidth: 180,
+    minHeight: 50,
+    marginTop: 22,
+    borderRadius: 25,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  postPurchaseRetryText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "800",
   },
   logo: {
     alignSelf: "center",
@@ -720,10 +1061,12 @@ const styles = StyleSheet.create({
   },
   plans: {
     gap: 11,
-    marginTop: 3,
+  },
+  planOption: {
+    width: "100%",
   },
   operationMessage: {
-    marginTop: 12,
+    marginTop: 8,
     color: "#B42318",
     fontSize: 12,
     lineHeight: 18,
@@ -731,13 +1074,13 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   cancelText: {
-    marginTop: 14,
+    marginVertical: 8,
     fontSize: 12,
     fontWeight: "700",
     textAlign: "center",
   },
   billingText: {
-    marginTop: 4,
+    marginTop: 5,
     fontSize: 9,
     lineHeight: 14,
     textAlign: "center",
@@ -746,7 +1089,7 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 22,
     paddingTop: 12,
-    paddingBottom: 7,
+    paddingBottom: 5,
   },
   purchaseButton: {
     minHeight: 54,

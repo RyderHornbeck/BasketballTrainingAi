@@ -248,7 +248,7 @@ export default function OnboardingScreen() {
         await refreshProfile();
         router.replace({
           pathname: "/paywall",
-          params: { next: "app" },
+          params: { next: "generating" },
         });
         void requestPlanGeneration().catch((generationError) => {
           console.error("Unable to start initial plan generation:", generationError);

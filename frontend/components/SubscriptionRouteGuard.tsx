@@ -34,7 +34,7 @@ export function SubscriptionRouteGuard({ children }: { children: React.ReactNode
 
   if (!profile?.onboarding_completed) return <Redirect href="/" />;
   if (!hasPremium) {
-    return <Redirect href={{ pathname: "/paywall", params: { next: "app" } }} />;
+    return <Redirect href={{ pathname: "/paywall", params: { next: "generating" } }} />;
   }
 
   return (

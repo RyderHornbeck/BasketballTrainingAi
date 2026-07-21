@@ -1,4 +1,5 @@
 import { Button } from "@/components/Button";
+import { Skeleton } from "@/components/Skeleton";
 import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
@@ -48,14 +49,14 @@ export default function Index() {
     );
   }
 
-  if (authLoading) return null;
+  if (authLoading) return <IndexLoading />;
   if (!user) return <Redirect href="/welcome" />;
-  if (isLoadingSubscription) return null;
+  if (isLoadingSubscription) return <IndexLoading />;
 
   if (!profile?.onboarding_completed) {
     const draftExists =
       draftState && draftState.userId === user.id ? draftState.exists : null;
-    if (draftExists === null) return null;
+    if (draftExists === null) return <IndexLoading />;
     if (!draftExists) return <Redirect href="/onboarding" />;
     if (!hasPremium) {
       return <Redirect href={{ pathname: "/paywall", params: { next: "finish-setup" } }} />;
@@ -64,7 +65,7 @@ export default function Index() {
   }
 
   if (!hasPremium) {
-    return <Redirect href={{ pathname: "/paywall", params: { next: "app" } }} />;
+    return <Redirect href={{ pathname: "/paywall", params: { next: "generating" } }} />;
   }
 
   if (loadError) {
@@ -78,7 +79,7 @@ export default function Index() {
   }
 
   if (loading) {
-    return null;
+    return <IndexLoading />;
   }
 
   switch (appState) {
@@ -93,8 +94,24 @@ export default function Index() {
     case "plan_ready":
       return <Redirect href="/(tabs)/days" />;
     default:
-      return null;
+      return <IndexLoading />;
   }
+}
+
+function IndexLoading() {
+  const { colors } = useTheme();
+  return (
+    <View
+      accessibilityRole="progressbar"
+      accessibilityLabel="Loading Court Coach"
+      style={styles.center}
+    >
+      <Skeleton width={84} height={84} borderRadius={42} />
+      <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
+        Loading Court Coach…
+      </Text>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -112,6 +129,12 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 14,
     lineHeight: 20,
+    textAlign: "center",
+  },
+  loadingText: {
+    marginTop: 18,
+    fontSize: 14,
+    fontWeight: "600",
     textAlign: "center",
   },
   retryButton: {

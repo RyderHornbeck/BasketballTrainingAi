@@ -54,7 +54,10 @@ export default function FinishSetupScreen() {
       );
       await clearOnboardingDraft();
       await withSetupTimeout(refreshProfile(), "Refreshing your profile");
-      router.replace("/generating");
+      router.replace({
+        pathname: "/paywall",
+        params: { next: "generating" },
+      });
       void requestPlanGeneration().catch((generationError) => {
         console.error("Unable to start initial plan generation:", generationError);
       });
