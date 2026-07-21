@@ -48,12 +48,6 @@ import {
   TimerIcon,
 } from "phosphor-react-native";
 import { useFocusEffect, useRouter } from "expo-router";
-import Animated, {
-  SlideInLeft,
-  SlideInRight,
-  SlideOutLeft,
-  SlideOutRight,
-} from "react-native-reanimated";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -66,7 +60,6 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 type DaysViewMode = "overview" | "workout";
-type SlideDirection = "forward" | "backward";
 
 export default function DaysScreen() {
   const { colors, scheme } = useTheme();
@@ -81,8 +74,6 @@ export default function DaysScreen() {
 
   const [selectedDayNumber, setSelectedDayNumber] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<DaysViewMode>("overview");
-  const [slideDirection, setSlideDirection] = useState<SlideDirection>("forward");
-  const [contentTransitionKey, setContentTransitionKey] = useState(0);
   const [dayDetail, setDayDetail] = useState<WorkoutDayWithExercises | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailRefreshing, setDetailRefreshing] = useState(false);
@@ -100,7 +91,6 @@ export default function DaysScreen() {
   const logSaveQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
   const latestLogInputRef = useRef<Map<string, ExerciseLogInput>>(new Map());
   const logSaveErrorShownRef = useRef(false);
-  const viewTransitionFrameRef = useRef<number | null>(null);
   const initialGenerationAttemptedRef = useRef(false);
   const finishingRef = useRef(false);
   const [finishingWorkout, setFinishingWorkout] = useState(false);
@@ -267,11 +257,6 @@ export default function DaysScreen() {
   useEffect(() => {
     loadCurrentStreak();
   }, [loadCurrentStreak]);
-
-  useEffect(() => {
-    setViewMode("overview");
-    setEditingWorkout(false);
-  }, [selectedDayNumber]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -460,45 +445,23 @@ export default function DaysScreen() {
       if (dayNumber === currentDayNumber) return;
       selectionHaptic();
 
-      if (viewTransitionFrameRef.current != null) {
-        cancelAnimationFrame(viewTransitionFrameRef.current);
+      const nextDayId = days.find((day) => day.day_number === dayNumber)?.id;
+      const cached = nextDayId ? detailCacheRef.current.get(nextDayId) : undefined;
+      if (cached !== undefined) {
+        applySelectedDetail(cached);
+      } else {
+        setDayDetail(null);
       }
-      setSlideDirection(dayNumber > currentDayNumber ? "forward" : "backward");
-      // Let the current page render once with its exit direction before
-      // replacing it, so both pages travel together.
-      viewTransitionFrameRef.current = requestAnimationFrame(() => {
-        viewTransitionFrameRef.current = null;
-        const nextDayId = days.find((day) => day.day_number === dayNumber)?.id;
-        const cached = nextDayId ? detailCacheRef.current.get(nextDayId) : undefined;
-        if (cached !== undefined) {
-          applySelectedDetail(cached);
-        } else {
-          setDayDetail(null);
-        }
-        setSelectedDayNumber(dayNumber);
-        setContentTransitionKey((key) => key + 1);
-      });
+      setViewMode("overview");
+      setEditingWorkout(false);
+      setSelectedDayNumber(dayNumber);
     },
     [applySelectedDetail, days, selectedDayNumber]
   );
 
-  const switchViewMode = useCallback((nextMode: DaysViewMode, direction: SlideDirection) => {
-    if (viewTransitionFrameRef.current != null) {
-      cancelAnimationFrame(viewTransitionFrameRef.current);
-      viewTransitionFrameRef.current = null;
-    }
-    setSlideDirection(direction);
+  const switchViewMode = useCallback((nextMode: DaysViewMode) => {
     setViewMode(nextMode);
   }, []);
-
-  useEffect(
-    () => () => {
-      if (viewTransitionFrameRef.current != null) {
-        cancelAnimationFrame(viewTransitionFrameRef.current);
-      }
-    },
-    []
-  );
 
   const confirmDeleteExercise = useCallback(
     (exerciseId: string, exerciseName: string | null) => {
@@ -610,11 +573,6 @@ export default function DaysScreen() {
     const previousDay = Math.max(1, (selectedDay.day_number ?? 1) - 1);
     return `Complete the previous workout to unlock Day ${selectedDay.day_number ?? ""}.`;
   }, [days, selectedDay]);
-  const viewEntering =
-    slideDirection === "forward" ? SlideInRight.duration(220) : SlideInLeft.duration(220);
-  const viewExiting =
-    slideDirection === "forward" ? SlideOutLeft.duration(180) : SlideOutRight.duration(180);
-
   const initialPlanBuilding =
     !plan &&
     (!generationRequest ||
@@ -722,11 +680,7 @@ export default function DaysScreen() {
           />
         }
       >
-        <Animated.View
-          key={`${viewMode}-${contentTransitionKey}`}
-          entering={viewEntering}
-          exiting={viewExiting}
-        >
+        <View>
         {!selectedDay ? null : !canViewDay ? (
           <Card style={styles.lockedCard}>
             <LockIcon size={40} color={colors.textMuted} weight="duotone" />
@@ -810,18 +764,21 @@ export default function DaysScreen() {
 
             <Pressable
               accessibilityRole="button"
-              onPressIn={actionHaptic}
-              onPress={() => {
-                // Both pages move right-to-left into the workout view.
-                switchViewMode("workout", "forward");
+              onPressIn={() => {
+                // This CTA sits inside a ScrollView. Run the local-only action
+                // on touch-down so a slight vertical movement cannot let the
+                // ScrollView cancel the intended tap before onPress fires.
+                actionHaptic();
+                switchViewMode("workout");
               }}
+              hitSlop={4}
+              pressRetentionOffset={28}
               style={({ pressed }) => [
                 styles.startWorkoutCard,
                 {
                   backgroundColor: colors.accent,
                   opacity: pressed ? 0.84 : 1,
                   shadowColor: colors.shadow,
-                  transform: [{ scale: pressed ? 0.985 : 1 }],
                 },
               ]}
             >
@@ -855,8 +812,7 @@ export default function DaysScreen() {
               onPress={() => {
                 actionHaptic();
                 setEditingWorkout(false);
-                // Both pages move left-to-right back into the overview.
-                switchViewMode("overview", "backward");
+                switchViewMode("overview");
               }}
               style={({ pressed }) => [styles.backRow, { opacity: pressed ? 0.65 : 1 }]}
               hitSlop={8}
@@ -1027,7 +983,7 @@ export default function DaysScreen() {
             )}
           </View>
         )}
-        </Animated.View>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );

@@ -81,6 +81,7 @@ function SetCheckboxRow({
       onPress={readOnly ? undefined : onToggle}
       disabled={readOnly}
       hitSlop={4}
+      pressRetentionOffset={28}
       style={({ pressed }) => [
         styles.setRow,
         {

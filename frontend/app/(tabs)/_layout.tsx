@@ -178,7 +178,7 @@ export default function TabsLayout() {
             borderWidth: 2,
             borderColor: NAV_BORDER_COLOR,
             shadowColor: colors.accent,
-            transform: [{ scale: pressed ? 0.94 : 1 }],
+            opacity: pressed ? 0.86 : 1,
           },
         ]}
       >

@@ -44,7 +44,7 @@ export default function FinishSetupScreen() {
       const draft = await loadOnboardingDraft();
       if (!draft) {
         await withSetupTimeout(refreshProfile(), "Refreshing your profile");
-        router.replace("/");
+        router.replace("/(tabs)/days");
         return;
       }
 
@@ -54,10 +54,7 @@ export default function FinishSetupScreen() {
       );
       await clearOnboardingDraft();
       await withSetupTimeout(refreshProfile(), "Refreshing your profile");
-      router.replace({
-        pathname: "/paywall",
-        params: { next: "generating" },
-      });
+      router.replace("/(tabs)/days");
       void requestPlanGeneration().catch((generationError) => {
         console.error("Unable to start initial plan generation:", generationError);
       });

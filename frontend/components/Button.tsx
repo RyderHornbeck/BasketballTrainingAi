@@ -7,11 +7,6 @@ import {
   StyleSheet,
   ViewStyle,
 } from "react-native";
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-} from "react-native-reanimated";
 import { Text } from "./Text";
 
 export type ButtonVariant = "primary" | "secondary" | "outline" | "danger";
@@ -35,7 +30,6 @@ export function Button({
 }: ButtonProps) {
   const { colors, scheme } = useTheme();
   const isDisabled = disabled || loading;
-  const scale = useSharedValue(1);
 
   const backgroundColor =
     variant === "primary"
@@ -57,51 +51,36 @@ export function Button({
   const isElevated = variant === "primary" || variant === "danger";
   const shadowColor = variant === "primary" ? colors.accent : variant === "danger" ? colors.danger : colors.shadow;
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  const handlePressIn = () => {
-    if (isDisabled) return;
-    scale.value = withTiming(0.96, { duration: 90 });
-  };
-
-  const handlePressOut = () => {
-    if (isDisabled) return;
-    scale.value = withTiming(1, { duration: 140 });
-  };
-
   return (
-    <Animated.View style={[animatedStyle, style]}>
-      <Pressable
-        onPress={onPress}
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
-        disabled={isDisabled}
-        style={({ pressed }) => [
-          styles.base,
+    <Pressable
+      onPress={onPress}
+      disabled={isDisabled}
+      hitSlop={4}
+      pressRetentionOffset={24}
+      style={({ pressed }) => [
+        styles.base,
+        style,
+        {
+          backgroundColor,
+          borderColor,
+          borderWidth: variant === "outline" ? 1.5 : 0,
+          opacity: isDisabled ? 0.5 : pressed ? 0.88 : 1,
+        },
+        isElevated && [
+          styles.elevated,
           {
-            backgroundColor,
-            borderColor,
-            borderWidth: variant === "outline" ? 1.5 : 0,
-            opacity: isDisabled ? 0.5 : pressed ? 0.88 : 1,
+            shadowColor,
+            shadowOpacity: pressed ? (scheme === "dark" ? 0.22 : 0.18) : scheme === "dark" ? 0.5 : 0.32,
           },
-          isElevated && [
-            styles.elevated,
-            {
-              shadowColor,
-              shadowOpacity: pressed ? (scheme === "dark" ? 0.22 : 0.18) : scheme === "dark" ? 0.5 : 0.32,
-            },
-          ],
-        ]}
-      >
-        {loading ? (
-          <ActivityIndicator color={textColor} />
-        ) : (
-          <Text style={[styles.text, { color: textColor }]}>{title}</Text>
-        )}
-      </Pressable>
-    </Animated.View>
+        ],
+      ]}
+    >
+      {loading ? (
+        <ActivityIndicator color={textColor} />
+      ) : (
+        <Text style={[styles.text, { color: textColor }]}>{title}</Text>
+      )}
+    </Pressable>
   );
 }
 
