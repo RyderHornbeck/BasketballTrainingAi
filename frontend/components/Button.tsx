@@ -5,6 +5,7 @@ import {
   Pressable,
   StyleProp,
   StyleSheet,
+  View,
   ViewStyle,
 } from "react-native";
 import { Text } from "./Text";
@@ -52,35 +53,36 @@ export function Button({
   const shadowColor = variant === "primary" ? colors.accent : variant === "danger" ? colors.danger : colors.shadow;
 
   return (
-    <Pressable
-      onPress={onPress}
-      disabled={isDisabled}
-      hitSlop={4}
-      pressRetentionOffset={24}
-      style={({ pressed }) => [
-        styles.base,
-        style,
-        {
-          backgroundColor,
-          borderColor,
-          borderWidth: variant === "outline" ? 1.5 : 0,
-          opacity: isDisabled ? 0.5 : pressed ? 0.88 : 1,
-        },
-        isElevated && [
-          styles.elevated,
+    <View style={style}>
+      <Pressable
+        onPress={onPress}
+        disabled={isDisabled}
+        hitSlop={4}
+        pressRetentionOffset={24}
+        style={({ pressed }) => [
+          styles.base,
           {
-            shadowColor,
-            shadowOpacity: pressed ? (scheme === "dark" ? 0.22 : 0.18) : scheme === "dark" ? 0.5 : 0.32,
+            backgroundColor,
+            borderColor,
+            borderWidth: variant === "outline" ? 1.5 : 0,
+            opacity: isDisabled ? 0.5 : pressed ? 0.88 : 1,
           },
-        ],
-      ]}
-    >
-      {loading ? (
-        <ActivityIndicator color={textColor} />
-      ) : (
-        <Text style={[styles.text, { color: textColor }]}>{title}</Text>
-      )}
-    </Pressable>
+          isElevated && [
+            styles.elevated,
+            {
+              shadowColor,
+              shadowOpacity: pressed ? (scheme === "dark" ? 0.22 : 0.18) : scheme === "dark" ? 0.5 : 0.32,
+            },
+          ],
+        ]}
+      >
+        {loading ? (
+          <ActivityIndicator color={textColor} />
+        ) : (
+          <Text style={[styles.text, { color: textColor }]}>{title}</Text>
+        )}
+      </Pressable>
+    </View>
   );
 }
 

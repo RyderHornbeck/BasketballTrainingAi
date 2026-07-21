@@ -7,7 +7,7 @@ import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { actionHaptic, selectionHaptic } from "@/lib/haptics";
 import { isDayUnlocked } from "@/lib/plan";
 import { ChartLineUpIcon, CourtBasketballIcon, UserCircleIcon } from "phosphor-react-native";
-import { Tabs } from "expo-router";
+import { BottomTabBar, Tabs } from "expo-router/js-tabs";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Image,
@@ -86,9 +86,6 @@ export default function TabsLayout() {
       backgroundColor: colors.card,
       borderWidth: 2,
       borderColor: NAV_BORDER_COLOR,
-      borderTopWidth: 2,
-      paddingBottom: 6,
-      paddingTop: 2,
       shadowColor: colors.shadow,
       shadowOffset: { width: 0, height: 10 },
       shadowOpacity: scheme === "dark" ? 0.5 : 0.14,
@@ -101,10 +98,25 @@ export default function TabsLayout() {
   return (
     <>
       <Tabs
+        tabBar={(props) => (
+          <View style={tabBarShellStyle}>
+            <BottomTabBar
+              {...props}
+              style={{
+                height: TAB_BAR_HEIGHT,
+                backgroundColor: "transparent",
+                borderTopWidth: 0,
+                elevation: 0,
+                shadowOpacity: 0,
+                paddingBottom: 6,
+                paddingTop: 2,
+              }}
+            />
+          </View>
+        )}
         screenOptions={{
           headerShown: false,
           sceneStyle: { backgroundColor: colors.background },
-          tabBarStyle: tabBarShellStyle,
           tabBarActiveTintColor: colors.accent,
           tabBarInactiveTintColor: colors.textMuted,
           tabBarShowLabel: true,

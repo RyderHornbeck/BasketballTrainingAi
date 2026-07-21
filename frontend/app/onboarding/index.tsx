@@ -53,7 +53,6 @@ import { ActivityIndicator, Image, Pressable, StyleSheet, View } from "react-nat
 
 const SKILL_LEVELS = ["beginner", "intermediate", "advanced", "elite"];
 const GOALS = [
-  "Make the team",
   "Improve shooting",
   "Improve handles",
   "Improve finishing",
@@ -62,6 +61,14 @@ const GOALS = [
   "Improve conditioning",
   "Become stronger",
   "Become an all-around better player",
+];
+const PLAYING_LEVELS = [
+  "Elementary School",
+  "Middle School",
+  "JV High School",
+  "Varsity High School",
+  "College",
+  "Professional",
 ];
 const POSITIONS = ["Guard", "Wing", "Big", "Unknown"];
 const WEAKNESS_OPTIONS = [
@@ -86,10 +93,10 @@ const INTENSITY_OPTIONS = ["Light", "Medium", "Hard", "Extremely hard"];
 const DAYS_PER_WEEK_OPTIONS = [1, 2, 3, 4, 5, 6, 7];
 const MINUTES_OPTIONS = [15, 30, 45, 60, 75, 90];
 
-const QUESTION_STEPS = 9;
-const PRE_SIGNUP_STEP = 10;
-const COACH_INTRO_STEP = 11;
-const REVIEW_STEP = 12;
+const QUESTION_STEPS = 12;
+const PRE_SIGNUP_STEP = 13;
+const COACH_INTRO_STEP = 14;
+const REVIEW_STEP = 15;
 const PRE_SIGNUP_TOTAL_STEPS = REVIEW_STEP;
 const GENERATION_STEPS = [
   "Calculating your workout length",
@@ -127,6 +134,7 @@ export default function OnboardingScreen() {
   const { user, profile, refreshProfile, loading: authLoading } = useAuth();
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<OnboardingFormData>(initialForm);
+  const [playingLevel, setPlayingLevel] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [completedChecklistSteps, setCompletedChecklistSteps] = useState(0);
@@ -188,22 +196,25 @@ export default function OnboardingScreen() {
   const canGoNext = (): boolean => {
     switch (step) {
       case 1:
-        return !!form.overall_skill_level;
       case 2:
-        return !!form.main_goal;
+        return true;
       case 3:
-        return !!form.position;
+        return !!form.overall_skill_level;
       case 4:
-        return true;
+        return !!playingLevel;
       case 5:
-        return true;
+        return !!form.main_goal;
       case 6:
-        return true;
+        return !!form.position;
       case 7:
-        return true;
+        return selectedTextValues(form.strengths).length > 0;
       case 8:
-        return true;
+        return selectedTextValues(form.weaknesses).length > 0;
       case 9:
+      case 10:
+      case 11:
+        return true;
+      case 12:
         return !!form.preferred_intensity;
       case PRE_SIGNUP_STEP:
         return completedChecklistSteps === GENERATION_STEPS.length;
@@ -301,6 +312,26 @@ export default function OnboardingScreen() {
       {error ? <Text style={[styles.error, { color: colors.danger }]}>{error}</Text> : null}
 
       {step === 1 && (
+        <View style={styles.introSlide}>
+          <Image
+            source={require("../../assets/images/basketballplayersiloutte.png")}
+            style={styles.problemImage}
+            resizeMode="contain"
+          />
+        </View>
+      )}
+
+      {step === 2 && (
+        <View style={styles.introSlide}>
+          <Image
+            source={require("../../assets/images/AppLogo.png")}
+            style={styles.introLogo}
+            resizeMode="contain"
+          />
+        </View>
+      )}
+
+      {step === 3 && (
         <ChipGroup
           options={SKILL_LEVELS.map((level) => ({
             label: capitalize(level),
@@ -312,7 +343,19 @@ export default function OnboardingScreen() {
         />
       )}
 
-      {step === 2 && (
+      {step === 4 && (
+        <ChipGroup
+          options={PLAYING_LEVELS.map((level) => ({
+            label: level,
+            value: level,
+            icon: <BasketballIcon />,
+          }))}
+          selected={[playingLevel]}
+          onToggle={setPlayingLevel}
+        />
+      )}
+
+      {step === 5 && (
         <ChipGroup
           options={GOALS.map((goal) => ({ label: goal, value: goal, icon: goalIcon(goal) }))}
           selected={selectedTextValues(form.main_goal)}
@@ -320,7 +363,7 @@ export default function OnboardingScreen() {
         />
       )}
 
-      {step === 3 && (
+      {step === 6 && (
         <ChipGroup
           options={POSITIONS.map((position) => ({
             label: position,
@@ -332,7 +375,7 @@ export default function OnboardingScreen() {
         />
       )}
 
-      {step === 4 && (
+      {step === 7 && (
         <View>
           <Text style={[styles.helperText, { color: colors.textSecondary }]}>
             Choose every area you feel confident in.
@@ -350,7 +393,7 @@ export default function OnboardingScreen() {
         </View>
       )}
 
-      {step === 5 && (
+      {step === 8 && (
         <View>
           <Text style={[styles.helperText, { color: colors.textSecondary }]}>
             Choose every area that needs extra work.
@@ -368,7 +411,7 @@ export default function OnboardingScreen() {
         </View>
       )}
 
-      {step === 6 && (
+      {step === 9 && (
         <View>
           <SkillSlider label="Shooting" value={Number(form.shooting_level)} onChange={(v) => update("shooting_level", String(v))} />
           <SkillSlider label="Ball Handling" value={Number(form.ball_handling_level)} onChange={(v) => update("ball_handling_level", String(v))} />
@@ -380,7 +423,7 @@ export default function OnboardingScreen() {
         </View>
       )}
 
-      {step === 7 && (
+      {step === 10 && (
         <View>
           <Text style={[styles.groupLabel, { color: colors.text }]}>Days per week you can train</Text>
           <ChipGroup
@@ -391,7 +434,7 @@ export default function OnboardingScreen() {
         </View>
       )}
 
-      {step === 8 && (
+      {step === 11 && (
         <View>
           <Text style={[styles.groupLabel, { color: colors.text }]}>Minutes per workout</Text>
           <ChipGroup
@@ -402,7 +445,7 @@ export default function OnboardingScreen() {
         </View>
       )}
 
-      {step === 9 && (
+      {step === 12 && (
         <View>
           <Text style={[styles.groupLabel, { color: colors.text }]}>Preferred workout intensity</Text>
           <ChipGroup
@@ -461,8 +504,8 @@ export default function OnboardingScreen() {
             resizeMode="contain"
           />
           <Text style={[styles.infoLead, { color: colors.text }]}>
-            Court Coach helps you move through every workout more smoothly, stay organized, and
-            focus on improving your game.
+            Connect your headphones through Bluetooth, then just talk. Court Coach can handle
+            workout updates while you keep training.
           </Text>
           <View style={styles.coachFeatures}>
             <CoachFeature
@@ -512,7 +555,21 @@ export default function OnboardingScreen() {
 }
 
 const STEP_TITLES = [
+  {
+    title: "Training Alone Is Hard",
+    subtitle:
+      "Without a coach, it’s hard to know what to train or whether you’re improving. Many players repeat the same drills without a clear plan.",
+  },
+  {
+    title: "Your Personal AI Basketball Coach",
+    subtitle:
+      "Court Coach builds personalized workouts, guides each drill, and tracks your progress. Just talk to change drills, start timers, or log results.",
+  },
   { title: "What's your skill level?", subtitle: "Be honest -- this shapes your entire plan." },
+  {
+    title: "What level do you play?",
+    subtitle: "Choose the level that best matches where you currently compete.",
+  },
   { title: "What's your main goal?", subtitle: "Choose every goal that matters to you." },
   { title: "What position do you play?", subtitle: "Helps us pick position-relevant drills." },
   { title: "Your strengths", subtitle: "Choose every area you feel confident in." },
@@ -526,8 +583,8 @@ const STEP_TITLES = [
     subtitle: "Reviewing your answers and preparing your personalized training setup.",
   },
   {
-    title: "Train smarter with Court Coach",
-    subtitle: "Your AI coach keeps each workout simple, flexible, and on track.",
+    title: "Just Talk",
+    subtitle: "Connect your headphones through Bluetooth and just talk.",
   },
   {
     title: "Give Court Coach a rating",
@@ -657,8 +714,6 @@ function skillLevelIcon(level: string) {
 
 function goalIcon(goal: string) {
   switch (goal) {
-    case "Make the team":
-      return <TrophyIcon />;
     case "Improve shooting":
       return <TargetIcon />;
     case "Improve handles":
@@ -817,6 +872,19 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     fontWeight: "700",
+  },
+  introSlide: {
+    minHeight: 360,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  introLogo: {
+    width: 190,
+    height: 190,
+  },
+  problemImage: {
+    width: 280,
+    height: 280,
   },
   infoSlide: {
     alignItems: "center",
