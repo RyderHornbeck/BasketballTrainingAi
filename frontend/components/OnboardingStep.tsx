@@ -154,7 +154,9 @@ const styles = StyleSheet.create({
     marginTop: 24,
   },
   footer: {
-    padding: 20,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 26,
     borderTopWidth: 1,
   },
   nextButton: {

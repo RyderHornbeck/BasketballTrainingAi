@@ -21,7 +21,7 @@ export default function WelcomeScreen() {
           />
           <Text style={[styles.appName, { color: colors.text }]}>Court Coach</Text>
           <Text style={[styles.tagline, { color: colors.textSecondary }]}>
-            Personalized basketball training plans, built for your game.
+            Your AI Coach for Basketball Training in your ear.
           </Text>
         </View>
 

@@ -324,8 +324,8 @@ export default function OnboardingScreen() {
       {step === 2 && (
         <View style={styles.introSlide}>
           <Image
-            source={require("../../assets/images/AppLogo.png")}
-            style={styles.introLogo}
+            source={require("../../assets/images/playerwithfloatingbubbles.png")}
+            style={styles.problemImage}
             resizeMode="contain"
           />
         </View>
@@ -561,7 +561,7 @@ const STEP_TITLES = [
       "Without a coach, it’s hard to know what to train or whether you’re improving. Many players repeat the same drills without a clear plan.",
   },
   {
-    title: "Your Personal AI Basketball Coach",
+    title: "Your AI Basketball Coach",
     subtitle:
       "Court Coach builds personalized workouts, guides each drill, and tracks your progress. Just talk to change drills, start timers, or log results.",
   },
@@ -877,10 +877,6 @@ const styles = StyleSheet.create({
     minHeight: 360,
     alignItems: "center",
     justifyContent: "center",
-  },
-  introLogo: {
-    width: 190,
-    height: 190,
   },
   problemImage: {
     width: 280,
