@@ -109,6 +109,11 @@ export function isLikelyNetworkError(error: unknown): boolean {
       ? error.message
       : typeof error === "string"
         ? error
-        : "";
+        : typeof error === "object" &&
+            error !== null &&
+            "message" in error &&
+            typeof error.message === "string"
+          ? error.message
+          : "";
   return /network|fetch|offline|connection|timed out|timeout|internet/i.test(message);
 }

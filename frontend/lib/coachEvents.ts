@@ -5,6 +5,7 @@ export type WorkoutUpdateSource = "manual" | "external" | "coach";
 type Listener = (source: WorkoutUpdateSource) => void;
 
 const listeners = new Set<Listener>();
+let workoutUpdateRevision = 0;
 
 export function onWorkoutUpdated(listener: Listener): () => void {
   listeners.add(listener);
@@ -14,6 +15,7 @@ export function onWorkoutUpdated(listener: Listener): () => void {
 }
 
 export function emitWorkoutUpdated(source: WorkoutUpdateSource = "external"): void {
+  workoutUpdateRevision += 1;
   for (const listener of listeners) {
     try {
       listener(source);
@@ -21,4 +23,8 @@ export function emitWorkoutUpdated(source: WorkoutUpdateSource = "external"): vo
       // A broken listener shouldn't take down the others.
     }
   }
+}
+
+export function getWorkoutUpdateRevision(): number {
+  return workoutUpdateRevision;
 }

@@ -535,6 +535,7 @@ export default function DaysScreen() {
   }, [dayDetail, progressVersion]);
 
   const performanceColor = getPerformanceColor(dayPerformance.score, colors);
+  const hasVisiblePerformance = dayPerformance.hasData && dayPerformance.score > 0;
 
   const blockExhausted = useMemo(
     () => days.length > 0 && days.every((day) => day.completed),
@@ -714,19 +715,25 @@ export default function DaysScreen() {
 
               <Card style={styles.statSquare}>
                 <View style={styles.statSquareContent}>
-                  <Text
-                    style={[
-                      styles.performanceScore,
-                      {
-                        color: dayPerformance.hasData ? performanceColor : colors.textMuted,
-                      },
-                    ]}
-                  >
-                    {dayPerformance.hasData ? `${dayPerformance.score}%` : "--"}
-                  </Text>
-                  <Text style={[styles.statSquareLabel, { color: colors.textSecondary }]}>
-                    Today&apos;s performance
-                  </Text>
+                  {hasVisiblePerformance ? (
+                    <>
+                      <Text style={[styles.performanceScore, { color: performanceColor }]}>
+                        {dayPerformance.score}%
+                      </Text>
+                      <Text style={[styles.statSquareLabel, { color: colors.textSecondary }]}>
+                        Today&apos;s performance
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={[styles.statSquareLabel, { color: colors.textSecondary }]}>
+                        Today&apos;s performance
+                      </Text>
+                      <Text style={[styles.performancePrompt, { color: colors.accent }]}>
+                        Start workout to see performance
+                      </Text>
+                    </>
+                  )}
                 </View>
               </Card>
             </View>
@@ -1200,6 +1207,15 @@ const styles = StyleSheet.create({
     fontSize: 36,
     fontWeight: "800",
     letterSpacing: -1,
+  },
+  performancePrompt: {
+    flex: 1,
+    width: "100%",
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: "800",
+    textAlign: "center",
+    textAlignVertical: "center",
   },
   sectionLabel: {
     fontSize: 13,

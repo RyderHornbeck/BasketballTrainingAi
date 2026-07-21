@@ -504,8 +504,7 @@ export default function OnboardingScreen() {
             resizeMode="contain"
           />
           <Text style={[styles.infoLead, { color: colors.text }]}>
-            Connect your headphones through Bluetooth, then just talk. Court Coach can handle
-            workout updates while you keep training.
+
           </Text>
           <View style={styles.coachFeatures}>
             <CoachFeature

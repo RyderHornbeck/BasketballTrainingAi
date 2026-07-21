@@ -1,6 +1,7 @@
 import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
+import { isLikelyNetworkError, reportNetworkFailure } from "@/lib/connectivity";
 import { routeAfterSocialAuth } from "@/lib/postAuth";
 import * as AppleAuthentication from "expo-apple-authentication";
 import { Link } from "expo-router";
@@ -19,14 +20,25 @@ import {
 type Provider = "google" | "apple";
 
 function authErrorMessage(error: unknown, provider: Provider): string {
-  const fallback = `Unable to continue with ${provider === "google" ? "Google" : "Apple"}.`;
+  const providerName = provider === "google" ? "Google" : "Apple";
+  const fallback = `We couldn’t sign you in with ${providerName}. Please try again.`;
+  if (isLikelyNetworkError(error)) {
+    return "We couldn’t connect. Check your internet connection and try again.";
+  }
   if (!(error instanceof Error)) return fallback;
 
-  if (error.message.toLowerCase().includes("database error saving new user")) {
+  const message = error.message.toLowerCase();
+  if (message.includes("database error saving new user")) {
     return "This sign-in can’t be used to create a new Court Coach account. Please use a different account.";
   }
+  if (message.includes("not available on this device")) {
+    return `${providerName} sign-in is not available on this device.`;
+  }
+  if (message.includes("rate limit") || message.includes("too many")) {
+    return "There have been too many sign-in attempts. Please try again later.";
+  }
 
-  return error.message;
+  return fallback;
 }
 
 export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
@@ -44,6 +56,7 @@ export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
       if (!user) return;
       await routeAfterSocialAuth(user.id, refreshProfile);
     } catch (authError) {
+      if (isLikelyNetworkError(authError)) reportNetworkFailure(`${provider}-sign-in`);
       setError(authErrorMessage(authError, provider));
     } finally {
       setLoadingProvider(null);

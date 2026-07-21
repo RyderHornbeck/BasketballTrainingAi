@@ -1,31 +1,102 @@
 import { Skeleton } from "@/components/Skeleton";
 import { Text } from "@/components/Text";
+import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { ACHIEVEMENTS, AchievementDefinition, getUserAchievements } from "@/lib/achievements";
+import { getWorkoutUpdateRevision } from "@/lib/coachEvents";
 import { getCurrentWorkoutStreak } from "@/lib/plan";
 import { UserAchievement } from "@/types/database";
 import { LinearGradient } from "expo-linear-gradient";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { ArrowLeftIcon, FireIcon, LockIcon } from "phosphor-react-native";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+interface CachedAchievementPage {
+  userId: string;
+  revision: number;
+  unlocked: UserAchievement[];
+  streak: number;
+}
+
+let achievementPageCache: CachedAchievementPage | null = null;
+let achievementPageRequest: {
+  userId: string;
+  revision: number;
+  promise: Promise<CachedAchievementPage>;
+} | null = null;
+
+function fetchAchievementPage(userId: string, revision: number): Promise<CachedAchievementPage> {
+  if (
+    achievementPageRequest?.userId === userId &&
+    achievementPageRequest.revision === revision
+  ) {
+    return achievementPageRequest.promise;
+  }
+
+  const promise = Promise.all([getUserAchievements(), getCurrentWorkoutStreak()])
+    .then(([unlocked, streak]) => {
+      const next = { userId, revision, unlocked, streak };
+      achievementPageCache = next;
+      return next;
+    })
+    .finally(() => {
+      if (achievementPageRequest?.promise === promise) achievementPageRequest = null;
+    });
+  achievementPageRequest = { userId, revision, promise };
+  return promise;
+}
+
 export default function AchievementsScreen() {
   const { colors } = useTheme();
+  const { user } = useAuth();
   const router = useRouter();
-  const [unlocked, setUnlocked] = useState<UserAchievement[]>([]);
-  const [streak, setStreak] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const userId = user?.id ?? null;
+  const initialCache =
+    userId && achievementPageCache?.userId === userId ? achievementPageCache : null;
+  const [unlocked, setUnlocked] = useState<UserAchievement[]>(
+    () => initialCache?.unlocked ?? []
+  );
+  const [streak, setStreak] = useState(() => initialCache?.streak ?? 0);
+  const [loading, setLoading] = useState(() => !initialCache);
 
-  useEffect(() => {
-    void Promise.all([getUserAchievements(), getCurrentWorkoutStreak()])
-      .then(([earned, currentStreak]) => {
-        setUnlocked(earned);
-        setStreak(currentStreak);
-      })
-      .finally(() => setLoading(false));
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      if (!userId) return;
+      const revision = getWorkoutUpdateRevision();
+      const cached =
+        achievementPageCache?.userId === userId ? achievementPageCache : null;
+
+      if (cached) {
+        setUnlocked(cached.unlocked);
+        setStreak(cached.streak);
+        setLoading(false);
+        if (cached.revision === revision) return;
+      } else {
+        setUnlocked([]);
+        setStreak(0);
+        setLoading(true);
+      }
+
+      let active = true;
+      void fetchAchievementPage(userId, revision)
+        .then((next) => {
+          if (!active) return;
+          setUnlocked(next.unlocked);
+          setStreak(next.streak);
+        })
+        .catch((error) => {
+          console.warn("Unable to load achievements:", error);
+        })
+        .finally(() => {
+          if (active) setLoading(false);
+        });
+      return () => {
+        active = false;
+      };
+    }, [userId])
+  );
 
   const unlockedByKey = useMemo(
     () => new Map(unlocked.map((achievement) => [achievement.achievement_key, achievement])),
