@@ -1,6 +1,6 @@
 import { useTheme } from "@/hooks/useTheme";
-import React, { useEffect, useState } from "react";
-import { Animated, DimensionValue, StyleProp, ViewStyle } from "react-native";
+import React from "react";
+import { DimensionValue, StyleProp, View, ViewStyle } from "react-native";
 
 interface SkeletonProps {
   width?: DimensionValue;
@@ -16,29 +16,9 @@ export function Skeleton({
   style,
 }: SkeletonProps) {
   const { colors } = useTheme();
-  const [opacity] = useState(() => new Animated.Value(0.72));
-
-  useEffect(() => {
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(opacity, {
-          toValue: 1,
-          duration: 700,
-          useNativeDriver: true,
-        }),
-        Animated.timing(opacity, {
-          toValue: 0.72,
-          duration: 700,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [opacity]);
 
   return (
-    <Animated.View
+    <View
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
       style={[
@@ -47,7 +27,7 @@ export function Skeleton({
           height,
           borderRadius,
           backgroundColor: colors.progressTrack,
-          opacity,
+          opacity: 0.78,
         },
         style,
       ]}

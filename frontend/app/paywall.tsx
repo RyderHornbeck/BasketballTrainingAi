@@ -29,7 +29,6 @@ import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Animated,
   Image,
   Linking,
   Pressable,
@@ -46,7 +45,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 type PaywallMode = "default" | "deal";
-type PaywallStatus = "loading" | "ready" | "purchasing" | "restoring" | "success" | "error";
+type PaywallStatus = "loading" | "ready" | "purchasing" | "restoring" | "error";
 
 const DEFAULT_COLORS = {
   background: "#FFF2E7",
@@ -120,22 +119,44 @@ export default function PaywallScreen() {
   const [selectedDuration, setSelectedDuration] =
     useState<SubscriptionDuration>("annual");
   const [message, setMessage] = useState<string | null>(null);
-  const [contentOpacity] = useState(() => new Animated.Value(0));
   const requestLockRef = useRef(false);
   const impressionIdsRef = useRef(new Set<string>());
+  const navigationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasContinuedRef = useRef(false);
 
   const palette = mode === "deal" ? DEAL_COLORS : DEFAULT_COLORS;
 
   const continueToApp = useCallback((event = "purchase_completed") => {
-    setStatus("success");
+    if (hasContinuedRef.current) return;
+    hasContinuedRef.current = true;
     if (event !== "entitlement_active") completionHaptic();
     logPaywallEvent(event, { continuation });
-    router.replace(
-      continuation === "finish-setup"
-        ? "/finish-setup"
-        : "/(tabs)/days"
-    );
+    // StoreKit's purchase sheet dismisses outside React Native. Mounting the
+    // workout tree during that native dismissal can race the navigation and
+    // Worklets/Reanimated native modules. Let the dismissal finish first.
+    navigationTimeoutRef.current = setTimeout(() => {
+      navigationTimeoutRef.current = null;
+      // Keep the paywall route mounted underneath the protected tabs for this
+      // session. Native-stack replace tears down and snapshots the Fabric tree
+      // at the same time the workout tree mounts, which has caused release-only
+      // iOS crashes after StoreKit dismissal.
+      router.push(
+        continuation === "finish-setup"
+          ? "/finish-setup"
+          : "/(tabs)/days"
+      );
+    }, 700);
   }, [continuation]);
+
+  useEffect(
+    () => () => {
+      if (navigationTimeoutRef.current) {
+        clearTimeout(navigationTimeoutRef.current);
+        navigationTimeoutRef.current = null;
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (hasPremium && !requestLockRef.current) continueToApp("entitlement_active");
@@ -206,20 +227,6 @@ export default function PaywallScreen() {
     });
     return () => cancelAnimationFrame(frame);
   }, [hasPremium, loadPaywall, user]);
-
-  useEffect(() => {
-    if (status === "loading") {
-      contentOpacity.setValue(0);
-      return;
-    }
-    if (status === "ready") {
-      Animated.timing(contentOpacity, {
-        toValue: 1,
-        duration: 220,
-        useNativeDriver: true,
-      }).start();
-    }
-  }, [contentOpacity, status]);
 
   const plans = useMemo<NormalizedSubscriptionPackage[]>(() => {
     if (!offering) return [];
@@ -394,7 +401,7 @@ export default function PaywallScreen() {
 
   if (!user) return <Redirect href="/welcome" />;
 
-  const isWorking = status === "purchasing" || status === "restoring" || status === "success";
+  const isWorking = status === "purchasing" || status === "restoring";
   const trialDate =
     selectedPlan?.trialEndDate && formatSubscriptionDate(selectedPlan.trialEndDate);
   const renewalDate =
@@ -458,7 +465,7 @@ export default function PaywallScreen() {
           onSignOut={() => void handleSignOut()}
         />
       ) : (
-        <Animated.View style={[styles.safeArea, { opacity: contentOpacity }]}>
+        <View style={styles.safeArea}>
           <ScrollView
             contentContainerStyle={styles.content}
             showsVerticalScrollIndicator={false}
@@ -619,7 +626,7 @@ export default function PaywallScreen() {
               </Pressable>
             </View>
           </View>
-        </Animated.View>
+        </View>
       )}
     </SafeAreaView>
   );

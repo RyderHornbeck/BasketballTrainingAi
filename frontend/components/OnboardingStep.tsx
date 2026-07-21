@@ -1,14 +1,9 @@
 import { useTheme } from "@/hooks/useTheme";
 import { LinearGradient } from "expo-linear-gradient";
 import { ArrowLeftIcon } from "phosphor-react-native";
-import React, { useEffect } from "react";
+import React from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-} from "react-native-reanimated";
 import { Button } from "./Button";
 import { Text } from "./Text";
 
@@ -39,16 +34,7 @@ export function OnboardingStep({
 }: OnboardingStepProps) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-
-  const progress = useSharedValue(step / totalSteps);
-
-  useEffect(() => {
-    progress.value = withTiming(step / totalSteps, { duration: 380 });
-  }, [step, totalSteps, progress]);
-
-  const fillStyle = useAnimatedStyle(() => ({
-    width: `${Math.max(0, Math.min(1, progress.value)) * 100}%`,
-  }));
+  const progressWidth = `${Math.max(0, Math.min(1, step / totalSteps)) * 100}%` as const;
 
   return (
     <LinearGradient
@@ -68,11 +54,11 @@ export function OnboardingStep({
             <ArrowLeftIcon size={21} color={colors.text} weight="bold" />
           </Pressable>
           <View style={[styles.progressTrack, { backgroundColor: colors.progressTrack }]}>
-          <Animated.View
+          <View
             style={[
               styles.progressFill,
-              fillStyle,
               {
+                width: progressWidth,
                 backgroundColor: colors.accent,
                 shadowColor: colors.accent,
               },

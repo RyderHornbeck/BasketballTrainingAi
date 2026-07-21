@@ -62,9 +62,7 @@ export function DaySelector({
   useEffect(() => {
     if (viewportWidth <= 0) return;
     const offset = scrollOffsetForDay(selectedDayNumber, viewportWidth);
-    requestAnimationFrame(() => {
-      scrollRef.current?.scrollTo({ x: offset, animated: true });
-    });
+    scrollRef.current?.scrollTo({ x: offset, animated: false });
   }, [selectedDayNumber, viewportWidth]);
 
   return (

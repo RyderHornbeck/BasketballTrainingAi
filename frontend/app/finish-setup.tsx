@@ -29,6 +29,12 @@ function withSetupTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   });
 }
 
+function waitForCommittedFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
 export default function FinishSetupScreen() {
   const { colors } = useTheme();
   const { user, refreshProfile } = useAuth();
@@ -44,7 +50,8 @@ export default function FinishSetupScreen() {
       const draft = await loadOnboardingDraft();
       if (!draft) {
         await withSetupTimeout(refreshProfile(), "Refreshing your profile");
-        router.replace("/(tabs)/days");
+        await waitForCommittedFrame();
+        router.push("/(tabs)/days");
         return;
       }
 
@@ -54,7 +61,8 @@ export default function FinishSetupScreen() {
       );
       await clearOnboardingDraft();
       await withSetupTimeout(refreshProfile(), "Refreshing your profile");
-      router.replace("/(tabs)/days");
+      await waitForCommittedFrame();
+      router.push("/(tabs)/days");
       void requestPlanGeneration().catch((generationError) => {
         console.error("Unable to start initial plan generation:", generationError);
       });

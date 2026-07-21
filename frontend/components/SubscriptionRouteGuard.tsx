@@ -18,27 +18,33 @@ export function SubscriptionRouteGuard({ children }: { children: React.ReactNode
   const isPublicRoute = PUBLIC_SEGMENTS.has(rootSegment);
   const isFinishSetup = rootSegment === "finish-setup";
 
-  if (isPublicRoute) return <>{children}</>;
+  let gate: React.ReactNode = null;
 
-  if (authLoading) return <SubscriptionGateLoading />;
-  if (!user) return <Redirect href="/welcome" />;
-
-  if (isLoadingSubscription) return <SubscriptionGateLoading />;
-
-  if (isFinishSetup) {
-    if (!hasPremium) {
-      return <Redirect href={{ pathname: "/paywall", params: { next: "finish-setup" } }} />;
+  if (!isPublicRoute) {
+    if (authLoading) {
+      gate = <SubscriptionGateLoading />;
+    } else if (!user) {
+      gate = <Redirect href="/welcome" />;
+    } else if (isLoadingSubscription) {
+      gate = <SubscriptionGateLoading />;
+    } else if (isFinishSetup) {
+      if (!hasPremium) {
+        gate = (
+          <Redirect href={{ pathname: "/paywall", params: { next: "finish-setup" } }} />
+        );
+      }
+    } else if (!profile?.onboarding_completed) {
+      gate = <Redirect href="/" />;
+    } else if (!hasPremium) {
+      gate = <Redirect href={{ pathname: "/paywall", params: { next: "generating" } }} />;
     }
-    return <>{children}</>;
-  }
-
-  if (!profile?.onboarding_completed) return <Redirect href="/" />;
-  if (!hasPremium) {
-    return <Redirect href={{ pathname: "/paywall", params: { next: "generating" } }} />;
   }
 
   return (
-    <View style={[styles.content, { backgroundColor: colors.background }]}>{children}</View>
+    <View style={[styles.content, { backgroundColor: colors.background }]}>
+      {children}
+      {gate}
+    </View>
   );
 }
 
@@ -63,7 +69,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   loading: {
-    flex: 1,
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 100,
     alignItems: "center",
     justifyContent: "center",
     padding: 28,

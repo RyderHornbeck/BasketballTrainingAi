@@ -8,9 +8,15 @@ import { actionHaptic, selectionHaptic } from "@/lib/haptics";
 import { isDayUnlocked } from "@/lib/plan";
 import { ChartLineUpIcon, CourtBasketballIcon, UserCircleIcon } from "phosphor-react-native";
 import { Tabs } from "expo-router";
-import { BottomTabBar } from "expo-router/build/react-navigation/bottom-tabs";
 import React, { useEffect, useMemo, useState } from "react";
-import { Image, Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
+import {
+  Image,
+  InteractionManager,
+  Pressable,
+  StyleSheet,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const TAB_BAR_HEIGHT = 72;
@@ -27,6 +33,18 @@ export default function TabsLayout() {
   const { width: screenWidth } = useWindowDimensions();
   const { days } = usePlan();
   const [coachOpen, setCoachOpen] = useState(false);
+  const [startupInteractionsComplete, setStartupInteractionsComplete] = useState(false);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const interaction = InteractionManager.runAfterInteractions(() => {
+      timer = setTimeout(() => setStartupInteractionsComplete(true), 750);
+    });
+    return () => {
+      interaction.cancel();
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -68,6 +86,9 @@ export default function TabsLayout() {
       backgroundColor: colors.card,
       borderWidth: 2,
       borderColor: NAV_BORDER_COLOR,
+      borderTopWidth: 2,
+      paddingBottom: 6,
+      paddingTop: 2,
       shadowColor: colors.shadow,
       shadowOffset: { width: 0, height: 10 },
       shadowOpacity: scheme === "dark" ? 0.5 : 0.14,
@@ -80,25 +101,10 @@ export default function TabsLayout() {
   return (
     <>
       <Tabs
-        tabBar={(props) => (
-          <View style={tabBarShellStyle}>
-            <BottomTabBar
-              {...props}
-              style={{
-                height: TAB_BAR_HEIGHT,
-                backgroundColor: "transparent",
-                borderTopWidth: 0,
-                elevation: 0,
-                shadowOpacity: 0,
-                paddingBottom: 6,
-                paddingTop: 2,
-              }}
-            />
-          </View>
-        )}
         screenOptions={{
           headerShown: false,
           sceneStyle: { backgroundColor: colors.background },
+          tabBarStyle: tabBarShellStyle,
           tabBarActiveTintColor: colors.accent,
           tabBarInactiveTintColor: colors.textMuted,
           tabBarShowLabel: true,
@@ -196,7 +202,9 @@ export default function TabsLayout() {
           dayTitle={coachDay?.title ?? null}
         />
       ) : null}
-      <AchievementUnlockQueue userId={user?.id} coachOpen={coachOpen} />
+      {startupInteractionsComplete ? (
+        <AchievementUnlockQueue userId={user?.id} coachOpen={coachOpen} />
+      ) : null}
     </>
   );
 }

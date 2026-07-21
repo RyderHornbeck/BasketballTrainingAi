@@ -50,7 +50,7 @@ function RootNavigator() {
             screenOptions={{
               headerShown: false,
               contentStyle: { backgroundColor: colors.background },
-              animation: "default",
+              animation: "none",
             }}
           >
             <Stack.Screen name="index" />
@@ -70,6 +70,8 @@ function RootNavigator() {
             <Stack.Screen
               name="(tabs)"
               options={{
+                animation: "none",
+                gestureEnabled: false,
                 contentStyle: { backgroundColor: colors.background },
               }}
             />
