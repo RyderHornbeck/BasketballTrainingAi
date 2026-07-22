@@ -9,6 +9,11 @@ import { actionHaptic } from "@/lib/haptics";
 import { PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL } from "@/lib/legal";
 import { clearOnboardingDraft } from "@/lib/onboardingDraft";
 import { logOutRevenueCatUser } from "@/lib/revenueCat";
+import {
+  COACH_PROFILES,
+  DEFAULT_COACH_VOICE,
+  CoachVoice,
+} from "@/lib/coachProfiles";
 import { supabase } from "@/lib/supabase";
 import {
   defaultWorkoutReminder,
@@ -52,6 +57,9 @@ export default function ProfileScreen() {
   const [reminderLoading, setReminderLoading] = useState(true);
   const [reminderSaving, setReminderSaving] = useState(false);
   const [reminderEnabled, setReminderEnabled] = useState(false);
+  const [coachPickerOpen, setCoachPickerOpen] = useState(false);
+  const [coachVoice, setCoachVoice] = useState<CoachVoice>(DEFAULT_COACH_VOICE);
+  const [coachSaving, setCoachSaving] = useState(false);
 
   const reminderTime = useMemo(
     () => new Date(2000, 0, 1, reminder.hour, reminder.minute),
@@ -90,6 +98,11 @@ export default function ProfileScreen() {
       mounted = false;
     };
   }, [user]);
+
+  useEffect(() => {
+    const voice = profile?.realtime_coach_voice;
+    if (voice) setCoachVoice(voice);
+  }, [profile?.realtime_coach_voice]);
 
   const handleSignOut = () => {
     Alert.alert("Sign out?", "You can sign back in anytime to continue your training.", [
@@ -132,6 +145,15 @@ export default function ProfileScreen() {
         );
         return;
       }
+      const savedReminder = await enableWorkoutReminder(user.id, reminder);
+      if (!savedReminder) {
+        Alert.alert(
+          "Notifications are off",
+          "Go to your phone's Settings and turn on notifications for Court Coach AI, then try again."
+        );
+        return;
+      }
+      setReminder(savedReminder);
       setReminderEnabled(true);
     } catch {
       Alert.alert("Could not enable reminders", "Please try again.");
@@ -140,20 +162,18 @@ export default function ProfileScreen() {
     }
   };
 
-  const handleReminderTimeChange = (_: unknown, selectedDate?: Date) => {
+  const handleReminderTimeChange = async (_: unknown, selectedDate?: Date) => {
     if (!selectedDate) return;
-    setReminder((current) => ({
-      ...current,
+    const nextReminder = {
+      ...reminder,
       hour: selectedDate.getHours(),
       minute: selectedDate.getMinutes(),
-    }));
-  };
-
-  const handleSaveReminder = async () => {
-    if (!user || reminderSaving) return;
+    };
+    setReminder(nextReminder);
+    if (!user || !reminderEnabled) return;
     setReminderSaving(true);
     try {
-      const savedReminder = await enableWorkoutReminder(user.id, reminder);
+      const savedReminder = await enableWorkoutReminder(user.id, nextReminder);
       if (!savedReminder) {
         setReminderEnabled(false);
         Alert.alert(
@@ -164,12 +184,28 @@ export default function ProfileScreen() {
       }
       setReminder(savedReminder);
       setReminderEnabled(true);
-      Alert.alert("Reminder set", `Court Coach will remind you every day at ${formatReminderTime(savedReminder)}.`);
     } catch {
-      Alert.alert("Could not save reminder", "Please try again.");
+      Alert.alert("Could not update reminder", "Please try again.");
     } finally {
       setReminderSaving(false);
     }
+  };
+
+  const handleCoachSelection = async (nextVoice: CoachVoice) => {
+    if (!user || coachSaving || nextVoice === coachVoice) return;
+    actionHaptic();
+    const previousVoice = coachVoice;
+    setCoachVoice(nextVoice);
+    setCoachSaving(true);
+    const { error } = await supabase
+      .from("profiles")
+      .update({ realtime_coach_voice: nextVoice })
+      .eq("id", user.id);
+    if (error) {
+      setCoachVoice(previousVoice);
+      Alert.alert("Could not change coach", "Please try again.");
+    }
+    setCoachSaving(false);
   };
 
   const handleDeleteAccount = () => {
@@ -274,22 +310,58 @@ export default function ProfileScreen() {
                     value={reminderTime}
                     mode="time"
                     display={Platform.OS === "ios" ? "spinner" : "default"}
-                    onChange={handleReminderTimeChange}
+                    onChange={(event, selectedDate) => void handleReminderTimeChange(event, selectedDate)}
                     themeVariant={mode}
                     style={styles.timePicker}
-                  />
-                  <Button
-                    title="Save Daily Reminder"
-                    variant="secondary"
-                    onPress={() => void handleSaveReminder()}
-                    loading={reminderSaving}
-                    style={styles.saveReminderButton}
                   />
                 </>
               ) : null}
             </>
           )}
         </Card>
+
+        <Button
+          title="Your Coach"
+          variant="secondary"
+          onPress={() => {
+            actionHaptic();
+            setCoachPickerOpen((open) => !open);
+          }}
+          style={styles.actionButton}
+        />
+        {coachPickerOpen ? (
+          <Card style={styles.coachPickerCard}>
+            {COACH_PROFILES.map((coach, index) => {
+              const selected = coach.voice === coachVoice;
+              return (
+                <React.Fragment key={coach.voice}>
+                  {index > 0 ? <Divider /> : null}
+                  <Pressable
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected, disabled: coachSaving }}
+                    disabled={coachSaving}
+                    onPress={() => void handleCoachSelection(coach.voice)}
+                    style={({ pressed }) => [
+                      styles.coachOption,
+                      {
+                        backgroundColor: selected ? colors.accentMuted : "transparent",
+                        opacity: pressed || coachSaving ? 0.72 : 1,
+                      },
+                    ]}
+                  >
+                    <View style={styles.coachOptionCopy}>
+                      <Text style={[styles.coachOptionName, { color: colors.text }]}>{coach.name}</Text>
+                      <Text style={[styles.coachOptionDescription, { color: colors.textSecondary }]}>
+                        {coach.description}
+                      </Text>
+                    </View>
+                    {selected ? <Text style={[styles.coachSelected, { color: colors.accent }]}>Selected</Text> : null}
+                  </Pressable>
+                </React.Fragment>
+              );
+            })}
+          </Card>
+        ) : null}
 
         <Button
           title="How to use Court Coach AI"
@@ -523,7 +595,31 @@ const styles = StyleSheet.create({
   timePicker: {
     alignSelf: "stretch",
   },
-  saveReminderButton: {
-    marginTop: 8,
+  coachPickerCard: {
+    marginTop: -4,
+    marginBottom: 16,
+  },
+  coachOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  coachOptionCopy: {
+    flex: 1,
+  },
+  coachOptionName: {
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  coachOptionDescription: {
+    fontSize: 13,
+    marginTop: 2,
+  },
+  coachSelected: {
+    fontSize: 12,
+    fontWeight: "800",
   },
 });

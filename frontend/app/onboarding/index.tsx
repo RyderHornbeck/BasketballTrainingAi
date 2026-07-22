@@ -4,11 +4,17 @@ import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { requestOnboardingReviewOnce } from "@/lib/appReview";
 import {
+  COACH_PROFILES,
+  DEFAULT_COACH_VOICE,
+  CoachVoice,
+} from "@/lib/coachProfiles";
+import {
   clearOnboardingDraft,
   loadOnboardingDraft,
   saveOnboardingDraft,
 } from "@/lib/onboardingDraft";
 import { requestPlanGeneration, submitOnboardingAnswers } from "@/lib/plan";
+import { supabase } from "@/lib/supabase";
 import { OnboardingFormData } from "@/types/plan";
 import { Text } from "@/components/Text";
 import { router } from "expo-router";
@@ -96,7 +102,8 @@ const MINUTES_OPTIONS = [15, 30, 45, 60, 75, 90];
 const QUESTION_STEPS = 12;
 const PRE_SIGNUP_STEP = 13;
 const COACH_INTRO_STEP = 14;
-const REVIEW_STEP = 15;
+const COACH_SELECTION_STEP = 15;
+const REVIEW_STEP = 16;
 const PRE_SIGNUP_TOTAL_STEPS = REVIEW_STEP;
 const GENERATION_STEPS = [
   "Calculating your workout length",
@@ -135,6 +142,7 @@ export default function OnboardingScreen() {
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<OnboardingFormData>(initialForm);
   const [playingLevel, setPlayingLevel] = useState("");
+  const [coachVoice, setCoachVoice] = useState<CoachVoice>(DEFAULT_COACH_VOICE);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [completedChecklistSteps, setCompletedChecklistSteps] = useState(0);
@@ -156,6 +164,7 @@ export default function OnboardingScreen() {
     loadOnboardingDraft().then((draft) => {
       if (draft) {
         setForm({ ...draft, has_court_access: true, equipment: ["Basketball"] });
+        setCoachVoice(draft.realtime_coach_voice ?? DEFAULT_COACH_VOICE);
       }
     });
   }, [user]);
@@ -192,6 +201,7 @@ export default function OnboardingScreen() {
 
   const selectedTextValues = (value: string) =>
     value.split(",").map((item) => item.trim()).filter(Boolean);
+  const currentDraft = () => ({ ...form, realtime_coach_voice: coachVoice });
 
   const canGoNext = (): boolean => {
     switch (step) {
@@ -225,12 +235,12 @@ export default function OnboardingScreen() {
 
   const handleNext = async () => {
     if (step < QUESTION_STEPS) {
-      if (!user) await saveOnboardingDraft(form);
+      if (!user) await saveOnboardingDraft(currentDraft());
       setStep(step + 1);
       return;
     }
     if (step === QUESTION_STEPS && !user) {
-      await saveOnboardingDraft(form);
+      await saveOnboardingDraft(currentDraft());
       setCompletedChecklistSteps(0);
       setChecklistRun((run) => run + 1);
       setStep(PRE_SIGNUP_STEP);
@@ -241,6 +251,11 @@ export default function OnboardingScreen() {
       return;
     }
     if (step === COACH_INTRO_STEP && !user) {
+      setStep(COACH_SELECTION_STEP);
+      return;
+    }
+    if (step === COACH_SELECTION_STEP && !user) {
+      await saveOnboardingDraft(currentDraft());
       setStep(REVIEW_STEP);
       return;
     }
@@ -254,7 +269,16 @@ export default function OnboardingScreen() {
       if (user) {
         // Existing authenticated accounts can complete onboarding here.
         // Start their real plan behind the paywall so it can be ready after purchase.
-        await submitOnboardingAnswers(user.id, form);
+        await Promise.all([
+          submitOnboardingAnswers(user.id, form),
+          supabase
+            .from("profiles")
+            .update({ realtime_coach_voice: coachVoice })
+            .eq("id", user.id)
+            .then(({ error: profileError }) => {
+              if (profileError) throw profileError;
+            }),
+        ]);
         await clearOnboardingDraft();
         await refreshProfile();
         router.replace({
@@ -270,7 +294,7 @@ export default function OnboardingScreen() {
       // Normal path: no account yet. Stash the answers locally and move on
       // to account creation -- they get written to Supabase right after
       // signup succeeds.
-      await saveOnboardingDraft(form);
+      await saveOnboardingDraft(currentDraft());
       router.push("/auth/signup");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Try again.");
@@ -348,7 +372,7 @@ export default function OnboardingScreen() {
           options={PLAYING_LEVELS.map((level) => ({
             label: level,
             value: level,
-            icon: <BasketballIcon />,
+            icon: playingLevelIcon(level),
           }))}
           selected={[playingLevel]}
           onToggle={setPlayingLevel}
@@ -531,6 +555,41 @@ export default function OnboardingScreen() {
         </View>
       )}
 
+      {step === COACH_SELECTION_STEP && !user && (
+        <View style={styles.coachChoiceList}>
+          {COACH_PROFILES.map((coach) => {
+            const selected = coach.voice === coachVoice;
+            return (
+              <Pressable
+                key={coach.voice}
+                accessibilityRole="radio"
+                accessibilityState={{ selected }}
+                onPress={() => setCoachVoice(coach.voice)}
+                style={({ pressed }) => [
+                  styles.coachChoice,
+                  {
+                    backgroundColor: selected ? colors.accentMuted : colors.cardAlt,
+                    borderColor: selected ? colors.accent : colors.border,
+                    opacity: pressed ? 0.82 : 1,
+                  },
+                ]}
+              >
+                <View style={styles.coachChoiceCopy}>
+                  <Text style={[styles.coachChoiceName, { color: colors.text }]}>{coach.name}</Text>
+                  <Text style={[styles.coachChoiceDescription, { color: colors.textSecondary }]}>
+                    {coach.description}
+                  </Text>
+                </View>
+                {selected ? <CheckCircleIcon size={24} color={colors.accent} weight="fill" /> : null}
+              </Pressable>
+            );
+          })}
+          <Text style={[styles.coachChoiceFootnote, { color: colors.textMuted }]}>
+            You can change your coach anytime in Settings.
+          </Text>
+        </View>
+      )}
+
       {step === REVIEW_STEP && !user && (
         <View style={styles.ratingSlide}>
           <View style={styles.ratingStars}>
@@ -584,6 +643,10 @@ const STEP_TITLES = [
   {
     title: "Just Talk",
     subtitle: "Connect your headphones through Bluetooth and just talk.",
+  },
+  {
+    title: "Choose your coach",
+    subtitle: "Pick the coaching style that feels best for you.",
   },
   {
     title: "Give Court Coach a rating",
@@ -711,6 +774,23 @@ function skillLevelIcon(level: string) {
   }
 }
 
+function playingLevelIcon(level: string) {
+  switch (level) {
+    case "Elementary School":
+      return <PersonSimpleWalkIcon />;
+    case "Middle School":
+      return <UserCircleIcon />;
+    case "JV High School":
+      return <TrendUpIcon />;
+    case "Varsity High School":
+      return <TrophyIcon />;
+    case "College":
+      return <MedalIcon />;
+    default:
+      return <CrownIcon />;
+  }
+}
+
 function goalIcon(goal: string) {
   switch (goal) {
     case "Improve shooting":
@@ -807,6 +887,36 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginBottom: 16,
     fontWeight: "600",
+  },
+  coachChoiceList: {
+    gap: 10,
+  },
+  coachChoice: {
+    minHeight: 74,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderWidth: 1.5,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  coachChoiceCopy: {
+    flex: 1,
+  },
+  coachChoiceName: {
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  coachChoiceDescription: {
+    fontSize: 13,
+    marginTop: 3,
+  },
+  coachChoiceFootnote: {
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
+    marginTop: 6,
   },
   groupLabel: {
     fontSize: 15,

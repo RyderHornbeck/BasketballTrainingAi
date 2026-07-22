@@ -889,9 +889,12 @@ export function buildRealtimeInstructions(
   ctx: WorkoutContext,
   profile: Record<string, unknown> | null,
   timer?: TimerState,
-  conversationSummary?: string | null
+  conversationSummary?: string | null,
+  coachName = "Coach Tyler"
 ): string {
-  return `${COACH_SYSTEM_PROMPT}
+  return `Your name is ${coachName}. If asked, introduce yourself by that name.
+
+${COACH_SYSTEM_PROMPT}
 
 Authoritative workout state follows. Use it silently and prefer newer state from tool results:
 ${buildCompactContextSummary(ctx, profile, timer, conversationSummary)}`;

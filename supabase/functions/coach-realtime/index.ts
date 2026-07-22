@@ -17,9 +17,16 @@ import {
 
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const REALTIME_MODEL = Deno.env.get("OPENAI_REALTIME_MODEL") ?? DEFAULT_REALTIME_MODEL;
-const REALTIME_VOICE = Deno.env.get("OPENAI_REALTIME_VOICE") ?? "marin";
+const DEFAULT_REALTIME_VOICE = Deno.env.get("OPENAI_REALTIME_VOICE") ?? "marin";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const ALLOWED_REALTIME_VOICES = new Set(["marin", "cedar", "coral", "shimmer"]);
+const COACH_NAME_BY_VOICE: Record<string, string> = {
+  marin: "Coach Tyler",
+  cedar: "Coach Devin",
+  coral: "Coach Maya",
+  shimmer: "Coach Ava",
+};
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -108,9 +115,12 @@ Deno.serve(async (req: Request) => {
 
     const { data: profile } = await supabase
       .from("profiles")
-      .select("timezone")
+      .select("timezone, realtime_coach_voice")
       .eq("id", userId)
       .maybeSingle();
+    const realtimeVoice = ALLOWED_REALTIME_VOICES.has(profile?.realtime_coach_voice ?? "")
+      ? profile!.realtime_coach_voice
+      : DEFAULT_REALTIME_VOICE;
     const dailySpent = await getDailyUsageTotals(supabase, userId, profile?.timezone ?? null);
     if (dailySpent >= COACH_LIMITS.maxDailyCostUsd) {
       return jsonResponse(
@@ -180,9 +190,15 @@ Deno.serve(async (req: Request) => {
     }
 
     const sessionConfig = buildRealtimeSessionConfig(
-      buildRealtimeInstructions(ctx, answers ?? null, body.timer, body.conversation_summary),
+      buildRealtimeInstructions(
+        ctx,
+        answers ?? null,
+        body.timer,
+        body.conversation_summary,
+        COACH_NAME_BY_VOICE[realtimeVoice] ?? "Coach Tyler"
+      ),
       REALTIME_MODEL,
-      REALTIME_VOICE,
+      realtimeVoice,
       body.audio_profile === "speaker" ? "speaker" : "bluetooth"
     );
 

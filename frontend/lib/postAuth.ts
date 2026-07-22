@@ -27,7 +27,16 @@ export async function routeAfterSocialAuth(
     return;
   }
 
-  await submitOnboardingAnswers(userId, draft);
+  await Promise.all([
+    submitOnboardingAnswers(userId, draft),
+    supabase
+      .from("profiles")
+      .update({ realtime_coach_voice: draft.realtime_coach_voice ?? "marin" })
+      .eq("id", userId)
+      .then(({ error }) => {
+        if (error) throw error;
+      }),
+  ]);
   await clearOnboardingDraft();
   await refreshProfile();
   router.replace({

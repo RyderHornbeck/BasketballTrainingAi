@@ -12,6 +12,12 @@ import {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const COACH_NAME_BY_VOICE: Record<string, string> = {
+  marin: "Coach Tyler",
+  cedar: "Coach Devin",
+  coral: "Coach Maya",
+  shimmer: "Coach Ava",
+};
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -47,6 +53,12 @@ Deno.serve(async (req: Request) => {
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+    const { data: coachProfile } = await supabase
+      .from("profiles")
+      .select("realtime_coach_voice")
+      .eq("id", userId)
+      .maybeSingle();
+    const coachName = COACH_NAME_BY_VOICE[coachProfile?.realtime_coach_voice ?? ""] ?? "Coach Tyler";
 
     const body = (await req.json().catch(() => ({}))) as {
       day_id?: string;
@@ -169,7 +181,7 @@ Deno.serve(async (req: Request) => {
           updated_context: refreshedContext ? buildRealtimeNavigationUpdate(refreshedContext) : null,
           updated_instructions: refreshedContext
             && (cached.db_changed || body.refresh_context)
-            ? buildRealtimeInstructions(refreshedContext, answers ?? null)
+            ? buildRealtimeInstructions(refreshedContext, answers ?? null, undefined, undefined, coachName)
             : null,
           tool_kind: cached.db_changed ? "mutation" : "read_only",
           requires_spoken_confirmation: cached.db_changed,
@@ -256,7 +268,7 @@ Deno.serve(async (req: Request) => {
       updated_context: refreshedContext ? buildRealtimeNavigationUpdate(refreshedContext) : null,
       updated_instructions: refreshedContext
         && (outcome.dbChanged || body.refresh_context)
-        ? buildRealtimeInstructions(refreshedContext, answers ?? null)
+        ? buildRealtimeInstructions(refreshedContext, answers ?? null, undefined, undefined, coachName)
         : null,
       tool_kind: toolKind,
       requires_spoken_confirmation: toolKind === "mutation" && !outcome.skipModelResponse,

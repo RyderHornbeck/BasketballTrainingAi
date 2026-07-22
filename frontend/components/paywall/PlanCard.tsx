@@ -23,19 +23,18 @@ export function PlanCard({
   disabled,
 }: PlanCardProps) {
   const title = plan.duration === "annual" ? "Annual" : "Monthly";
-  const trialText =
+  const billingSuffix = plan.duration === "annual" ? "/yr" : "/mo";
+  const recurringPrice = `${plan.localizedRegularPrice}${billingSuffix}`;
+  const priceText =
     plan.hasEligibleFreeTrial && plan.introDurationCount && plan.introDurationUnit
-      ? `${plan.introDurationCount} ${
-          plan.introDurationUnit.charAt(0).toUpperCase() +
-          plan.introDurationUnit.slice(1)
-        } Free Trial`
-      : null;
+      ? `${plan.introDurationCount}-${plan.introDurationUnit} free trial, then ${recurringPrice}`
+      : recurringPrice;
 
   return (
     <Pressable
       accessibilityRole="radio"
       accessibilityState={{ selected, disabled }}
-      accessibilityLabel={`${title}${trialText ? `, ${trialText}` : ""}`}
+      accessibilityLabel={`${title}, ${priceText}`}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
@@ -49,9 +48,7 @@ export function PlanCard({
       ]}
     >
       <Text style={[styles.title, { color: textColor }]}>{title}</Text>
-      {trialText ? (
-        <Text style={[styles.trial, { color: accentColor }]}>{trialText}</Text>
-      ) : null}
+      <Text style={[styles.trial, { color: accentColor }]}>{priceText}</Text>
     </Pressable>
   );
 }

@@ -418,7 +418,7 @@ export default function PaywallScreen() {
         },
         {
           title: "Then",
-          description: `${selectedPlan.localizedRegularPrice} per ${selectedPlan.periodLabel} unless canceled.`,
+          description: `${selectedPlan.localizedRegularPrice} per ${selectedPlan.periodLabel}, automatically renews unless canceled.`,
         },
       ]
     : selectedPlan
