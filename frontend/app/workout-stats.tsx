@@ -242,7 +242,7 @@ export default function WorkoutStatsScreen() {
                 locations={[0, 0.42, 1]}
                 style={styles.shareCard}
               >
-                <Text style={styles.imageDayLabel}>Day {dayNumber} stats</Text>
+                <Text style={styles.imageDayLabel}>Day {dayNumber} Workout</Text>
 
                 <StatsStrip
                   small
@@ -427,9 +427,11 @@ const styles = StyleSheet.create({
   },
   imageDayLabel: {
     color: "#1A1A1A",
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: "800",
     paddingHorizontal: 2,
+    alignSelf: "stretch",
+    textAlign: "center",
   },
   sectionLabel: {
     fontSize: 13,
