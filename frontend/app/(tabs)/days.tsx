@@ -1,4 +1,5 @@
 import { Card } from "@/components/Card";
+import { Button } from "@/components/Button";
 import { DaySelector } from "@/components/DaySelector";
 import { ExerciseCard } from "@/components/ExerciseCard";
 import { ProgressRing } from "@/components/ProgressRing";
@@ -48,6 +49,7 @@ import {
   TimerIcon,
 } from "phosphor-react-native";
 import { useFocusEffect, useRouter } from "expo-router";
+import NetInfo from "@react-native-community/netinfo";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -91,7 +93,6 @@ export default function DaysScreen() {
   const logSaveQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
   const latestLogInputRef = useRef<Map<string, ExerciseLogInput>>(new Map());
   const logSaveErrorShownRef = useRef(false);
-  const initialGenerationAttemptedRef = useRef(false);
   const finishingRef = useRef(false);
   const [finishingWorkout, setFinishingWorkout] = useState(false);
   const [retryingBlock, setRetryingBlock] = useState(false);
@@ -108,22 +109,58 @@ export default function DaysScreen() {
     return sorted[0].day_number;
   }, [days]);
 
+  const retryInitialPlanGeneration = useCallback(async () => {
+    if (plan || planLoading) return;
+    try {
+      await requestPlanGeneration();
+      await refreshPlan();
+    } catch (generationError) {
+      console.error("Unable to start initial plan generation:", generationError);
+      reportNetworkFailure("generate-plan");
+      throw generationError;
+    }
+  }, [plan, planLoading, refreshPlan]);
+
   useEffect(() => {
-    if (
-      planLoading ||
-      plan ||
-      generationRequest ||
-      initialGenerationAttemptedRef.current
-    ) {
+    if (planLoading || plan) return;
+
+    // A generating request is already server-owned and is polled by usePlan.
+    // A pending request is different: it can be stranded when the initial
+    // Edge Function invocation was attempted in airplane mode, so it must be
+    // invoked again once this screen has a connection.
+    if (generationRequest?.status === "generating") {
       return;
     }
-    initialGenerationAttemptedRef.current = true;
-    void requestPlanGeneration()
-      .then(refreshPlan)
-      .catch((generationError) => {
-        console.error("Unable to start initial plan generation:", generationError);
-      });
-  }, [generationRequest, plan, planLoading, refreshPlan]);
+
+    let cancelled = false;
+    const retry = () => {
+      if (cancelled) return;
+      if (generationRequest?.status === "completed") {
+        void refreshPlan();
+        return;
+      }
+      void retryInitialPlanGeneration().catch(() => {});
+    };
+
+    // Attempt immediately, then attempt again as soon as connectivity returns.
+    // This makes a post-checkout airplane-mode failure self-healing without
+    // requiring the user to force-close or find a hidden regeneration control.
+    retry();
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      const offline = state.isConnected === false || state.isInternetReachable === false;
+      if (!offline) retry();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [
+    generationRequest?.status,
+    plan,
+    planLoading,
+    refreshPlan,
+    retryInitialPlanGeneration,
+  ]);
 
   useEffect(() => {
     if (selectedDayNumber == null && defaultDayNumber != null) {
@@ -587,7 +624,21 @@ export default function DaysScreen() {
   if (!plan || days.length === 0) {
     return (
       <SafeAreaView style={[styles.center, { backgroundColor: "transparent" }]} edges={["top"]}>
-        <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No active plan yet.</Text>
+        <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+          {generationRequest?.status === "failed"
+            ? "We couldn’t create your plan yet."
+            : "Preparing your personalized plan…"}
+        </Text>
+        <Text style={[styles.emptyPlanHint, { color: colors.textMuted }]}>
+          Check your connection. We’ll retry automatically when you’re back online.
+        </Text>
+        <Button
+          title="Try Again"
+          onPress={() => {
+            void retryInitialPlanGeneration().catch(() => {});
+          }}
+          style={styles.emptyPlanRetry}
+        />
       </SafeAreaView>
     );
   }
@@ -1115,6 +1166,17 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 15,
+  },
+  emptyPlanHint: {
+    marginTop: 8,
+    maxWidth: 290,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: "center",
+  },
+  emptyPlanRetry: {
+    marginTop: 20,
+    minWidth: 160,
   },
   scroll: {
     flex: 1,
