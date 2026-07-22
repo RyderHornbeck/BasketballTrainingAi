@@ -4,8 +4,8 @@ import { useTheme } from "@/hooks/useTheme";
 import { isLikelyNetworkError, reportNetworkFailure } from "@/lib/connectivity";
 import { routeAfterSocialAuth } from "@/lib/postAuth";
 import * as AppleAuthentication from "expo-apple-authentication";
-import { Link } from "expo-router";
-import { GoogleLogoIcon } from "phosphor-react-native";
+import { Link, router } from "expo-router";
+import { ArrowLeftIcon, GoogleLogoIcon } from "phosphor-react-native";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
@@ -67,6 +67,23 @@ export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
+      {mode === "signup" ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to onboarding"
+          onPress={() => {
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              router.replace("/onboarding");
+            }
+          }}
+          hitSlop={10}
+          style={[styles.backButton, { borderColor: colors.border, backgroundColor: colors.card }]}
+        >
+          <ArrowLeftIcon size={20} color={colors.text} weight="bold" />
+        </Pressable>
+      ) : null}
       <View style={styles.brand}>
         <Image
           accessibilityLabel="Court Coach AI"
@@ -179,6 +196,17 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: "center",
     padding: 24,
+  },
+  backButton: {
+    position: "absolute",
+    top: 20,
+    left: 20,
+    width: 42,
+    height: 42,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderRadius: 21,
   },
   brand: {
     alignItems: "center",

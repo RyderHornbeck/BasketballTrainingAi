@@ -19,9 +19,18 @@ const COURT_LINE_COLOR = "#F2721D";
 interface ShotMapProps {
   logs: ShotMapLogEntry[];
   width?: number;
+  title?: string;
+  subtitle?: string;
+  filterByWeek?: boolean;
 }
 
-export function ShotMap({ logs, width }: ShotMapProps) {
+export function ShotMap({
+  logs,
+  width,
+  title = "Shot Map",
+  subtitle = "Where you shoot best",
+  filterByWeek = true,
+}: ShotMapProps) {
   const { colors, scheme } = useTheme();
   const [weekOffset, setWeekOffset] = useState(0);
   const screenWidth = Dimensions.get("window").width;
@@ -31,12 +40,14 @@ export function ShotMap({ logs, width }: ShotMapProps) {
   const data = useMemo(
     () =>
       computeShotMapData(
-        logs.filter((log) => {
-          const date = new Date(log.created_at);
-          return date >= weekRange.start && date <= weekRange.end;
-        })
+        filterByWeek
+          ? logs.filter((log) => {
+              const date = new Date(log.created_at);
+              return date >= weekRange.start && date <= weekRange.end;
+            })
+          : logs
       ),
-    [logs, weekRange]
+    [filterByWeek, logs, weekRange]
   );
 
   const zoneStatsById = useMemo(
@@ -52,9 +63,9 @@ export function ShotMap({ logs, width }: ShotMapProps) {
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <View style={styles.headerRow}>
         <View style={styles.headerLeft}>
-          <Text style={[styles.title, { color: colors.text }]}>Shot Map</Text>
+          <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
           <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-            Where you shoot best
+            {subtitle}
           </Text>
         </View>
         <View style={styles.overallWrap}>
@@ -65,29 +76,31 @@ export function ShotMap({ logs, width }: ShotMapProps) {
         </View>
       </View>
 
-      <View style={styles.weekNavRow}>
-        <Pressable
-          onPress={() => setWeekOffset((value) => value + 1)}
-          hitSlop={8}
-          style={[styles.weekNavButton, { borderColor: colors.border }]}
-        >
-          <CaretLeftIcon size={18} color={colors.text} weight="bold" />
-        </Pressable>
-        <Text style={[styles.weekNavLabel, { color: colors.textSecondary }]}>
-          {weekRange.label}
-        </Text>
-        <Pressable
-          onPress={() => setWeekOffset((value) => Math.max(0, value - 1))}
-          disabled={weekOffset === 0}
-          hitSlop={8}
-          style={[
-            styles.weekNavButton,
-            { borderColor: colors.border, opacity: weekOffset > 0 ? 1 : 0.35 },
-          ]}
-        >
-          <CaretRightIcon size={18} color={colors.text} weight="bold" />
-        </Pressable>
-      </View>
+      {filterByWeek ? (
+        <View style={styles.weekNavRow}>
+          <Pressable
+            onPress={() => setWeekOffset((value) => value + 1)}
+            hitSlop={8}
+            style={[styles.weekNavButton, { borderColor: colors.border }]}
+          >
+            <CaretLeftIcon size={18} color={colors.text} weight="bold" />
+          </Pressable>
+          <Text style={[styles.weekNavLabel, { color: colors.textSecondary }]}>
+            {weekRange.label}
+          </Text>
+          <Pressable
+            onPress={() => setWeekOffset((value) => Math.max(0, value - 1))}
+            disabled={weekOffset === 0}
+            hitSlop={8}
+            style={[
+              styles.weekNavButton,
+              { borderColor: colors.border, opacity: weekOffset > 0 ? 1 : 0.35 },
+            ]}
+          >
+            <CaretRightIcon size={18} color={colors.text} weight="bold" />
+          </Pressable>
+        </View>
+      ) : null}
 
       <Svg
         width={mapWidth}

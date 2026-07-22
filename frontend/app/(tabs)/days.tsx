@@ -731,6 +731,39 @@ export default function DaysScreen() {
               </Card>
             </View>
 
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`View Day ${selectedDayNumber} workout stats`}
+              onPress={() => {
+                actionHaptic();
+                router.push({
+                  pathname: "/workout-stats",
+                  params: {
+                    dayId: dayDetail.id,
+                    dayNumber: String(dayDetail.day_number ?? selectedDayNumber ?? 1),
+                  },
+                });
+              }}
+              hitSlop={4}
+              pressRetentionOffset={28}
+              style={({ pressed }) => [
+                styles.startWorkoutCard,
+                styles.workoutStatsButton,
+                {
+                  backgroundColor: colors.accent,
+                  opacity: pressed ? 0.84 : 1,
+                  shadowColor: colors.shadow,
+                },
+              ]}
+            >
+              <View style={styles.startWorkoutTextBlock}>
+                <Text style={styles.startWorkoutTitle}>Workout Stats</Text>
+                <Text style={styles.startWorkoutSubtitle}>
+                  View and share this day&apos;s results
+                </Text>
+              </View>
+            </Pressable>
+
             <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>This Week</Text>
             <Card style={styles.weekStatsCard}>
               <View style={styles.weekStat}>
@@ -1246,6 +1279,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.22,
     shadowRadius: 16,
     elevation: 6,
+  },
+  workoutStatsButton: {
+    marginTop: 0,
+    marginBottom: 20,
   },
   startWorkoutTextBlock: {
     flex: 1,

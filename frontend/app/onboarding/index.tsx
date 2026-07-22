@@ -401,9 +401,6 @@ export default function OnboardingScreen() {
 
       {step === 7 && (
         <View>
-          <Text style={[styles.helperText, { color: colors.textSecondary }]}>
-            Choose every area you feel confident in.
-          </Text>
           <ChipGroup
             options={STRENGTH_OPTIONS.map((strength) => ({
               label: strength,
@@ -419,9 +416,6 @@ export default function OnboardingScreen() {
 
       {step === 8 && (
         <View>
-          <Text style={[styles.helperText, { color: colors.textSecondary }]}>
-            Choose every area that needs extra work.
-          </Text>
           <ChipGroup
             options={WEAKNESS_OPTIONS.map((weakness) => ({
               label: weakness,
@@ -642,7 +636,7 @@ const STEP_TITLES = [
   { title: "Rate your skills", subtitle: "A quick self-assessment, 0 to 10." },
   { title: "Training days", subtitle: "How often can you train each week?" },
   { title: "Workout length", subtitle: "How much time do you have per workout?" },
-  { title: "Workout intensity", subtitle: "Last step -- choose how challenging you want it to feel." },
+  { title: "Workout intensity", subtitle: "Choose how challenging you want it to feel." },
   {
     title: "Preparing your first workouts",
     subtitle: "Reviewing your answers and preparing your personalized training setup.",
@@ -941,11 +935,6 @@ const styles = StyleSheet.create({
   weaknessLabel: {
     marginTop: 24,
     marginBottom: 4,
-  },
-  helperText: {
-    fontSize: 13,
-    lineHeight: 18,
-    marginBottom: 14,
   },
   chipGroup: {
     flexDirection: "column",
