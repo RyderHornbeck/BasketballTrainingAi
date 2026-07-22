@@ -162,6 +162,17 @@ function scoreClip(
   const userLevel = (answers.overall_skill_level ?? "beginner").toLowerCase();
   if (clip.difficulty_level === userLevel) score += 1;
 
+  const userPosition = (answers.position ?? "unknown").trim().toLowerCase();
+  if (
+    userPosition !== "unknown" &&
+    (clip.positions ?? []).some((position) => {
+      const normalized = position.trim().toLowerCase();
+      return normalized === userPosition || normalized.includes(userPosition);
+    })
+  ) {
+    score += 2;
+  }
+
   if (!answers.has_court_access) {
     if (["ball_handling", "footwork", "strength", "mobility", "conditioning"].includes(clip.category)) {
       score += 1;
@@ -838,6 +849,8 @@ async function runGeneration(
       composition: context.composition,
       daysPerWeek: answers.days_per_week ?? 3,
       mainGoal: answers.main_goal,
+      preferredDifficulty: trainingAnswers.overall_skill_level,
+      preferredPosition: trainingAnswers.position,
       hasCourtAccess: true,
       samples: context.samples,
     });
@@ -853,6 +866,8 @@ async function runGeneration(
       composition: context.composition,
       daysPerWeek: answers.days_per_week ?? 3,
       mainGoal: answers.main_goal,
+      preferredDifficulty: trainingAnswers.overall_skill_level,
+      preferredPosition: trainingAnswers.position,
       hasCourtAccess: true,
       samples: context.samples,
     };

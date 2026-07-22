@@ -5,6 +5,7 @@ import { ThemeMode } from "@/components/ThemeProvider";
 import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
+import { reportNetworkFailure } from "@/lib/connectivity";
 import { actionHaptic } from "@/lib/haptics";
 import { PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL } from "@/lib/legal";
 import { clearOnboardingDraft } from "@/lib/onboardingDraft";
@@ -25,8 +26,8 @@ import {
 } from "@/lib/workoutReminders";
 import { OnboardingAnswers } from "@/types/database";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { router } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Linking,
@@ -44,14 +45,23 @@ const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
   { label: "Dark", value: "dark" },
 ];
 
+const SKILL_LEVEL_OPTIONS = ["beginner", "intermediate", "advanced", "elite"] as const;
+const POSITION_OPTIONS = ["Guard", "Wing", "Big", "Unknown"] as const;
+const WORKOUT_MINUTE_OPTIONS = [15, 30, 45, 60, 75, 90] as const;
+
+type AthleteDetails = Pick<
+  OnboardingAnswers,
+  "overall_skill_level" | "position" | "minutes_per_workout"
+>;
+type EditableAthleteField = keyof AthleteDetails;
+
 export default function ProfileScreen() {
   const { colors, mode, setMode } = useTheme();
   const { user, profile, signOut } = useAuth();
-  const [athleteDetails, setAthleteDetails] = useState<Pick<
-    OnboardingAnswers,
-    "overall_skill_level" | "position"
-  > | null>(null);
+  const [athleteDetails, setAthleteDetails] = useState<AthleteDetails | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(true);
+  const [athleteSaving, setAthleteSaving] = useState<EditableAthleteField | null>(null);
+  const [showTrainingUpdateNotice, setShowTrainingUpdateNotice] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [reminder, setReminder] = useState<WorkoutReminder>(defaultWorkoutReminder);
   const [reminderLoading, setReminderLoading] = useState(true);
@@ -73,7 +83,7 @@ export default function ProfileScreen() {
     void Promise.all([
       supabase
         .from("onboarding_answers")
-        .select("overall_skill_level, position")
+        .select("overall_skill_level, position, minutes_per_workout")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -85,8 +95,7 @@ export default function ProfileScreen() {
         console.error("Failed to load athlete details:", detailsResult.error.message);
       }
       setAthleteDetails(
-        (detailsResult.data as Pick<OnboardingAnswers, "overall_skill_level" | "position"> | null) ??
-          null
+        (detailsResult.data as AthleteDetails | null) ?? null
       );
       setDetailsLoading(false);
       setReminder(storedReminder);
@@ -98,6 +107,17 @@ export default function ProfileScreen() {
       mounted = false;
     };
   }, [user]);
+
+  useFocusEffect(
+    useCallback(
+      () => () => {
+        // The confirmation belongs only to the visit in which a preference
+        // changed; returning to Profile starts clean.
+        setShowTrainingUpdateNotice(false);
+      },
+      []
+    )
+  );
 
   useEffect(() => {
     const voice = profile?.realtime_coach_voice;
@@ -208,6 +228,33 @@ export default function ProfileScreen() {
     setCoachSaving(false);
   };
 
+  const handleAthleteDetailChange = async (
+    field: EditableAthleteField,
+    value: string | number
+  ) => {
+    if (!user || !athleteDetails || athleteSaving) return;
+    if (athleteDetails[field] === value) return;
+
+    actionHaptic();
+    const previousDetails = athleteDetails;
+    setAthleteDetails({ ...athleteDetails, [field]: value } as AthleteDetails);
+    setAthleteSaving(field);
+
+    const { error } = await supabase
+      .from("onboarding_answers")
+      .update({ [field]: value })
+      .eq("user_id", user.id);
+
+    if (error) {
+      setAthleteDetails(previousDetails);
+      reportNetworkFailure("athlete-preferences");
+      Alert.alert("Could not update athlete settings", "Please check your connection and try again.");
+    } else {
+      setShowTrainingUpdateNotice(true);
+    }
+    setAthleteSaving(null);
+  };
+
   const handleDeleteAccount = () => {
     Alert.alert(
       "Permanently delete account?",
@@ -254,20 +301,61 @@ export default function ProfileScreen() {
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Athlete</Text>
         <Card style={styles.card}>
           {detailsLoading ? (
-            <ProfileRowsSkeleton rows={3} />
+            <ProfileRowsSkeleton rows={4} />
           ) : (
             <>
-              <ProfileRow
+              <AthletePreferencePicker
                 label="Skill Level"
-                value={capitalize(athleteDetails?.overall_skill_level) ?? "--"}
+                options={SKILL_LEVEL_OPTIONS.map((value) => ({
+                  label: capitalize(value) ?? value,
+                  value,
+                }))}
+                selected={athleteDetails?.overall_skill_level ?? null}
+                disabled={athleteSaving !== null}
+                onSelect={(value) =>
+                  void handleAthleteDetailChange("overall_skill_level", value)
+                }
               />
               <Divider />
-              <ProfileRow label="Position" value={athleteDetails?.position ?? "--"} />
+              <AthletePreferencePicker
+                label="Position"
+                options={POSITION_OPTIONS.map((value) => ({ label: value, value }))}
+                selected={athleteDetails?.position ?? null}
+                disabled={athleteSaving !== null}
+                onSelect={(value) => void handleAthleteDetailChange("position", value)}
+              />
+              <Divider />
+              <AthletePreferencePicker
+                label="Time per workout"
+                options={WORKOUT_MINUTE_OPTIONS.map((value) => ({
+                  label: `${value} min`,
+                  value: String(value),
+                }))}
+                selected={
+                  athleteDetails?.minutes_per_workout != null
+                    ? String(athleteDetails.minutes_per_workout)
+                    : null
+                }
+                disabled={athleteSaving !== null}
+                onSelect={(value) =>
+                  void handleAthleteDetailChange("minutes_per_workout", Number(value))
+                }
+              />
               <Divider />
               <ProfileRow
                 label="Joined Court Coach"
                 value={formatJoinedDate(profile?.created_at)}
               />
+              {showTrainingUpdateNotice ? (
+                <View
+                  accessibilityLiveRegion="polite"
+                  style={[styles.trainingUpdateNotice, { backgroundColor: colors.accentMuted }]}
+                >
+                  <Text style={[styles.trainingUpdateNoticeText, { color: colors.accent }]}>
+                    In the next 5-workout block, you will see these changes.
+                  </Text>
+                </View>
+              ) : null}
             </>
           )}
         </Card>
@@ -469,6 +557,58 @@ function ProfileRowsSkeleton({ rows }: { rows: number }) {
   );
 }
 
+function AthletePreferencePicker({
+  label,
+  options,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  label: string;
+  options: { label: string; value: string }[];
+  selected: string | null;
+  disabled: boolean;
+  onSelect: (value: string) => void;
+}) {
+  const { colors } = useTheme();
+  return (
+    <View style={styles.athletePreference}>
+      <Text style={[styles.athletePreferenceLabel, { color: colors.textMuted }]}>{label}</Text>
+      <View style={styles.athleteOptions}>
+        {options.map((option) => {
+          const active = option.value === selected;
+          return (
+            <Pressable
+              key={option.value}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: active, disabled }}
+              disabled={disabled}
+              onPress={() => onSelect(option.value)}
+              style={({ pressed }) => [
+                styles.athleteOption,
+                {
+                  backgroundColor: active ? colors.accent : colors.cardAlt,
+                  borderColor: active ? colors.accent : colors.border,
+                  opacity: disabled || pressed ? 0.7 : 1,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.athleteOptionText,
+                  { color: active ? "#FFFFFF" : colors.text },
+                ]}
+              >
+                {option.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 function ProfileRow({ label, value }: { label: string; value: string }) {
   const { colors } = useTheme();
   return (
@@ -532,6 +672,43 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     maxWidth: "60%",
     textAlign: "right",
+  },
+  athletePreference: {
+    paddingVertical: 4,
+  },
+  athletePreferenceLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 9,
+  },
+  athleteOptions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+  },
+  athleteOption: {
+    minHeight: 36,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  athleteOptionText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  trainingUpdateNotice: {
+    marginTop: 14,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  trainingUpdateNoticeText: {
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 18,
+    textAlign: "center",
   },
   divider: {
     height: 1,

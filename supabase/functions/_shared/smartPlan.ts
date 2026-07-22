@@ -28,6 +28,7 @@ export interface PlanClip {
   description: string | null;
   coaching_notes: string | null;
   requires_both_sides: boolean;
+  positions?: string[] | null;
 }
 
 export interface SmartExercise {
@@ -317,6 +318,8 @@ interface BuildContext {
   composition: CompositionRules;
   daysPerWeek: number;
   mainGoal: string | null;
+  preferredDifficulty: string | null;
+  preferredPosition: string | null;
   hasCourtAccess: boolean;
   history: DrillHistory;
 }
@@ -529,8 +532,31 @@ function eligibleClips(
     if (fresh.length >= 3) candidates = fresh;
   }
 
+  const preferredDifficulty = context.preferredDifficulty?.trim().toLowerCase() ?? "";
+  const preferredPosition = context.preferredPosition?.trim().toLowerCase() ?? "";
+  const preferenceRank = (clip: PlanClip) => {
+    let rank = 0;
+    if (
+      preferredDifficulty &&
+      clip.difficulty_level?.trim().toLowerCase() === preferredDifficulty
+    ) {
+      rank -= 2;
+    }
+    if (
+      preferredPosition &&
+      preferredPosition !== "unknown" &&
+      (clip.positions ?? []).some((position) =>
+        position.trim().toLowerCase().includes(preferredPosition)
+      )
+    ) {
+      rank -= 1;
+    }
+    return rank;
+  };
+
   return [...candidates].sort(
     (a, b) =>
+      preferenceRank(a) - preferenceRank(b) ||
       a.category.localeCompare(b.category) ||
       (a.difficulty_level ?? "").localeCompare(b.difficulty_level ?? "") ||
       a.id.localeCompare(b.id)
@@ -939,6 +965,8 @@ export interface SmartPlanInput {
   composition: CompositionRules;
   daysPerWeek: number;
   mainGoal: string | null;
+  preferredDifficulty?: string | null;
+  preferredPosition?: string | null;
   hasCourtAccess: boolean;
   samples: PerformanceSample[];
 }
@@ -953,6 +981,8 @@ export function buildSmartPlan(clips: PlanClip[], input: SmartPlanInput): SmartP
     composition: input.composition,
     daysPerWeek: input.daysPerWeek,
     mainGoal: input.mainGoal,
+    preferredDifficulty: input.preferredDifficulty ?? null,
+    preferredPosition: input.preferredPosition ?? null,
     hasCourtAccess: input.hasCourtAccess,
     history,
   };
@@ -1139,6 +1169,8 @@ export function repairSmartPlan(
     composition: input.composition,
     daysPerWeek: input.daysPerWeek,
     mainGoal: input.mainGoal,
+    preferredDifficulty: input.preferredDifficulty ?? null,
+    preferredPosition: input.preferredPosition ?? null,
     hasCourtAccess: input.hasCourtAccess,
     history,
   };
