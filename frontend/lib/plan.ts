@@ -365,8 +365,8 @@ export async function removeExerciseFromWorkout(
   emitWorkoutUpdated();
 }
 
-/** Full adaptive plan length shown in the day selector strip. */
-export const PLAN_TOTAL_DAYS = 100;
+/** Full adaptive plan length shown in the day selector strip (200 five-day blocks). */
+export const PLAN_TOTAL_DAYS = 1_000;
 
 /** Workouts unlock sequentially: complete Day N to open Day N+1 immediately. */
 export function isDayUnlocked(day: WorkoutDay, allDays?: readonly WorkoutDay[]): boolean {
