@@ -580,7 +580,14 @@ export default function OnboardingScreen() {
                     {coach.description}
                   </Text>
                 </View>
-                {selected ? <CheckCircleIcon size={24} color={colors.accent} weight="fill" /> : null}
+                <View style={styles.coachChoiceStatus}>
+                  {coach.recommended ? (
+                    <Text style={[styles.coachChoiceRecommended, { color: colors.accent }]}>
+                      Recommended
+                    </Text>
+                  ) : null}
+                  {selected ? <CheckCircleIcon size={24} color={colors.accent} weight="fill" /> : null}
+                </View>
               </Pressable>
             );
           })}
@@ -904,6 +911,10 @@ const styles = StyleSheet.create({
   coachChoiceCopy: {
     flex: 1,
   },
+  coachChoiceStatus: {
+    alignItems: "flex-end",
+    gap: 6,
+  },
   coachChoiceName: {
     fontSize: 16,
     fontWeight: "800",
@@ -911,6 +922,10 @@ const styles = StyleSheet.create({
   coachChoiceDescription: {
     fontSize: 13,
     marginTop: 3,
+  },
+  coachChoiceRecommended: {
+    fontSize: 12,
+    fontWeight: "800",
   },
   coachChoiceFootnote: {
     fontSize: 12,

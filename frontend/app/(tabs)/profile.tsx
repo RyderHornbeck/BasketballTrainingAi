@@ -355,7 +355,9 @@ export default function ProfileScreen() {
                         {coach.description}
                       </Text>
                     </View>
-                    {selected ? <Text style={[styles.coachSelected, { color: colors.accent }]}>Selected</Text> : null}
+                    {coach.recommended ? (
+                      <Text style={[styles.coachSelected, { color: colors.accent }]}>Recommended</Text>
+                    ) : null}
                   </Pressable>
                 </React.Fragment>
               );

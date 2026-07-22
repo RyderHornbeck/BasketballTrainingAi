@@ -1,27 +1,31 @@
 export const COACH_PROFILES = [
   {
-    id: "tyler",
-    name: "Coach Tyler",
-    description: "Calm and focused.",
-    voice: "ash",
-  },
-  {
     id: "devin",
     name: "Coach Devin",
     description: "Confident and energetic.",
     voice: "cedar",
+    recommended: true,
+  },
+  {
+    id: "tyler",
+    name: "Coach Tyler",
+    description: "Calm and focused.",
+    voice: "ash",
+    recommended: false,
   },
   {
     id: "maya",
     name: "Coach Maya",
     description: "Upbeat and encouraging.",
     voice: "marin",
+    recommended: true,
   },
   {
     id: "ava",
     name: "Coach Ava",
     description: "Patient and supportive.",
     voice: "shimmer",
+    recommended: false,
   },
 ] as const;
 
