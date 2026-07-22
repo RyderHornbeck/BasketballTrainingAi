@@ -9,6 +9,7 @@ import { actionHaptic } from "@/lib/haptics";
 import { getWorkoutDayWithExercises } from "@/lib/plan";
 import { ShotMapLogEntry } from "@/lib/shotMap";
 import { WorkoutDayWithExercises } from "@/types/plan";
+import * as FileSystem from "expo-file-system/legacy";
 import { LinearGradient } from "expo-linear-gradient";
 import * as MediaLibrary from "expo-media-library";
 import { router, useLocalSearchParams } from "expo-router";
@@ -16,7 +17,7 @@ import * as Sharing from "expo-sharing";
 import {
   ArrowLeftIcon,
   DownloadSimpleIcon,
-  ShareNetworkIcon,
+  ExportIcon,
 } from "phosphor-react-native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -46,11 +47,10 @@ export default function WorkoutStatsScreen() {
   const [day, setDay] = useState<WorkoutDayWithExercises | null>(null);
   const [loading, setLoading] = useState(Boolean(dayId));
   const [sharing, setSharing] = useState(false);
-  const [captureMode, setCaptureMode] = useState(false);
   const captureRef = useRef<ViewShotRef>(null);
   const requestedDayNumber = Number(params.dayNumber);
   const dayNumber = day?.day_number ?? (Number.isFinite(requestedDayNumber) ? requestedDayNumber : 1);
-  const shotMapWidth = Math.min(520, Dimensions.get("window").width - 92);
+  const shotMapWidth = Math.min(440, Dimensions.get("window").width - 142);
 
   useEffect(() => {
     let mounted = true;
@@ -77,6 +77,7 @@ export default function WorkoutStatsScreen() {
         hasPerformance: false,
         makes: 0,
         shots: 0,
+        misses: 0,
         shotMapLogs: [] as ShotMapLogEntry[],
         categoryCounts: Object.fromEntries(
           DRILL_CATEGORIES.map(({ key }) => [key, 0])
@@ -128,6 +129,7 @@ export default function WorkoutStatsScreen() {
       hasPerformance: performance.hasData,
       makes,
       shots,
+      misses: Math.max(0, shots - makes),
       shotMapLogs,
       categoryCounts,
     };
@@ -138,15 +140,7 @@ export default function WorkoutStatsScreen() {
     : colors.textMuted;
 
   const captureImage = useCallback(async () => {
-    setCaptureMode(true);
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-    });
-    try {
-      return await captureRef.current?.capture?.();
-    } finally {
-      setCaptureMode(false);
-    }
+    return await captureRef.current?.capture?.();
   }, []);
 
   const handleShare = async () => {
@@ -187,9 +181,19 @@ export default function WorkoutStatsScreen() {
       }
       const uri = await captureImage();
       if (!uri) throw new Error("Unable to create workout stats image");
-      await MediaLibrary.saveToLibraryAsync(uri);
+      const cacheDirectory = FileSystem.cacheDirectory;
+      if (!cacheDirectory) throw new Error("Temporary storage is unavailable");
+      const sourceUri = uri.startsWith("file://") ? uri : `file://${uri}`;
+      const exportUri = `${cacheDirectory}court-coach-day-${dayNumber}-${Date.now()}.png`;
+      await FileSystem.copyAsync({ from: sourceUri, to: exportUri });
+      try {
+        await MediaLibrary.saveToLibraryAsync(exportUri);
+      } finally {
+        await FileSystem.deleteAsync(exportUri, { idempotent: true }).catch(() => {});
+      }
       Alert.alert("Saved", "Your workout stats image was saved to Photos.");
-    } catch {
+    } catch (error) {
+      console.error("Failed to save workout stats image:", error);
       Alert.alert("Could not save stats", "Please try again.");
     } finally {
       setSharing(false);
@@ -227,26 +231,21 @@ export default function WorkoutStatsScreen() {
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.scrollContent}
           >
-            <ViewShot ref={captureRef} options={{ format: "png", quality: 1 }}>
+            <Text style={[styles.dayLabel, { color: colors.textMuted }]}>
+              Day {dayNumber} stats
+            </Text>
+            <ViewShot
+              ref={captureRef}
+              options={{ format: "png", quality: 1 }}
+              style={styles.captureFrame}
+            >
               <LinearGradient
-                colors={
-                  captureMode
-                    ? (["#FF6A00", "#FF9A3D", "#FFFFFF"] as const)
-                    : ([colors.background, colors.background] as const)
-                }
-                locations={captureMode ? [0, 0.42, 1] : [0, 1]}
+                colors={["#FF6A00", "#FF9A3D", "#FFFFFF"]}
+                locations={[0, 0.42, 1]}
                 style={styles.shareCard}
               >
-                <Text
-                  style={[
-                    styles.dayLabel,
-                    { color: captureMode ? "rgba(20,20,20,0.68)" : colors.textMuted },
-                  ]}
-                >
-                  Day {dayNumber} stats
-                </Text>
-
                 <StatsStrip
+                  small
                   items={[
                     {
                       label: "Performance",
@@ -254,47 +253,39 @@ export default function WorkoutStatsScreen() {
                       color: performanceColor,
                     },
                     { label: "Makes", value: String(summary.makes), color: colors.text },
-                    { label: "Shots", value: String(summary.shots), color: colors.text },
+                    { label: "Misses", value: String(summary.misses), color: colors.text },
                   ]}
                 />
 
                 <ShotMap
                   logs={summary.shotMapLogs}
                   width={shotMapWidth}
-                  title={`Day ${dayNumber} shot map`}
+                  title="Today"
                   subtitle="Shooting from this workout"
                   filterByWeek={false}
-                />
-
-                <Text
-                  style={[
-                    styles.sectionLabel,
-                    { color: captureMode ? "rgba(20,20,20,0.68)" : colors.textMuted },
-                  ]}
-                >
-                  Drills
-                </Text>
-                <StatsStrip
                   compact
-                  items={DRILL_CATEGORIES.map(({ key, label }) => ({
-                    label,
-                    value: String(summary.categoryCounts[key] ?? 0),
-                    color: colors.text,
-                  }))}
                 />
 
-                {captureMode ? (
-                  <View style={styles.brandFooter}>
-                    <Image
-                      source={require("../assets/images/AppLogo.png")}
-                      style={styles.brandLogo}
-                      resizeMode="contain"
-                    />
-                    <Text style={styles.brandText}>Court Coach AI</Text>
-                  </View>
-                ) : null}
+                <View style={styles.brandFooter}>
+                  <Image
+                    source={require("../assets/images/AppLogo.png")}
+                    style={styles.brandLogo}
+                    resizeMode="contain"
+                  />
+                  <Text style={styles.brandText}>Court Coach AI</Text>
+                </View>
               </LinearGradient>
             </ViewShot>
+
+            <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Drills</Text>
+            <StatsStrip
+              compact
+              items={DRILL_CATEGORIES.map(({ key, label }) => ({
+                label,
+                value: String(summary.categoryCounts[key] ?? 0),
+                color: colors.text,
+              }))}
+            />
           </ScrollView>
 
           <View style={[styles.actions, { borderTopColor: colors.border }]}>
@@ -307,7 +298,7 @@ export default function WorkoutStatsScreen() {
                 { backgroundColor: colors.accent, opacity: sharing || pressed ? 0.72 : 1 },
               ]}
             >
-              <ShareNetworkIcon size={19} color="#FFFFFF" weight="bold" />
+              <ExportIcon size={19} color="#FFFFFF" weight="bold" />
               <Text style={styles.primaryActionText}>Share</Text>
             </Pressable>
             <Pressable
@@ -337,13 +328,21 @@ export default function WorkoutStatsScreen() {
 function StatsStrip({
   items,
   compact = false,
+  small = false,
 }: {
   items: { label: string; value: string; color: string }[];
   compact?: boolean;
+  small?: boolean;
 }) {
   const { colors } = useTheme();
   return (
-    <Card style={[styles.statsCard, compact && styles.compactStatsCard]}>
+    <Card
+      style={[
+        styles.statsCard,
+        compact && styles.compactStatsCard,
+        small && styles.smallStatsCard,
+      ]}
+    >
       {items.map((item, index) => (
         <React.Fragment key={item.label}>
           {index > 0 ? <View style={[styles.divider, { backgroundColor: colors.border }]} /> : null}
@@ -352,11 +351,23 @@ function StatsStrip({
               numberOfLines={1}
               adjustsFontSizeToFit
               minimumFontScale={0.72}
-              style={[styles.statLabel, compact && styles.compactLabel, { color: colors.textSecondary }]}
+              style={[
+                styles.statLabel,
+                compact && styles.compactLabel,
+                small && styles.smallStatLabel,
+                { color: colors.textSecondary },
+              ]}
             >
               {item.label}
             </Text>
-            <Text style={[styles.statValue, compact && styles.compactValue, { color: item.color }]}>
+            <Text
+              style={[
+                styles.statValue,
+                compact && styles.compactValue,
+                small && styles.smallStatValue,
+                { color: item.color },
+              ]}
+            >
               {item.value}
             </Text>
           </View>
@@ -402,22 +413,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingBottom: 20,
   },
+  captureFrame: {
+    width: "100%",
+    aspectRatio: 4 / 5,
+  },
   shareCard: {
+    flex: 1,
     borderRadius: 28,
     overflow: "hidden",
-    padding: 14,
-    gap: 12,
+    padding: 12,
+    gap: 6,
+    justifyContent: "center",
   },
   dayLabel: {
     fontSize: 13,
     fontWeight: "700",
     paddingHorizontal: 2,
+    marginBottom: 8,
   },
   sectionLabel: {
     fontSize: 13,
     fontWeight: "700",
     paddingHorizontal: 2,
-    marginTop: 2,
+    marginTop: 16,
   },
   statsCard: {
     minHeight: 82,
@@ -429,6 +447,10 @@ const styles = StyleSheet.create({
   compactStatsCard: {
     minHeight: 78,
     paddingHorizontal: 4,
+  },
+  smallStatsCard: {
+    minHeight: 66,
+    paddingVertical: 8,
   },
   stat: {
     flex: 1,
@@ -444,6 +466,9 @@ const styles = StyleSheet.create({
   compactLabel: {
     fontSize: 9,
   },
+  smallStatLabel: {
+    fontSize: 10,
+  },
   statValue: {
     marginTop: 4,
     fontSize: 22,
@@ -452,6 +477,10 @@ const styles = StyleSheet.create({
   },
   compactValue: {
     fontSize: 19,
+  },
+  smallStatValue: {
+    fontSize: 19,
+    marginTop: 2,
   },
   divider: {
     width: 1,

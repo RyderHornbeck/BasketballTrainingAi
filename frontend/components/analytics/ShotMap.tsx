@@ -22,6 +22,7 @@ interface ShotMapProps {
   title?: string;
   subtitle?: string;
   filterByWeek?: boolean;
+  compact?: boolean;
 }
 
 export function ShotMap({
@@ -30,6 +31,7 @@ export function ShotMap({
   title = "Shot Map",
   subtitle = "Where you shoot best",
   filterByWeek = true,
+  compact = false,
 }: ShotMapProps) {
   const { colors, scheme } = useTheme();
   const [weekOffset, setWeekOffset] = useState(0);
@@ -60,8 +62,14 @@ export function ShotMap({
   const courtFloor = scheme === "dark" ? "#292522" : "#F3E7D8";
 
   return (
-    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={styles.headerRow}>
+    <View
+      style={[
+        styles.card,
+        compact && styles.compactCard,
+        { backgroundColor: colors.card, borderColor: colors.border },
+      ]}
+    >
+      <View style={[styles.headerRow, compact && styles.compactHeaderRow]}>
         <View style={styles.headerLeft}>
           <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
           <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
@@ -107,6 +115,7 @@ export function ShotMap({
         height={courtHeight}
         viewBox={`0 0 ${COURT_VIEWBOX.width} ${COURT_VIEWBOX.height}`}
         preserveAspectRatio="xMidYMid meet"
+        style={styles.court}
       >
         {/* Court floor */}
         <Rect x={0} y={0} width={COURT_VIEWBOX.width} height={COURT_VIEWBOX.height} rx={12} fill={courtFloor} />
@@ -224,7 +233,7 @@ export function ShotMap({
         </Text>
       ) : null}
 
-      <View style={styles.legendRow}>
+      <View style={[styles.legendRow, compact && styles.compactLegendRow]}>
         <LegendSwatch color="#22C55E" label="≥ 80%" />
         <LegendSwatch color="#58A86C" label="50–79%" />
         <LegendSwatch color="#E8A848" label="30–49%" />
@@ -255,12 +264,19 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 4,
   },
+  compactCard: {
+    padding: 11,
+    borderRadius: 20,
+  },
   headerRow: {
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
     gap: 12,
     marginBottom: 10,
+  },
+  compactHeaderRow: {
+    marginBottom: 5,
   },
   headerLeft: {
     flex: 1,
@@ -318,6 +334,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
     marginTop: 12,
+  },
+  compactLegendRow: {
+    marginTop: 7,
+  },
+  court: {
+    alignSelf: "center",
   },
   legendItem: {
     flexDirection: "row",
