@@ -5,7 +5,6 @@ import { ThemeMode } from "@/components/ThemeProvider";
 import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
-import { reportNetworkFailure } from "@/lib/connectivity";
 import { actionHaptic } from "@/lib/haptics";
 import { PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL } from "@/lib/legal";
 import { clearOnboardingDraft } from "@/lib/onboardingDraft";
@@ -16,6 +15,7 @@ import {
   CoachVoice,
 } from "@/lib/coachProfiles";
 import { supabase } from "@/lib/supabase";
+import { onTrainingPreferenceUpdated } from "@/lib/trainingPreferenceEvents";
 import {
   defaultWorkoutReminder,
   disableWorkoutReminder,
@@ -27,6 +27,7 @@ import {
 import { OnboardingAnswers } from "@/types/database";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { router, useFocusEffect } from "expo-router";
+import { CaretRightIcon } from "phosphor-react-native";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
@@ -45,22 +46,16 @@ const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
   { label: "Dark", value: "dark" },
 ];
 
-const SKILL_LEVEL_OPTIONS = ["beginner", "intermediate", "advanced", "elite"] as const;
-const POSITION_OPTIONS = ["Guard", "Wing", "Big", "Unknown"] as const;
-const WORKOUT_MINUTE_OPTIONS = [15, 30, 45, 60, 75, 90] as const;
-
 type AthleteDetails = Pick<
   OnboardingAnswers,
   "overall_skill_level" | "position" | "minutes_per_workout"
 >;
-type EditableAthleteField = keyof AthleteDetails;
 
 export default function ProfileScreen() {
   const { colors, mode, setMode } = useTheme();
   const { user, profile, signOut } = useAuth();
   const [athleteDetails, setAthleteDetails] = useState<AthleteDetails | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(true);
-  const [athleteSaving, setAthleteSaving] = useState<EditableAthleteField | null>(null);
   const [showTrainingUpdateNotice, setShowTrainingUpdateNotice] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [reminder, setReminder] = useState<WorkoutReminder>(defaultWorkoutReminder);
@@ -119,9 +114,22 @@ export default function ProfileScreen() {
     )
   );
 
+  useEffect(
+    () =>
+      onTrainingPreferenceUpdated(({ field, value }) => {
+        setAthleteDetails((current) =>
+          current ? ({ ...current, [field]: value } as AthleteDetails) : current
+        );
+        setShowTrainingUpdateNotice(true);
+      }),
+    []
+  );
+
   useEffect(() => {
     const voice = profile?.realtime_coach_voice;
-    if (voice) setCoachVoice(voice);
+    if (!voice) return;
+    const frame = requestAnimationFrame(() => setCoachVoice(voice));
+    return () => cancelAnimationFrame(frame);
   }, [profile?.realtime_coach_voice]);
 
   const handleSignOut = () => {
@@ -228,33 +236,6 @@ export default function ProfileScreen() {
     setCoachSaving(false);
   };
 
-  const handleAthleteDetailChange = async (
-    field: EditableAthleteField,
-    value: string | number
-  ) => {
-    if (!user || !athleteDetails || athleteSaving) return;
-    if (athleteDetails[field] === value) return;
-
-    actionHaptic();
-    const previousDetails = athleteDetails;
-    setAthleteDetails({ ...athleteDetails, [field]: value } as AthleteDetails);
-    setAthleteSaving(field);
-
-    const { error } = await supabase
-      .from("onboarding_answers")
-      .update({ [field]: value })
-      .eq("user_id", user.id);
-
-    if (error) {
-      setAthleteDetails(previousDetails);
-      reportNetworkFailure("athlete-preferences");
-      Alert.alert("Could not update athlete settings", "Please check your connection and try again.");
-    } else {
-      setShowTrainingUpdateNotice(true);
-    }
-    setAthleteSaving(null);
-  };
-
   const handleDeleteAccount = () => {
     Alert.alert(
       "Permanently delete account?",
@@ -304,41 +285,52 @@ export default function ProfileScreen() {
             <ProfileRowsSkeleton rows={4} />
           ) : (
             <>
-              <AthletePreferencePicker
+              <EditableProfileRow
                 label="Skill Level"
-                options={SKILL_LEVEL_OPTIONS.map((value) => ({
-                  label: capitalize(value) ?? value,
-                  value,
-                }))}
-                selected={athleteDetails?.overall_skill_level ?? null}
-                disabled={athleteSaving !== null}
-                onSelect={(value) =>
-                  void handleAthleteDetailChange("overall_skill_level", value)
+                value={capitalize(athleteDetails?.overall_skill_level) ?? "--"}
+                onPress={() =>
+                  router.push({
+                    pathname: "/edit-training-preference",
+                    params: {
+                      field: "overall_skill_level",
+                      current: athleteDetails?.overall_skill_level ?? "",
+                    },
+                  })
                 }
               />
               <Divider />
-              <AthletePreferencePicker
+              <EditableProfileRow
                 label="Position"
-                options={POSITION_OPTIONS.map((value) => ({ label: value, value }))}
-                selected={athleteDetails?.position ?? null}
-                disabled={athleteSaving !== null}
-                onSelect={(value) => void handleAthleteDetailChange("position", value)}
+                value={athleteDetails?.position ?? "--"}
+                onPress={() =>
+                  router.push({
+                    pathname: "/edit-training-preference",
+                    params: {
+                      field: "position",
+                      current: athleteDetails?.position ?? "",
+                    },
+                  })
+                }
               />
               <Divider />
-              <AthletePreferencePicker
+              <EditableProfileRow
                 label="Time per workout"
-                options={WORKOUT_MINUTE_OPTIONS.map((value) => ({
-                  label: `${value} min`,
-                  value: String(value),
-                }))}
-                selected={
+                value={
                   athleteDetails?.minutes_per_workout != null
-                    ? String(athleteDetails.minutes_per_workout)
-                    : null
+                    ? `${athleteDetails.minutes_per_workout} min`
+                    : "--"
                 }
-                disabled={athleteSaving !== null}
-                onSelect={(value) =>
-                  void handleAthleteDetailChange("minutes_per_workout", Number(value))
+                onPress={() =>
+                  router.push({
+                    pathname: "/edit-training-preference",
+                    params: {
+                      field: "minutes_per_workout",
+                      current:
+                        athleteDetails?.minutes_per_workout != null
+                          ? String(athleteDetails.minutes_per_workout)
+                          : "",
+                    },
+                  })
                 }
               />
               <Divider />
@@ -557,55 +549,30 @@ function ProfileRowsSkeleton({ rows }: { rows: number }) {
   );
 }
 
-function AthletePreferencePicker({
+function EditableProfileRow({
   label,
-  options,
-  selected,
-  disabled,
-  onSelect,
+  value,
+  onPress,
 }: {
   label: string;
-  options: { label: string; value: string }[];
-  selected: string | null;
-  disabled: boolean;
-  onSelect: (value: string) => void;
+  value: string;
+  onPress: () => void;
 }) {
   const { colors } = useTheme();
   return (
-    <View style={styles.athletePreference}>
-      <Text style={[styles.athletePreferenceLabel, { color: colors.textMuted }]}>{label}</Text>
-      <View style={styles.athleteOptions}>
-        {options.map((option) => {
-          const active = option.value === selected;
-          return (
-            <Pressable
-              key={option.value}
-              accessibilityRole="radio"
-              accessibilityState={{ selected: active, disabled }}
-              disabled={disabled}
-              onPress={() => onSelect(option.value)}
-              style={({ pressed }) => [
-                styles.athleteOption,
-                {
-                  backgroundColor: active ? colors.accent : colors.cardAlt,
-                  borderColor: active ? colors.accent : colors.border,
-                  opacity: disabled || pressed ? 0.7 : 1,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.athleteOptionText,
-                  { color: active ? "#FFFFFF" : colors.text },
-                ]}
-              >
-                {option.label}
-              </Text>
-            </Pressable>
-          );
-        })}
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${label}, ${value}. Edit`}
+      onPress={onPress}
+      hitSlop={4}
+      style={({ pressed }) => [styles.editableRow, { opacity: pressed ? 0.65 : 1 }]}
+    >
+      <Text style={[styles.rowLabel, { color: colors.textMuted }]}>{label}</Text>
+      <View style={styles.editableRowValue}>
+        <Text style={[styles.rowValue, { color: colors.text }]}>{value}</Text>
+        <CaretRightIcon size={18} color={colors.textMuted} weight="bold" />
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -673,30 +640,19 @@ const styles = StyleSheet.create({
     maxWidth: "60%",
     textAlign: "right",
   },
-  athletePreference: {
-    paddingVertical: 4,
-  },
-  athletePreferenceLabel: {
-    fontSize: 13,
-    fontWeight: "700",
-    marginBottom: 9,
-  },
-  athleteOptions: {
+  editableRow: {
+    minHeight: 38,
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 7,
-  },
-  athleteOption: {
-    minHeight: 36,
-    borderRadius: 12,
-    borderWidth: 1,
-    paddingHorizontal: 12,
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "space-between",
+    paddingVertical: 6,
   },
-  athleteOptionText: {
-    fontSize: 12,
-    fontWeight: "700",
+  editableRowValue: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 6,
+    maxWidth: "65%",
   },
   trainingUpdateNotice: {
     marginTop: 14,

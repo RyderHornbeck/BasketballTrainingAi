@@ -64,6 +64,7 @@ function RootNavigator() {
             <Stack.Screen name="drill-timer" />
             <Stack.Screen name="drill-detail" />
             <Stack.Screen name="workout-stats" />
+            <Stack.Screen name="edit-training-preference" />
             <Stack.Screen name="workout-edit-manual" />
             <Stack.Screen name="achievements" />
             <Stack.Screen name="workout-edit-ai" />
