@@ -1,4 +1,5 @@
 import { clearOnboardingDraft, loadOnboardingDraft } from "@/lib/onboardingDraft";
+import { DEFAULT_COACH_VOICE } from "@/lib/coachProfiles";
 import { requestPlanGeneration, submitOnboardingAnswers } from "@/lib/plan";
 import { supabase } from "@/lib/supabase";
 import { router } from "expo-router";
@@ -31,7 +32,7 @@ export async function routeAfterSocialAuth(
     submitOnboardingAnswers(userId, draft),
     supabase
       .from("profiles")
-      .update({ realtime_coach_voice: draft.realtime_coach_voice ?? "marin" })
+      .update({ realtime_coach_voice: draft.realtime_coach_voice ?? DEFAULT_COACH_VOICE })
       .eq("id", userId)
       .then(({ error }) => {
         if (error) throw error;

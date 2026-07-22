@@ -17,14 +17,14 @@ import {
 
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const REALTIME_MODEL = Deno.env.get("OPENAI_REALTIME_MODEL") ?? DEFAULT_REALTIME_MODEL;
-const DEFAULT_REALTIME_VOICE = Deno.env.get("OPENAI_REALTIME_VOICE") ?? "marin";
+const DEFAULT_REALTIME_VOICE = Deno.env.get("OPENAI_REALTIME_VOICE") ?? "ash";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const ALLOWED_REALTIME_VOICES = new Set(["marin", "cedar", "coral", "shimmer"]);
+const ALLOWED_REALTIME_VOICES = new Set(["ash", "cedar", "marin", "shimmer"]);
 const COACH_NAME_BY_VOICE: Record<string, string> = {
-  marin: "Coach Tyler",
+  ash: "Coach Tyler",
   cedar: "Coach Devin",
-  coral: "Coach Maya",
+  marin: "Coach Maya",
   shimmer: "Coach Ava",
 };
 

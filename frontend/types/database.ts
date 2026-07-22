@@ -57,7 +57,7 @@ export interface Profile {
   push_token: string | null;
   theme: "light" | "dark";
   timezone: string | null;
-  realtime_coach_voice: "marin" | "cedar" | "coral" | "shimmer";
+  realtime_coach_voice: "ash" | "cedar" | "marin" | "shimmer";
 }
 
 export interface OnboardingAnswers {

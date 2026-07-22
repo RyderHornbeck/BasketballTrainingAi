@@ -3,7 +3,7 @@ export const COACH_PROFILES = [
     id: "tyler",
     name: "Coach Tyler",
     description: "Calm and focused.",
-    voice: "marin",
+    voice: "ash",
   },
   {
     id: "devin",
@@ -15,7 +15,7 @@ export const COACH_PROFILES = [
     id: "maya",
     name: "Coach Maya",
     description: "Upbeat and encouraging.",
-    voice: "coral",
+    voice: "marin",
   },
   {
     id: "ava",
@@ -27,7 +27,7 @@ export const COACH_PROFILES = [
 
 export type CoachVoice = (typeof COACH_PROFILES)[number]["voice"];
 
-export const DEFAULT_COACH_VOICE: CoachVoice = "marin";
+export const DEFAULT_COACH_VOICE: CoachVoice = "ash";
 
 export function getCoachProfile(voice: string | null | undefined) {
   return COACH_PROFILES.find((coach) => coach.voice === voice) ?? COACH_PROFILES[0];
