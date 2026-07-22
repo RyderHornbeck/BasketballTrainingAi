@@ -11,7 +11,7 @@ import { ShotMapLogEntry } from "@/lib/shotMap";
 import { WorkoutDayWithExercises } from "@/types/plan";
 import * as FileSystem from "expo-file-system/legacy";
 import { LinearGradient } from "expo-linear-gradient";
-import * as MediaLibrary from "expo-media-library";
+import * as MediaLibrary from "expo-media-library/legacy";
 import { router, useLocalSearchParams } from "expo-router";
 import * as Sharing from "expo-sharing";
 import {
@@ -50,7 +50,8 @@ export default function WorkoutStatsScreen() {
   const captureRef = useRef<ViewShotRef>(null);
   const requestedDayNumber = Number(params.dayNumber);
   const dayNumber = day?.day_number ?? (Number.isFinite(requestedDayNumber) ? requestedDayNumber : 1);
-  const shotMapWidth = Math.min(440, Dimensions.get("window").width - 142);
+  const captureWidth = Math.min(500, Dimensions.get("window").width - 28);
+  const shotMapWidth = Math.min(420, captureWidth - 122);
 
   useEffect(() => {
     let mounted = true;
@@ -231,19 +232,18 @@ export default function WorkoutStatsScreen() {
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.scrollContent}
           >
-            <Text style={[styles.dayLabel, { color: colors.textMuted }]}>
-              Day {dayNumber} stats
-            </Text>
             <ViewShot
               ref={captureRef}
               options={{ format: "png", quality: 1 }}
-              style={styles.captureFrame}
+              style={[styles.captureFrame, { width: captureWidth }]}
             >
               <LinearGradient
                 colors={["#FF6A00", "#FF9A3D", "#FFFFFF"]}
                 locations={[0, 0.42, 1]}
                 style={styles.shareCard}
               >
+                <Text style={styles.imageDayLabel}>Day {dayNumber} stats</Text>
+
                 <StatsStrip
                   small
                   items={[
@@ -260,7 +260,7 @@ export default function WorkoutStatsScreen() {
                 <ShotMap
                   logs={summary.shotMapLogs}
                   width={shotMapWidth}
-                  title="Today"
+                  title="Shot Map"
                   subtitle="Shooting from this workout"
                   filterByWeek={false}
                   compact
@@ -414,8 +414,8 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
   },
   captureFrame: {
-    width: "100%",
     aspectRatio: 4 / 5,
+    alignSelf: "center",
   },
   shareCard: {
     flex: 1,
@@ -425,11 +425,11 @@ const styles = StyleSheet.create({
     gap: 6,
     justifyContent: "center",
   },
-  dayLabel: {
-    fontSize: 13,
-    fontWeight: "700",
+  imageDayLabel: {
+    color: "#1A1A1A",
+    fontSize: 16,
+    fontWeight: "800",
     paddingHorizontal: 2,
-    marginBottom: 8,
   },
   sectionLabel: {
     fontSize: 13,
