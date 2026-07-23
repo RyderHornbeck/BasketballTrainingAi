@@ -23,8 +23,7 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSMicrophoneUsageDescription": "Court Coach uses the microphone for live coach conversations during workouts.",
-        "NSPhotoLibraryUsageDescription": "Court Coach accesses your photo library only when you choose to save a workout stats image.",
-        "NSPhotoLibraryAddUsageDescription": "Court Coach saves workout stats images to your photo library when you tap Download."
+        "NSPhotoLibraryAddUsageDescription": "Court Coach saves workout stats images to your Photos library when you tap Download."
       }
     },
     "android": {
@@ -76,8 +75,8 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "Allow Court Coach to access Photos when you choose to save workout stats.",
-          "savePhotosPermission": "Allow Court Coach to save workout stats images to Photos.",
+          "photosPermission": false,
+          "savePhotosPermission": "Court Coach saves workout stats images to your Photos library when you tap Download.",
           "granularPermissions": [
             "photo"
           ],

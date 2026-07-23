@@ -35,13 +35,6 @@ import {
   HourglassLowIcon,
   LightningIcon,
   MedalIcon,
-  NumberFiveIcon,
-  NumberFourIcon,
-  NumberOneIcon,
-  NumberSevenIcon,
-  NumberSixIcon,
-  NumberThreeIcon,
-  NumberTwoIcon,
   PersonSimpleRunIcon,
   PersonSimpleWalkIcon,
   QuestionIcon,
@@ -847,13 +840,13 @@ function positionIcon(position: string) {
 
 function dayOption(day: number): ChipOption {
   const icons = [
-    <NumberOneIcon key="one" />,
-    <NumberTwoIcon key="two" />,
-    <NumberThreeIcon key="three" />,
-    <NumberFourIcon key="four" />,
-    <NumberFiveIcon key="five" />,
-    <NumberSixIcon key="six" />,
-    <NumberSevenIcon key="seven" />,
+    <CalendarCheckIcon key="calendar" />,
+    <FootprintsIcon key="footprints" />,
+    <BasketballIcon key="basketball" />,
+    <LightningIcon key="lightning" />,
+    <TargetIcon key="target" />,
+    <TrophyIcon key="trophy" />,
+    <CrownIcon key="crown" />,
   ];
   return { label: String(day), value: String(day), icon: icons[day - 1] };
 }
