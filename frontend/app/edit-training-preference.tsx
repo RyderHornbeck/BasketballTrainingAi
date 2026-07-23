@@ -18,7 +18,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 interface PreferenceOption {
   label: string;
   value: string;
-  description: string;
 }
 
 interface PreferenceConfig {
@@ -32,24 +31,23 @@ const CONFIG: Record<TrainingPreferenceField, PreferenceConfig> = {
     title: "Update skill level",
     subtitle: "Choose the level that best matches the workouts you want next.",
     options: [
-      { label: "Beginner", value: "beginner", description: "Build confidence with foundational drills." },
+      { label: "Beginner", value: "beginner" },
       {
         label: "Intermediate",
         value: "intermediate",
-        description: "Develop consistency with more challenging repetitions.",
       },
-      { label: "Advanced", value: "advanced", description: "Train with demanding, game-speed drills." },
-      { label: "Elite", value: "elite", description: "Use the toughest available training progressions." },
+      { label: "Advanced", value: "advanced" },
+      { label: "Elite", value: "elite" },
     ],
   },
   position: {
     title: "Update position",
     subtitle: "Choose the role that should influence your future drill selection.",
     options: [
-      { label: "Guard", value: "Guard", description: "Prioritize guard-relevant skills and movement." },
-      { label: "Wing", value: "Wing", description: "Balance perimeter play, finishing, and defense." },
-      { label: "Big", value: "Big", description: "Prioritize interior play and big-focused movement." },
-      { label: "No preference", value: "Unknown", description: "Keep position from influencing drill selection." },
+      { label: "Guard", value: "Guard" },
+      { label: "Wing", value: "Wing" },
+      { label: "Big", value: "Big" },
+      { label: "No preference", value: "Unknown" },
     ],
   },
   minutes_per_workout: {
@@ -58,12 +56,6 @@ const CONFIG: Record<TrainingPreferenceField, PreferenceConfig> = {
     options: [15, 30, 45, 60, 75, 90].map((minutes) => ({
       label: `${minutes} minutes`,
       value: String(minutes),
-      description:
-        minutes <= 30
-          ? "A focused, shorter training session."
-          : minutes <= 60
-            ? "A balanced full workout."
-            : "A longer session with more drill volume.",
     })),
   },
 };
@@ -168,12 +160,7 @@ export default function EditTrainingPreferenceScreen() {
                   },
                 ]}
               >
-                <View style={styles.optionCopy}>
-                  <Text style={[styles.optionTitle, { color: colors.text }]}>{option.label}</Text>
-                  <Text style={[styles.optionDescription, { color: colors.textSecondary }]}>
-                    {option.description}
-                  </Text>
-                </View>
+                <Text style={[styles.optionTitle, { color: colors.text }]}>{option.label}</Text>
                 {active ? (
                   <CheckCircleIcon size={25} color={colors.accent} weight="fill" />
                 ) : (
@@ -232,11 +219,11 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   option: {
-    minHeight: 82,
+    minHeight: 60,
     borderRadius: 20,
     borderWidth: 1.5,
     paddingHorizontal: 17,
-    paddingVertical: 14,
+    paddingVertical: 12,
     flexDirection: "row",
     alignItems: "center",
     gap: 14,
@@ -245,17 +232,10 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     elevation: 3,
   },
-  optionCopy: {
-    flex: 1,
-  },
   optionTitle: {
+    flex: 1,
     fontSize: 16,
     fontWeight: "800",
-  },
-  optionDescription: {
-    marginTop: 3,
-    fontSize: 12,
-    lineHeight: 18,
   },
   footer: {
     borderTopWidth: 1,

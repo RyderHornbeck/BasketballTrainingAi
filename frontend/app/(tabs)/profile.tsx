@@ -567,9 +567,16 @@ function EditableProfileRow({
       hitSlop={4}
       style={({ pressed }) => [styles.editableRow, { opacity: pressed ? 0.65 : 1 }]}
     >
-      <Text style={[styles.rowLabel, { color: colors.textMuted }]}>{label}</Text>
+      <Text numberOfLines={1} style={[styles.rowLabel, { color: colors.textMuted }]}>
+        {label}
+      </Text>
       <View style={styles.editableRowValue}>
-        <Text style={[styles.rowValue, { color: colors.text }]}>{value}</Text>
+        <Text
+          numberOfLines={1}
+          style={[styles.rowValue, { color: colors.text }]}
+        >
+          {value}
+        </Text>
         <CaretRightIcon size={18} color={colors.textMuted} weight="bold" />
       </View>
     </Pressable>
@@ -633,6 +640,7 @@ const styles = StyleSheet.create({
   rowLabel: {
     fontSize: 13,
     fontWeight: "600",
+    flexShrink: 0,
   },
   rowValue: {
     fontSize: 14,
@@ -642,17 +650,21 @@ const styles = StyleSheet.create({
   },
   editableRow: {
     minHeight: 38,
+    position: "relative",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingVertical: 6,
   },
   editableRowValue: {
+    position: "absolute",
+    right: 0,
+    top: 0,
+    bottom: 0,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
     gap: 6,
-    maxWidth: "65%",
   },
   trainingUpdateNotice: {
     marginTop: 14,
