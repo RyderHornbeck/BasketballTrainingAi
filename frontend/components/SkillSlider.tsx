@@ -5,7 +5,7 @@ import { Text } from "./Text";
 
 interface SkillSliderProps {
   label: string;
-  value: number;
+  value: number | null;
   onChange: (value: number) => void;
   min?: number;
   max?: number;
@@ -45,13 +45,13 @@ export function SkillSlider({
           ]}
         >
           <Text style={[styles.valueText, { color: colors.accent }]}>
-            {value}/{max}
+            {value == null ? "Select" : `${value}/${max}`}
           </Text>
         </View>
       </View>
       <View style={styles.stepsRow}>
         {steps.map((step) => {
-          const active = step <= value;
+          const active = value != null && step <= value;
           return (
             <Pressable
               key={step}

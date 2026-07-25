@@ -121,8 +121,8 @@ const initialForm: OnboardingFormData = {
   conditioning_level: "5",
   athleticism_level: "5",
   strength_level: "5",
-  days_per_week: 3,
-  minutes_per_workout: 45,
+  days_per_week: 0,
+  minutes_per_workout: 0,
   has_court_access: true,
   equipment: ["Basketball"],
   injuries_limitations: "",
@@ -135,7 +135,7 @@ export default function OnboardingScreen() {
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<OnboardingFormData>(initialForm);
   const [playingLevel, setPlayingLevel] = useState("");
-  const [coachVoice, setCoachVoice] = useState<CoachVoice>(DEFAULT_COACH_VOICE);
+  const [coachVoice, setCoachVoice] = useState<CoachVoice | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [completedChecklistSteps, setCompletedChecklistSteps] = useState(0);
@@ -157,7 +157,7 @@ export default function OnboardingScreen() {
     loadOnboardingDraft().then((draft) => {
       if (draft) {
         setForm({ ...draft, has_court_access: true, equipment: ["Basketball"] });
-        setCoachVoice(draft.realtime_coach_voice ?? DEFAULT_COACH_VOICE);
+        setCoachVoice(draft.realtime_coach_voice ?? null);
       }
     });
   }, [user]);
@@ -194,7 +194,10 @@ export default function OnboardingScreen() {
 
   const selectedTextValues = (value: string) =>
     value.split(",").map((item) => item.trim()).filter(Boolean);
-  const currentDraft = () => ({ ...form, realtime_coach_voice: coachVoice });
+  const currentDraft = () => ({
+    ...form,
+    ...(coachVoice ? { realtime_coach_voice: coachVoice } : {}),
+  });
 
   const canGoNext = (): boolean => {
     switch (step) {
@@ -214,13 +217,17 @@ export default function OnboardingScreen() {
       case 8:
         return selectedTextValues(form.weaknesses).length > 0;
       case 9:
-      case 10:
-      case 11:
         return true;
+      case 10:
+        return form.days_per_week > 0;
+      case 11:
+        return form.minutes_per_workout > 0;
       case 12:
         return !!form.preferred_intensity;
       case PRE_SIGNUP_STEP:
         return completedChecklistSteps === GENERATION_STEPS.length;
+      case COACH_SELECTION_STEP:
+        return coachVoice !== null;
       default:
         return true;
     }
@@ -266,7 +273,7 @@ export default function OnboardingScreen() {
           submitOnboardingAnswers(user.id, form),
           supabase
             .from("profiles")
-            .update({ realtime_coach_voice: coachVoice })
+            .update({ realtime_coach_voice: coachVoice ?? DEFAULT_COACH_VOICE })
             .eq("id", user.id)
             .then(({ error: profileError }) => {
               if (profileError) throw profileError;
@@ -424,13 +431,13 @@ export default function OnboardingScreen() {
 
       {step === 9 && (
         <View>
-          <SkillSlider label="Shooting" value={Number(form.shooting_level)} onChange={(v) => update("shooting_level", String(v))} />
-          <SkillSlider label="Ball Handling" value={Number(form.ball_handling_level)} onChange={(v) => update("ball_handling_level", String(v))} />
-          <SkillSlider label="Finishing" value={Number(form.finishing_level)} onChange={(v) => update("finishing_level", String(v))} />
-          <SkillSlider label="Defense" value={Number(form.defense_level)} onChange={(v) => update("defense_level", String(v))} />
-          <SkillSlider label="Conditioning" value={Number(form.conditioning_level)} onChange={(v) => update("conditioning_level", String(v))} />
-          <SkillSlider label="Athleticism" value={Number(form.athleticism_level)} onChange={(v) => update("athleticism_level", String(v))} />
-          <SkillSlider label="Strength" value={Number(form.strength_level)} onChange={(v) => update("strength_level", String(v))} />
+          <SkillSlider label="Shooting" value={form.shooting_level ? Number(form.shooting_level) : null} onChange={(v) => update("shooting_level", String(v))} />
+          <SkillSlider label="Ball Handling" value={form.ball_handling_level ? Number(form.ball_handling_level) : null} onChange={(v) => update("ball_handling_level", String(v))} />
+          <SkillSlider label="Finishing" value={form.finishing_level ? Number(form.finishing_level) : null} onChange={(v) => update("finishing_level", String(v))} />
+          <SkillSlider label="Defense" value={form.defense_level ? Number(form.defense_level) : null} onChange={(v) => update("defense_level", String(v))} />
+          <SkillSlider label="Conditioning" value={form.conditioning_level ? Number(form.conditioning_level) : null} onChange={(v) => update("conditioning_level", String(v))} />
+          <SkillSlider label="Athleticism" value={form.athleticism_level ? Number(form.athleticism_level) : null} onChange={(v) => update("athleticism_level", String(v))} />
+          <SkillSlider label="Strength" value={form.strength_level ? Number(form.strength_level) : null} onChange={(v) => update("strength_level", String(v))} />
         </View>
       )}
 
@@ -439,7 +446,7 @@ export default function OnboardingScreen() {
           <Text style={[styles.groupLabel, { color: colors.text }]}>Days per week you can train</Text>
           <ChipGroup
             options={DAYS_PER_WEEK_OPTIONS.map((day) => dayOption(day))}
-            selected={[String(form.days_per_week)]}
+            selected={form.days_per_week > 0 ? [String(form.days_per_week)] : []}
             onToggle={(v) => update("days_per_week", Number(v))}
           />
         </View>
@@ -450,7 +457,7 @@ export default function OnboardingScreen() {
           <Text style={[styles.groupLabel, { color: colors.text }]}>Minutes per workout</Text>
           <ChipGroup
             options={MINUTES_OPTIONS.map((minutes) => minuteOption(minutes))}
-            selected={[String(form.minutes_per_workout)]}
+            selected={form.minutes_per_workout > 0 ? [String(form.minutes_per_workout)] : []}
             onToggle={(v) => update("minutes_per_workout", Number(v))}
           />
         </View>

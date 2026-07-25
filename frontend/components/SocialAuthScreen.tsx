@@ -67,23 +67,27 @@ export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      {mode === "signup" ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Back to onboarding"
-          onPress={() => {
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={mode === "signup" ? "Back to onboarding" : "Back to Get Started"}
+        onPress={() => {
+          if (mode === "login") {
+            router.replace("/welcome");
+            return;
+          }
+          if (mode === "signup") {
             if (router.canGoBack()) {
               router.back();
             } else {
               router.replace("/onboarding");
             }
-          }}
-          hitSlop={10}
-          style={[styles.backButton, { borderColor: colors.border, backgroundColor: colors.card }]}
-        >
-          <ArrowLeftIcon size={20} color={colors.text} weight="bold" />
-        </Pressable>
-      ) : null}
+          }
+        }}
+        hitSlop={10}
+        style={[styles.backButton, { borderColor: colors.border, backgroundColor: colors.card }]}
+      >
+        <ArrowLeftIcon size={20} color={colors.text} weight="bold" />
+      </Pressable>
       <View style={styles.brand}>
         <Image
           accessibilityLabel="Court Coach AI"
@@ -199,7 +203,7 @@ const styles = StyleSheet.create({
   },
   backButton: {
     position: "absolute",
-    top: 28,
+    top: 40,
     left: 20,
     width: 42,
     height: 42,
