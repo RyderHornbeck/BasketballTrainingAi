@@ -141,7 +141,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     budgetExhausted || status === "connecting" || status === "disconnecting" || status === "thinking";
 
   const hint = budgetExhausted
-    ? "Your 75¢ coach credit refills tomorrow. You can still use the timer and log drills manually."
+    ? "Your coach credit refills tomorrow. You can still use the timer and log drills manually."
     : status === "muted"
       ? "Tap the circle to turn the mic back on"
       : status === "error"

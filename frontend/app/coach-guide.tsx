@@ -34,6 +34,20 @@ const GUIDE_SECTIONS = [
     ],
   },
   {
+    icon: "create-outline" as const,
+    title: "Change the workout",
+    description:
+      "Ask for recommendations based on your completed sets, add drills for a specific skill, remove drills, change the remaining workout time, or save notes.",
+    examples: [
+      '"What drills would you recommend for me?"',
+      '"Based on my performance today, add drills to my workout that you think I need."',
+      '"Could you add ball-handling drills that focus on between-the-legs moves?"',
+      '"Add a cone dribbling drill."',
+      '"Remove this drill."',
+      '"Save a note that my left hand felt weak."',
+    ],
+  },
+  {
     icon: "checkmark-done-outline" as const,
     title: "Complete or skip drills",
     description:
@@ -70,17 +84,6 @@ const GUIDE_SECTIONS = [
     ],
   },
   {
-    icon: "create-outline" as const,
-    title: "Change the workout",
-    description:
-      "You can add or remove drills, change the remaining workout time, and save notes.",
-    examples: [
-      '"Add a cone dribbling drill."',
-      '"Remove this drill."',
-      '"Save a note that my left hand felt weak."',
-    ],
-  },
-  {
     icon: "help-circle-outline" as const,
     title: "Ask your coach",
     description:
@@ -92,6 +95,7 @@ const GUIDE_SECTIONS = [
       '"What drill am I on?"',
       '"What’s my shooting percentage so far in this workout?"',
       '"How do I keep my elbow aligned?"',
+      '"Could you explain this drill?"',
     ],
   },
 ];

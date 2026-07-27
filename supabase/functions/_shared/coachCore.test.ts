@@ -1,6 +1,10 @@
 import {
+  buildCompactContextSummary,
   buildWorkoutNavigation,
+  COACH_SYSTEM_PROMPT,
   executeCoachTool,
+  getRealtimeTools,
+  rankCatalogExercises,
   type WorkoutContext,
 } from "./coachCore.ts";
 
@@ -335,4 +339,216 @@ Deno.test("sequential zero-make sets inherit the newly selected last drill", asy
   assert(final.makes === 0, "both zero-make sets should total zero makes");
   assert(final.attempts === 24, "omitted attempts should use the saved 12-attempt targets");
   assert(final.completed === true, "both reported sets should complete the drill");
+});
+
+Deno.test("shooting context labels results far below the makes target", () => {
+  const ctx = contextWithPartialShootingSet();
+  const shootingLog = ctx.logs.get("shoot")!;
+  shootingLog.completed = true;
+  shootingLog.makes = 1;
+  shootingLog.attempts = 20;
+  shootingLog.notes =
+    '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":1,"attempts":10,"minutes":null,"completed":true},{"set_number":2,"makes":0,"attempts":10,"minutes":null,"completed":true}]}';
+
+  const summary = JSON.parse(buildCompactContextSummary(ctx, null, undefined));
+  const shooting = summary.sequence.drills.find((drill: { exercise_id: string }) =>
+    drill.exercise_id === "shoot"
+  );
+
+  assert(
+    shooting.set_results[0].target_comparison.status === "significantly_below_target",
+    "one make against an eight-make target must be identified as significantly below target"
+  );
+  assert(
+    shooting.set_results[0].target_comparison.makes_below_target ===
+      shooting.target.makes - shooting.set_results[0].makes,
+    "context should expose the exact target gap"
+  );
+  assert(
+    COACH_SYSTEM_PROMPT.includes("never agree that a below-target result is good"),
+    "the coach must not validate a below-target result as good"
+  );
+});
+
+Deno.test("saved shooting results report target status and add requires permission", async () => {
+  const outcome = await executeCoachTool(
+    successfulSupabaseMock(),
+    "user",
+    "day",
+    contextWithPartialShootingSet(),
+    "save_shooting_results",
+    { drill_name: "Shooting", set_number: 2, makes: 1, attempts: 10 }
+  );
+  const addTool = getRealtimeTools().find((tool) => tool.name === "add_workout_exercise");
+
+  assert(outcome.result.includes("below target and needs work"), "low results must be explicit");
+  assert(outcome.result.includes("Target:"), "saved result should include the authoritative target");
+  assert(
+    addTool?.description.includes("only after the athlete explicitly requested"),
+    "adding a weakness drill must require explicit permission"
+  );
+});
+
+Deno.test("catalog search prioritizes drills matching the workout's shooting weakness", () => {
+  const ctx = contextWithPartialShootingSet();
+  const shooting = ctx.exercises.find((exercise) => exercise.id === "shoot")!;
+  shooting.name = "Attack Retreat Dribble Threes";
+  shooting.instructions = "Attack, retreat, then shoot a three off the dribble";
+  const shootingLog = ctx.logs.get("shoot")!;
+  shootingLog.completed = true;
+  shootingLog.makes = 1;
+  shootingLog.attempts = 20;
+  shootingLog.notes =
+    '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":1,"attempts":10,"minutes":null,"completed":true},{"set_number":2,"makes":0,"attempts":10,"minutes":null,"completed":true}]}';
+
+  const results = rankCatalogExercises(
+    "add an attack retreat dribble threes drill for that weakness",
+    [
+      {
+        id: "generic",
+        exercise_name: "Form Shooting",
+        category: "shooting",
+        difficulty_level: "intermediate",
+        description: "Close range shooting mechanics",
+        coaching_notes: null,
+      },
+      {
+        id: "relevant",
+        exercise_name: "Attack Retreat Three Variations",
+        category: "shooting",
+        difficulty_level: "intermediate",
+        description: "Attack and retreat into off-dribble three-point shots",
+        coaching_notes: null,
+      },
+      {
+        id: "unrelated",
+        exercise_name: "Attack Retreat Finishing",
+        category: "finishing",
+        difficulty_level: "intermediate",
+        description: "Attack, retreat, and finish at the rim",
+        coaching_notes: null,
+      },
+    ],
+    ctx
+  );
+
+  assert(results[0]?.id === "relevant", "the closest drill to the weak shot type should rank first");
+  assert(
+    results.every((clip) => clip.id !== "unrelated"),
+    "matching words must never allow a weakness search to leave the weak category"
+  );
+});
+
+Deno.test("recommendations use a drill as soon as one set is complete", () => {
+  const ctx = contextWithPartialShootingSet();
+  const shootingLog = ctx.logs.get("shoot")!;
+  shootingLog.makes = 1;
+  shootingLog.attempts = 10;
+  shootingLog.notes =
+    '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":1,"attempts":10,"minutes":null,"completed":true},{"set_number":2,"makes":null,"attempts":null,"minutes":null,"completed":false}]}';
+  const completed = ctx.exercises.find((exercise) => exercise.id === "finish")!;
+  completed.category = "defense";
+  completed.log_type = "minutes";
+  completed.duration = "2 min";
+  ctx.logs.set("finish", {
+    exercise_id: "finish",
+    completed: true,
+    makes: null,
+    attempts: null,
+    minutes_completed: 4,
+    difficulty: null,
+    notes:
+      '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":null,"attempts":null,"minutes":2,"completed":true},{"set_number":2,"makes":null,"attempts":null,"minutes":2,"completed":true}]}',
+  } as any);
+
+  const results = rankCatalogExercises(
+    "recommend a drill to add",
+    [
+      {
+        id: "shooting",
+        exercise_name: "Attack Retreat Threes",
+        category: "shooting",
+        difficulty_level: "intermediate",
+        description: "Off-dribble shooting",
+        coaching_notes: null,
+      },
+      {
+        id: "conditioning",
+        exercise_name: "Change of Pace Conditioning",
+        category: "conditioning",
+        difficulty_level: "intermediate",
+        description: "A different conditioning focus",
+        coaching_notes: null,
+      },
+    ],
+    ctx
+  );
+
+  assert(
+    results[0]?.id === "shooting",
+    "one completed poor shooting set should drive a same-category recommendation"
+  );
+  assert(
+    results.every((clip) => clip.category === "shooting"),
+    "an incomplete drill's completed set must still preserve strict category matching"
+  );
+});
+
+Deno.test("another recommendation balances weakness severity against existing focused coverage", () => {
+  const ctx = contextWithPartialShootingSet();
+  const shooting = ctx.exercises.find((exercise) => exercise.id === "shoot")!;
+  shooting.name = "Attack Retreat Dribble Threes";
+  shooting.instructions = "Attack and retreat into an off-dribble three";
+  const shootingLog = ctx.logs.get("shoot")!;
+  shootingLog.makes = 1;
+  shootingLog.attempts = 10;
+  shootingLog.notes =
+    '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":1,"attempts":10,"minutes":null,"completed":true},{"set_number":2,"makes":null,"attempts":null,"minutes":null,"completed":false}]}';
+
+  const finishing = ctx.exercises.find((exercise) => exercise.id === "finish")!;
+  finishing.name = "Left Hand Layups";
+  ctx.logs.set("finish", {
+    exercise_id: "finish",
+    completed: false,
+    makes: 2,
+    attempts: 10,
+    minutes_completed: null,
+    difficulty: null,
+    notes:
+      '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":2,"attempts":10,"minutes":null,"completed":true},{"set_number":2,"makes":null,"attempts":null,"minutes":null,"completed":false}]}',
+  } as any);
+  ctx.exercises.push({
+    ...shooting,
+    id: "added-shooting-focus",
+    name: "Attack Retreat Three Variations",
+    order_index: 6,
+  });
+
+  const results = rankCatalogExercises(
+    "recommend another drill to add",
+    [
+      {
+        id: "more-shooting",
+        exercise_name: "Attack Retreat Three Combo",
+        category: "shooting",
+        difficulty_level: "intermediate",
+        description: "Another attack-retreat shooting variation",
+        coaching_notes: null,
+      },
+      {
+        id: "finishing-focus",
+        exercise_name: "Weak Hand Finishing",
+        category: "finishing",
+        difficulty_level: "intermediate",
+        description: "Develop left-hand layup control",
+        coaching_notes: null,
+      },
+    ],
+    ctx
+  );
+
+  assert(
+    results[0]?.id === "finishing-focus",
+    "existing focused coverage should allow another measured weakness to take priority"
+  );
 });

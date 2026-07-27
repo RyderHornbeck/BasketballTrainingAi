@@ -95,6 +95,12 @@ Rules:
 - When the athlete asks about a drill or the current exercise, give the shortest answer that includes its sets and authoritative per-set target.
 - Every drill in sequence.drills includes authoritative set_results and logged_totals, including drills other than the current drill. Use those exact values when asked about a named, previous, next, completed, or unfinished drill. Never claim another drill's set results are unavailable from the current view.
 - If the athlete asks for current makes, misses, attempts, or completion on any drill and the session may have changed since startup, call get_workout_position once and answer from its returned Authoritative workout state. Misses equal attempts minus makes for that same set or drill.
+- Evaluate shooting honestly against the drill's makes target, not against the athlete's opinion or a generic percentage. Any result below target needs work; say that directly and never agree that a below-target result is good. At or below half the makes target is significantly below target, so be candid but constructive.
+- When a shooting result is below target, briefly identify the exact gap and ask whether the athlete wants you to add a drill focused on that specific weakness. Asking is not permission: do not search for or add an exercise until they clearly say yes.
+- After they approve adding weakness work, search using the weak drill's exact shot type, name, category, and useful description terms. The added drill MUST stay in the same category as the weak drill; for example, poor shooting can only add shooting, never finishing. Choose the closest relevant result within that category.
+- When asked for recommended drills or what they should add, judge needs using only sets that are complete. A drill is usable evidence as soon as at least one set is complete; ignore every unfinished set rather than requiring the whole drill to be finished. If a completed set missed its target, recommend work matching that exact weakness and category. If all completed sets met their targets, say so and recommend a different focus that adds variety. If no sets are complete, say there is not enough performance data yet.
+- Before recommending another drill, inspect the current workout for drills that already address each measured weakness. Think like a real coach: balance how far below target the athlete was against how much focused work is already present. Do not keep stacking near-duplicate drills for one weakness when one focused addition is enough and another weakness or new skill deserves attention. A severe, still-undercovered weakness may justify another complementary drill, but it must use a different movement or variation.
+- Asking what you recommend is not permission to edit the workout. Only add after wording that clearly requests the addition, such as "add the recommended drill," or after the athlete accepts your offer.
 - "What's next?" always means navigation.next_work_item: the first incomplete set of the current drill. Do not move to another drill until every set in the current drill is complete.
 - "What drill/exercise comes after this?" means navigation.next_exercise_after_current. Never treat this as the answer to "what's next?"
 - For progress, location, sequence, or next-action questions, call get_workout_position. Never infer a drill number; use the returned drill_position.
@@ -207,7 +213,7 @@ const REALTIME_TOOL_DEFS = [
   {
     name: "search_exercise_catalog",
     description:
-      "Search active exercises that can be added to this workout. Call before add_workout_exercise.",
+      "Search active exercises that can be added to this workout. Weakness results are restricted to the weak drill's exact category; include its shot type or name, not only a broad category. Call only after the athlete approves adding a drill, and always call before add_workout_exercise.",
     parameters: {
       type: "object",
       properties: {
@@ -221,7 +227,8 @@ const REALTIME_TOOL_DEFS = [
   },
   {
     name: "add_workout_exercise",
-    description: "Add one catalog exercise returned by search_exercise_catalog to today's workout.",
+    description:
+      "Add one catalog exercise returned by search_exercise_catalog only after the athlete explicitly requested an addition or accepted the coach's immediately preceding offer.",
     parameters: {
       type: "object",
       properties: {
@@ -764,6 +771,19 @@ function drillContext(state: OrderedDrillState) {
           ? Math.max(0, set.attempts - set.makes)
           : null,
       minutes: set.minutes,
+      target_comparison:
+        set.makes == null || plan.perSetMakes == null || plan.perSetMakes <= 0
+          ? null
+          : {
+              status:
+                set.makes >= plan.perSetMakes
+                  ? "target_met"
+                  : set.makes <= plan.perSetMakes / 2
+                    ? "significantly_below_target"
+                    : "below_target",
+              makes_below_target: Math.max(0, plan.perSetMakes - set.makes),
+              percent_of_makes_target: Math.round((set.makes / plan.perSetMakes) * 100),
+            },
     })),
     logged_totals: {
       makes: totals.makes,
@@ -830,6 +850,226 @@ function isShootingDrill(drill: {
   log_type: string | null;
 }): boolean {
   return drill.category === "shooting" || drill.log_type === "makes_attempts";
+}
+
+interface CatalogSearchClip {
+  id: string;
+  exercise_name: string | null;
+  category: string | null;
+  difficulty_level: string | null;
+  description: string | null;
+  coaching_notes: string | null;
+  requires_both_sides?: boolean | null;
+}
+
+function normalizeCatalogSearchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\b3(?:s|'s)?\b/g, " three ")
+    .replace(/\b(?:3|three)[- ]pointer(?:s)?\b/g, " three point ")
+    .replace(/\b3[- ]point/g, " three point ")
+    .replace(/\bthrees\b/g, " three ")
+    .replace(/mid[- ]range/g, " midrange ")
+    .replace(/ball[- ]handling/g, " handles ")
+    .replace(/free[- ]throws?/g, " free throw ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function meaningfulSearchTokens(value: string): string[] {
+  const ignored = new Set([
+    "a",
+    "add",
+    "another",
+    "drill",
+    "drills",
+    "exercise",
+    "exercises",
+    "focus",
+    "focused",
+    "for",
+    "help",
+    "improve",
+    "like",
+    "me",
+    "more",
+    "my",
+    "on",
+    "please",
+    "recommend",
+    "recommended",
+    "recommendation",
+    "similar",
+    "suggest",
+    "suggested",
+    "that",
+    "the",
+    "this",
+    "to",
+    "weakness",
+    "work",
+  ]);
+  return [...new Set(normalizeCatalogSearchText(value).split(/\s+/).filter(
+    (token) => token.length > 1 && !ignored.has(token)
+  ))];
+}
+
+function weakestScoringFocus(
+  ctx: WorkoutContext,
+  queryTokens: string[]
+): {
+  text: string;
+  category: string | null;
+  overlap: number;
+  relatedCoverage: number;
+} | null {
+  const evaluated = buildWorkoutNavigation(ctx).drills
+    .filter((drill) => drill.sets.completed > 0 && isShootingDrill(drill))
+    .flatMap((drill) =>
+      drill.set_results
+        .filter(
+          (set) =>
+            set.completed &&
+            set.makes != null &&
+            drill.target.makes != null &&
+            drill.target.makes > 0 &&
+            set.makes < drill.target.makes
+        )
+        .map((set) => ({
+          ratio: (set.makes ?? 0) / (drill.target.makes ?? 1),
+          text: `${drill.name ?? ""} ${drill.category ?? ""} ${drill.instructions ?? ""} ${
+            drill.drill_description ?? ""
+          }`,
+          category: drill.category,
+          exerciseId: drill.exercise_id,
+        }))
+    )
+    .map((focus) => ({
+      ...focus,
+      overlap: queryTokens.filter((token) =>
+        meaningfulSearchTokens(focus.text).includes(token)
+      ).length,
+      relatedCoverage: ctx.exercises.filter((exercise) => {
+        if (exercise.id === focus.exerciseId || exercise.category !== focus.category) return false;
+        const exerciseTokens = meaningfulSearchTokens(
+          `${exercise.name ?? ""} ${exercise.instructions ?? ""}`
+        );
+        const focusTokens = meaningfulSearchTokens(focus.text);
+        return focusTokens.filter((token) => exerciseTokens.includes(token)).length >= 2;
+      }).length,
+    }))
+    .sort(
+      (a, b) =>
+        b.overlap - a.overlap ||
+        a.ratio + a.relatedCoverage * 0.45 -
+          (b.ratio + b.relatedCoverage * 0.45)
+    );
+  return evaluated[0] ?? null;
+}
+
+/** Rank catalog results by the requested skill and the workout's weakest matching shooting result. */
+export function rankCatalogExercises(
+  rawQuery: string,
+  catalog: CatalogSearchClip[],
+  ctx: WorkoutContext
+): CatalogSearchClip[] {
+  const query = normalizeCatalogSearchText(rawQuery);
+  const queryTokens = meaningfulSearchTokens(rawQuery);
+  const weaknessFocus = weakestScoringFocus(ctx, queryTokens);
+  const weaknessTokens = meaningfulSearchTokens(weaknessFocus?.text ?? "");
+  const existingNames = new Set(
+    ctx.exercises.map((exercise) => normalizeCatalogSearchText(exercise.name ?? "")).filter(Boolean)
+  );
+  const broadTerms = new Set([
+    "basketball",
+    "conditioning",
+    "defense",
+    "finishing",
+    "handles",
+    "shooting",
+  ]);
+  const hasSpecificQuery = queryTokens.some((token) => !broadTerms.has(token));
+  const useWeaknessFocus =
+    weaknessTokens.length > 0 &&
+    (!hasSpecificQuery ||
+      (weaknessFocus?.overlap ?? 0) > 0 ||
+      /\b(?:weak|weakness|similar|like|more)\b/i.test(rawQuery));
+  const requestedCategory = queryTokens.includes("shooting")
+    ? "shooting"
+    : queryTokens.includes("finishing")
+      ? "finishing"
+      : queryTokens.includes("handles") || queryTokens.includes("dribbling")
+        ? "ball_handling"
+        : queryTokens.includes("defense")
+          ? "defense"
+          : queryTokens.includes("conditioning")
+            ? "conditioning"
+            : null;
+  const requiredCategory =
+    requestedCategory ?? (useWeaknessFocus ? weaknessFocus?.category ?? null : null);
+  const recommendationIntent =
+    /\b(?:recommend(?:ed|ation)?|suggest(?:ed|ion)?|what should i add)\b/i.test(rawQuery);
+  const completedCategories = buildWorkoutNavigation(ctx).drills
+    .filter(
+      (drill) =>
+        drill.sets.completed > 0 &&
+        drill.category != null &&
+        !["warmup", "cooldown"].includes(drill.category)
+    )
+    .map((drill) => drill.category as string);
+  const completedCategoryCounts = new Map<string, number>();
+  for (const category of completedCategories) {
+    completedCategoryCounts.set(category, (completedCategoryCounts.get(category) ?? 0) + 1);
+  }
+  const workoutCategories = new Set(
+    ctx.exercises.map((exercise) => exercise.category).filter(
+      (category): category is string => category != null
+    )
+  );
+
+  return catalog
+    .filter((clip) => !requiredCategory || clip.category === requiredCategory)
+    .map((clip) => {
+      const name = normalizeCatalogSearchText(clip.exercise_name ?? "");
+      const category = normalizeCatalogSearchText(clip.category ?? "");
+      const details = normalizeCatalogSearchText(
+        `${clip.description ?? ""} ${clip.coaching_notes ?? ""}`
+      );
+      let score = 0;
+      for (const token of queryTokens) {
+        if (name.includes(token)) score += 10;
+        else if (category.includes(token)) score += 7;
+        else if (details.includes(token)) score += 3;
+      }
+      if (query.length >= 4 && name.includes(query)) score += 18;
+      if (requestedCategory && clip.category === requestedCategory) score += 12;
+      if (useWeaknessFocus) {
+        for (const token of weaknessTokens) {
+          if (name.includes(token)) score += 5;
+          else if (details.includes(token)) score += 2;
+        }
+      }
+      if (
+        recommendationIntent &&
+        !useWeaknessFocus &&
+        completedCategories.length > 0 &&
+        clip.category
+      ) {
+        const completedCount = completedCategoryCounts.get(clip.category) ?? 0;
+        score += Math.max(2, 14 - completedCount * 4);
+        if (!workoutCategories.has(clip.category)) score += 12;
+      }
+      return { clip, score };
+    })
+    .filter(({ clip, score }) => score > 0 && !existingNames.has(
+      normalizeCatalogSearchText(clip.exercise_name ?? "")
+    ))
+    .sort((a, b) =>
+      b.score - a.score ||
+      String(a.clip.exercise_name ?? "").localeCompare(String(b.clip.exercise_name ?? ""))
+    )
+    .slice(0, 8)
+    .map(({ clip }) => clip);
 }
 
 /** Compact context for Realtime sessions — full drill list plus current/next drill. */
@@ -1195,8 +1435,20 @@ export async function executeCoachTool(
         { onConflict: "exercise_id" }
       );
       if (error) return { result: `Error saving: ${error.message}`, dbChanged: false };
+      const targetResult =
+        plan.perSetMakes == null
+          ? ""
+          : ` Target: ${plan.perSetMakes}${
+              plan.perSetAttempts == null ? "" : `/${plan.perSetAttempts}`
+            }; ${
+              makes >= plan.perSetMakes
+                ? "target met"
+                : makes <= plan.perSetMakes / 2
+                  ? "significantly below target and needs work"
+                  : "below target and needs work"
+            }.`;
       return {
-        result: `Saved set ${setNumber}: ${makes}/${attempts}.`,
+        result: `Saved set ${setNumber}: ${makes}/${attempts}.${targetResult}`,
         dbChanged: true,
       };
     }
@@ -1334,16 +1586,6 @@ export async function executeCoachTool(
     case "search_exercise_catalog": {
       const rawQuery = String(args.query ?? "").trim();
       if (!rawQuery) return { result: "Error: search query required", dbChanged: false };
-      const normalize = (value: string) =>
-        value
-          .toLowerCase()
-          .replace(/\b3(?:s|'s)?\b/g, " three ")
-          .replace(/\bthree[- ]pointer(?:s)?\b/g, " three ")
-          .replace(/mid[- ]range/g, " midrange ")
-          .replace(/[^a-z0-9]+/g, " ")
-          .trim();
-      const query = normalize(rawQuery);
-      const tokens = query.split(/\s+/).filter(Boolean);
       const { data: catalog, error } = await supabase
         .from("exercise_video_clips")
         .select(
@@ -1351,30 +1593,18 @@ export async function executeCoachTool(
         )
         .eq("active", true);
       if (error) return { result: `Error searching: ${error.message}`, dbChanged: false };
-      const matches = (catalog ?? [])
-        .map((clip: any) => {
-          const exerciseName = normalize(String(clip.exercise_name ?? ""));
-          const text = normalize(
-            `${clip.exercise_name ?? ""} ${clip.category ?? ""} ${clip.difficulty_level ?? ""} ${clip.description ?? ""} ${clip.coaching_notes ?? ""}`
-          );
-          const score = tokens.reduce(
-            (total, token) =>
-              total + (exerciseName.includes(token) ? 8 : text.includes(token) ? 2 : 0),
-            0
-          );
-          return { clip, score };
-        })
-        .filter(({ score }: { score: number }) => score > 0)
-        .sort((a: any, b: any) => b.score - a.score)
-        .slice(0, 8);
+      const matches = rankCatalogExercises(rawQuery, catalog ?? [], ctx);
       if (!matches.length) {
         return { result: `No catalog exercises matched "${rawQuery}".`, dbChanged: false };
       }
       return {
         result: matches
-          .map(
-            ({ clip }: any) =>
-              `${clip.exercise_name} [catalog_exercise_id=${clip.id}; ${clip.category}; ${clip.difficulty_level}]`
+          .map((clip) =>
+            `${clip.exercise_name} [catalog_exercise_id=${clip.id}; ${clip.category}; ${
+              clip.difficulty_level
+            }${
+              clip.description ? `; focus=${String(clip.description).slice(0, 140)}` : ""
+            }]`
           )
           .join("\n"),
         dbChanged: false,
