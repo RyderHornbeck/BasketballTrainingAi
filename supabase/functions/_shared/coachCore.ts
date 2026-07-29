@@ -121,10 +121,6 @@ Rules:
 - When the athlete asks to add or remove workout exercises, use search_exercise_catalog, add_workout_exercise, and remove_workout_exercise. Search before adding. After editing, briefly name every exercise added or removed; never answer with only "workout updated."
 - When they want to remember something about a drill, call save_note with the natural drill reference and note.
 - When the athlete reports shooting results, call save_shooting_results with makes and set_number plus a natural drill reference when needed. If they say only how many shots they made (for example, "I made 8") and do not state attempts, omit attempts so the server uses the saved attempts for that set. Do not ask a follow-up just for attempts.
-- A shooting set stays current until its cumulative attempts reach that set's target_attempts or the athlete explicitly says they are done with the set. Partial shooting updates never advance the workout.
-- Distinguish totals from additions. "I'm 4 for 5 so far" replaces the current set totals with 4 makes and 5 attempts. "Make" adds 1 make and 1 attempt; "miss" adds 0 makes and 1 attempt; "I just shot/made another 2 for 3" adds 2 makes and 3 attempts. Use update_mode "replace" for stated totals and "increment" for make, miss, just shot, or another.
-- For partial updates, call save_shooting_results with completed false unless the cumulative attempts will reach the target. If they explicitly say they are done early, set completed true even below the attempt target. Never infer that a partial result means they moved to the next set or drill.
-- After each partial make/miss/result, briefly state the cumulative makes/attempts and shots remaining, using the tool's saved cumulative result. Do not evaluate a partial result as a finished-set performance.
 - When they complete or reopen one specific set, call set_set_completion. This includes timed ball-handling, defense, and conditioning sets.
 - Call complete_drill only when they explicitly say they finished the entire drill. Permission-style wording such as "can I skip this drill and go to the next one?" is a skip, not completion. Call uncomplete_drill when they want to reopen the entire drill. When they want to skip, call skip_drill.
 - A workout is complete ONLY when progress.remaining_drills is 0. Never decide it is complete based on the current drill's position, the last chronological drill, or next_exercise_after_current being null. Earlier incomplete drills always remain required.
@@ -149,35 +145,21 @@ const REALTIME_TOOL_DEFS = [
   {
     name: "save_shooting_results",
     description:
-      "Save absolute or incremental shooting results for one set. Partial results keep the set current. Use increment for make, miss, just shot, or another; use replace for stated totals such as '4/5 so far'.",
+      "Save makes and attempts for the current shooting drill. If the athlete reports makes without attempts, use the saved attempts for that specific set from workout context.",
     parameters: {
       type: "object",
       properties: {
         ...DRILL_REFERENCE_PROPERTIES,
         makes: { type: "number" },
-        attempts: {
-          type: "number",
-          description:
-            "Attempts in this update. For increment mode: 1 for make/miss or the denominator of 'another 2/3'.",
-        },
-        update_mode: {
-          type: "string",
-          enum: ["replace", "increment"],
-          description:
-            "replace for cumulative totals; increment for make, miss, just shot, or another.",
-        },
+        attempts: { type: "number", description: "Optional; defaults to saved attempts for this set." },
         set_number: {
           type: "number",
           description:
             "1-based set number; defaults to current set. For a spoken left/right side, use the set_number whose side_label matches.",
         },
-        completed: {
-          type: "boolean",
-          description:
-            "True only when the athlete explicitly ends early or cumulative attempts reach the target. Partial updates are false.",
-        },
+        completed: { type: "boolean", description: "Whether this reported set is complete; defaults to true." },
       },
-      required: ["makes", "update_mode"],
+      required: ["makes"],
     },
   },
   {
@@ -1448,43 +1430,20 @@ export async function executeCoachTool(
           ? Math.min(args.set_number, plan.setCount)
           : currentSet ?? 1;
       const selectedSet = setLogs.find((set) => set.set_number === setNumber);
-      const savedSet = meta.set_logs?.find((set) => set.set_number === setNumber);
-      const updateMode = args.update_mode === "increment" ? "increment" : "replace";
-      if (!Number.isFinite(makes) || makes < 0) {
-        return { result: "Error: makes must be zero or greater", dbChanged: false };
-      }
       const requestedAttempts = Number(args.attempts);
-      const hasRequestedAttempts = Number.isFinite(requestedAttempts) && requestedAttempts > 0;
-      if (updateMode === "increment" && !hasRequestedAttempts) {
-        return {
-          result: "Error: incremental shooting updates require attempts",
-          dbChanged: false,
-        };
-      }
-      if (hasRequestedAttempts && makes > requestedAttempts) {
-        return { result: "Error: makes cannot exceed attempts", dbChanged: false };
-      }
-      const legacySingleSetMakes = plan.setCount === 1 ? existing?.makes ?? null : null;
-      const legacySingleSetAttempts = plan.setCount === 1 ? existing?.attempts ?? null : null;
-      const previousMakes = savedSet?.makes ?? legacySingleSetMakes ?? 0;
-      const previousAttempts = savedSet?.attempts ?? legacySingleSetAttempts ?? 0;
-      const attemptsForUpdate = hasRequestedAttempts
-        ? requestedAttempts
-        : selectedSet?.attempts ?? plan.perSetAttempts ?? 0;
-      const cumulativeMakes = updateMode === "increment" ? previousMakes + makes : makes;
-      const cumulativeAttempts =
-        updateMode === "increment" ? previousAttempts + attemptsForUpdate : attemptsForUpdate;
-      if (cumulativeMakes > cumulativeAttempts) {
-        return { result: "Error: cumulative makes cannot exceed attempts", dbChanged: false };
-      }
-      const targetAttempts = plan.perSetAttempts;
-      const reachedAttemptTarget =
-        targetAttempts != null && targetAttempts > 0 && cumulativeAttempts >= targetAttempts;
-      const setCompleted = args.completed === true || reachedAttemptTarget;
+      const attempts =
+        Number.isFinite(requestedAttempts) && requestedAttempts > 0
+          ? requestedAttempts
+          : selectedSet?.attempts ?? plan.perSetAttempts ?? 0;
+
+      const setCompleted =
+        typeof args.completed === "boolean"
+          ? args.completed
+          : attempts > 0;
 
       setLogs = updateSetLog(setLogs, plan, setNumber, {
-        makes: cumulativeMakes,
-        attempts: cumulativeAttempts,
+        makes,
+        attempts,
         completed: setCompleted,
       });
 
@@ -1512,30 +1471,21 @@ export async function executeCoachTool(
       );
       if (error) return { result: `Error saving: ${error.message}`, dbChanged: false };
       const targetResult =
-        !setCompleted || plan.perSetMakes == null
+        plan.perSetMakes == null
           ? ""
           : ` Target: ${plan.perSetMakes}${
               plan.perSetAttempts == null ? "" : `/${plan.perSetAttempts}`
             }; ${
-              cumulativeMakes >= plan.perSetMakes
+              makes >= plan.perSetMakes
                 ? "target met"
-                : cumulativeMakes <= plan.perSetMakes / 2
+                : makes <= plan.perSetMakes / 2
                   ? "significantly below target and needs work"
                   : "below target and needs work"
             }.`;
-      const remainingShots =
-        targetAttempts == null ? null : Math.max(0, targetAttempts - cumulativeAttempts);
-      const progressResult = setCompleted
-        ? `Saved! Set ${setNumber}${
-            setSideLabel(ex, setNumber) ? ` (${setSideLabel(ex, setNumber)})` : ""
-          } finished at ${cumulativeMakes}/${cumulativeAttempts}.${targetResult}`
-        : `Saved! You are ${cumulativeMakes}/${cumulativeAttempts} so far${
-            remainingShots == null
-              ? "."
-              : `, ${remainingShots} more shot${remainingShots === 1 ? "" : "s"} to go.`
-          }`;
       return {
-        result: progressResult,
+        result: `Saved set ${setNumber}${
+          setSideLabel(ex, setNumber) ? ` (${setSideLabel(ex, setNumber)})` : ""
+        }: ${makes}/${attempts}.${targetResult}`,
         dbChanged: true,
       };
     }

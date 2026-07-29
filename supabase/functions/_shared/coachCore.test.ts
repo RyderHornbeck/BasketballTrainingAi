@@ -7,7 +7,6 @@ import {
   rankCatalogExercises,
   type WorkoutContext,
 } from "./coachCore.ts";
-import { decodeExerciseLogMeta } from "./exerciseSetLogs.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -388,7 +387,7 @@ Deno.test("saved shooting results report target status and add requires permissi
     "day",
     contextWithPartialShootingSet(),
     "save_shooting_results",
-    { drill_name: "Shooting", set_number: 2, makes: 1, attempts: 10, completed: true }
+    { drill_name: "Shooting", set_number: 2, makes: 1, attempts: 10 }
   );
   const addTool = getRealtimeTools().find((tool) => tool.name === "add_workout_exercise");
 
@@ -398,115 +397,6 @@ Deno.test("saved shooting results report target status and add requires permissi
     addTool?.description.includes("only after the athlete explicitly requested"),
     "adding a weakness drill must require explicit permission"
   );
-});
-
-Deno.test("incremental makes and misses accumulate without advancing until target attempts", async () => {
-  const ctx = contextWithPartialShootingSet();
-  const rows: Record<string, unknown>[] = [];
-  const supabase = capturingSupabaseMock(rows);
-
-  const make = await executeCoachTool(supabase, "user", "day", ctx, "save_shooting_results", {
-    drill_name: "Shooting",
-    update_mode: "increment",
-    makes: 1,
-    attempts: 1,
-    completed: false,
-  });
-  assert(make.result.includes("1/1 so far"), "a make should save one make and one attempt");
-  assert(make.result.includes("11 more shots to go"), "partial progress should report remaining shots");
-  assert(rows[0].completed === false, "a partial make must keep the drill incomplete");
-  ctx.logs.set("shoot", rows[0] as any);
-
-  const miss = await executeCoachTool(supabase, "user", "day", ctx, "save_shooting_results", {
-    drill_name: "Shooting",
-    update_mode: "increment",
-    makes: 0,
-    attempts: 1,
-    completed: false,
-  });
-  assert(miss.result.includes("1/2 so far"), "a miss should add an attempt without adding a make");
-  assert(rows[1].completed === false, "a partial miss must keep the current set active");
-  ctx.logs.set("shoot", rows[1] as any);
-
-  const another = await executeCoachTool(
-    supabase,
-    "user",
-    "day",
-    ctx,
-    "save_shooting_results",
-    {
-      drill_name: "Shooting",
-      update_mode: "increment",
-      makes: 2,
-      attempts: 3,
-      completed: false,
-    }
-  );
-  assert(another.result.includes("3/5 so far"), "another 2/3 should add to the saved 1/2");
-  const partialMeta = decodeExerciseLogMeta(String(rows[2].notes ?? ""));
-  assert(
-    partialMeta.set_logs?.[1].makes === 3 && partialMeta.set_logs?.[1].attempts === 5,
-    "incremental results must persist as cumulative set totals"
-  );
-  ctx.logs.set("shoot", rows[2] as any);
-
-  const finished = await executeCoachTool(
-    supabase,
-    "user",
-    "day",
-    ctx,
-    "save_shooting_results",
-    {
-      drill_name: "Shooting",
-      update_mode: "increment",
-      makes: 2,
-      attempts: 7,
-      completed: false,
-    }
-  );
-  assert(finished.result.includes("finished at 5/12"), "reaching target attempts should finish the set");
-  assert(rows[3].completed === true, "the drill should complete when its final set reaches target attempts");
-});
-
-Deno.test("stated shooting totals stay partial unless the athlete explicitly ends early", async () => {
-  const ctx = contextWithPartialShootingSet();
-  const rows: Record<string, unknown>[] = [];
-  const supabase = capturingSupabaseMock(rows);
-
-  const partial = await executeCoachTool(
-    supabase,
-    "user",
-    "day",
-    ctx,
-    "save_shooting_results",
-    {
-      drill_name: "Shooting",
-      update_mode: "replace",
-      makes: 4,
-      attempts: 5,
-      completed: false,
-    }
-  );
-  assert(partial.result.includes("4/5 so far"), "stated totals should replace the current totals");
-  assert(rows[0].completed === false, "4/5 must not finish a 12-attempt set");
-  ctx.logs.set("shoot", rows[0] as any);
-
-  const doneEarly = await executeCoachTool(
-    supabase,
-    "user",
-    "day",
-    ctx,
-    "save_shooting_results",
-    {
-      drill_name: "Shooting",
-      update_mode: "replace",
-      makes: 4,
-      attempts: 5,
-      completed: true,
-    }
-  );
-  assert(doneEarly.result.includes("finished at 4/5"), "explicitly ending early should finish the set");
-  assert(rows[1].completed === true, "an explicit done request should complete the drill early");
 });
 
 Deno.test("catalog search prioritizes drills matching the workout's shooting weakness", () => {
