@@ -420,7 +420,9 @@ export function ExerciseCard({
             : set.attempts,
         completed:
           set.set_number === setNumber
-            ? makes != null && correctedAttempts > 0
+            ? makes != null &&
+              (setPlan.perSetAttempts ?? 0) > 0 &&
+              correctedAttempts >= (setPlan.perSetAttempts ?? 0)
             : set.completed,
       }))
     );
@@ -460,7 +462,10 @@ export function ExerciseCard({
           ? {
               ...set,
               attempts: correctedAttempts,
-              completed: set.makes != null && (correctedAttempts ?? 0) > 0,
+              completed:
+                set.makes != null &&
+                (setPlan.perSetAttempts ?? 0) > 0 &&
+                (correctedAttempts ?? 0) >= (setPlan.perSetAttempts ?? 0),
             }
           : set
       )
