@@ -155,6 +155,7 @@ interface CoachToolResponse {
   skip_model_response?: boolean;
   deduplicated?: boolean;
   updated_context?: string | null;
+  client_workout_context?: string | null;
   updated_instructions?: string | null;
   tool_kind?: "read_only" | "mutation";
   requires_spoken_confirmation?: boolean;
@@ -257,6 +258,7 @@ export class RealtimeCoachSession {
   private toolBusy = false;
   private responseCreatePending = false;
   private queuedResponseInstruction: string | null = null;
+  private queuedResponseOutOfBand = false;
   private pendingEvents: Record<string, unknown>[] = [];
   private responseCreateTimeout: ReturnType<typeof setTimeout> | null = null;
   private disconnectGraceTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -317,6 +319,7 @@ export class RealtimeCoachSession {
     this.activeResponseId = null;
     this.responseCreatePending = false;
     this.queuedResponseInstruction = null;
+    this.queuedResponseOutOfBand = false;
     this.contextRefreshPending = false;
     this.exactBufferedShotReply = null;
     this.exactCompletedShotReply = null;
@@ -504,6 +507,7 @@ export class RealtimeCoachSession {
     }
     this.contextRefreshPromise = (async () => {
       const { data, error } = await supabase.functions.invoke<{
+        client_workout_context?: string | null;
         updated_instructions?: string | null;
         error?: string;
       }>("coach-tools", {
@@ -517,6 +521,7 @@ export class RealtimeCoachSession {
       });
       if (error) throw new Error(await edgeFunctionErrorMessage(error));
       if (data?.error) throw new Error(data.error);
+      this.updateWorkoutState(data?.client_workout_context);
       if (data?.updated_instructions) {
         this.sendEvent({
           type: "session.update",
@@ -660,7 +665,7 @@ export class RealtimeCoachSession {
     if (data.db_changed && toolName !== "save_shooting_results") {
       emitWorkoutUpdated("coach");
     }
-    this.updateWorkoutState(data.updated_context);
+    this.updateWorkoutState(data.client_workout_context);
     return data;
   }
 
@@ -928,6 +933,7 @@ export class RealtimeCoachSession {
       this.toolBusy = false;
       this.responseCreatePending = false;
       this.queuedResponseInstruction = null;
+      this.queuedResponseOutOfBand = false;
       this.contextRefreshPending = false;
       this.pendingEvents = [];
 
@@ -1046,8 +1052,9 @@ export class RealtimeCoachSession {
     }
   }
 
-  private requestResponse(instructions: string): void {
+  private requestResponse(instructions: string, outOfBand = false): void {
     this.queuedResponseInstruction = instructions;
+    this.queuedResponseOutOfBand = outOfBand;
     this.flushQueuedResponse();
   }
 
@@ -1063,16 +1070,26 @@ export class RealtimeCoachSession {
       return;
     }
     const instructions = this.queuedResponseInstruction;
+    const outOfBand = this.queuedResponseOutOfBand;
     this.queuedResponseInstruction = null;
+    this.queuedResponseOutOfBand = false;
     const sent = this.sendEvent(
       {
         type: "response.create",
-        response: { instructions },
+        response: outOfBand
+          ? {
+              instructions,
+              conversation: "none",
+              input: [],
+              tool_choice: "none",
+            }
+          : { instructions },
       },
       false
     );
     if (!sent) {
       this.queuedResponseInstruction = instructions;
+      this.queuedResponseOutOfBand = outOfBand;
       return;
     }
     this.responseCreatePending = true;
@@ -1286,7 +1303,8 @@ export class RealtimeCoachSession {
               : "Say the set was saved and direct the athlete to the authoritative next work item."
             : strongestResult === "mutation"
               ? "Answer the athlete's latest request in one short natural sentence using the tool results. Confirm completed actions, but never mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless genuinely ambiguous."
-              : "Answer the athlete's latest request directly and briefly using the lookup result. Do not mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless the lookup result is genuinely ambiguous."
+              : "Answer the athlete's latest request directly and briefly using the lookup result. Do not mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless the lookup result is genuinely ambiguous.",
+        strongestResult === "buffered_shot" || strongestResult === "completed_shot"
       );
       this.exactBufferedShotReply = null;
       this.exactCompletedShotReply = null;
@@ -1318,6 +1336,7 @@ export class RealtimeCoachSession {
     try {
       let kind: ToolExecutionKind;
       let output: string;
+      let summary: string;
       if (LOCAL_SHOT_TOOLS.has(call.name)) {
         const buffered = await this.bufferShootingResult(
           this.normalizedShotArguments(call.name, args)
@@ -1329,6 +1348,7 @@ export class RealtimeCoachSession {
         }
         kind = buffered.kind;
         output = buffered.output;
+        summary = buffered.output;
       } else {
         const bufferedProgress =
           ["get_workout_position", "get_next_drill", "get_progress"].includes(call.name)
@@ -1337,6 +1357,7 @@ export class RealtimeCoachSession {
         if (bufferedProgress) {
           kind = "read_only";
           output = bufferedProgress;
+          summary = bufferedProgress;
         } else {
           if (FLUSH_BEFORE_TOOLS.has(call.name)) {
             await this.flushPendingShotSets();
@@ -1346,6 +1367,7 @@ export class RealtimeCoachSession {
           output = data.updated_context
             ? `${data.result}\n\nAuthoritative workout state after this call: ${data.updated_context}`
             : data.result;
+          summary = data.result;
         }
       }
 
@@ -1360,10 +1382,10 @@ export class RealtimeCoachSession {
         },
       });
 
-      if (output) {
+      if (summary) {
         this.conversationSummary = appendConversationSummary(
           this.conversationSummary,
-          output
+          summary
         );
         this.callbacks?.onConversationSummary?.(this.conversationSummary);
       }

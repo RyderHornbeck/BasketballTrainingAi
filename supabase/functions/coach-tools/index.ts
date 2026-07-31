@@ -4,6 +4,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import {
+  buildCompactContextSummary,
   buildRealtimeInstructions,
   buildRealtimeNavigationUpdate,
   executeCoachTool,
@@ -179,6 +180,9 @@ Deno.serve(async (req: Request) => {
           skip_model_response: cached.skip_model_response,
           deduplicated: true,
           updated_context: refreshedContext ? buildRealtimeNavigationUpdate(refreshedContext) : null,
+          client_workout_context: refreshedContext
+            ? buildCompactContextSummary(refreshedContext, answers ?? null, undefined)
+            : null,
           updated_instructions: refreshedContext
             && (cached.db_changed || body.refresh_context)
             ? buildRealtimeInstructions(refreshedContext, answers ?? null, undefined, undefined, coachName)
@@ -265,7 +269,15 @@ Deno.serve(async (req: Request) => {
       db_changed: outcome.dbChanged,
       local_confirmation: outcome.localConfirmation ?? null,
       skip_model_response: outcome.skipModelResponse ?? false,
-      updated_context: refreshedContext ? buildRealtimeNavigationUpdate(refreshedContext) : null,
+      updated_context: refreshedContext
+        ? buildRealtimeNavigationUpdate(
+            refreshedContext,
+            outcome.dbChanged ? ctx : undefined
+          )
+        : null,
+      client_workout_context: refreshedContext
+        ? buildCompactContextSummary(refreshedContext, answers ?? null, undefined)
+        : null,
       updated_instructions: refreshedContext
         && (outcome.dbChanged || body.refresh_context)
         ? buildRealtimeInstructions(refreshedContext, answers ?? null, undefined, undefined, coachName)

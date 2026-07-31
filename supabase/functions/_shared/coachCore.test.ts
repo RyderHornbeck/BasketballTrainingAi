@@ -1,5 +1,8 @@
 import {
   buildCompactContextSummary,
+  buildRealtimeModelContext,
+  buildRealtimeNavigationUpdate,
+  buildRealtimeSessionConfig,
   buildWorkoutNavigation,
   COACH_SYSTEM_PROMPT,
   executeCoachTool,
@@ -418,6 +421,49 @@ Deno.test("shooting context labels results far below the makes target", () => {
   );
 });
 
+Deno.test("normalized realtime context preserves coach knowledge with less duplication", () => {
+  const ctx = contextWithPartialShootingSet();
+  const legacy = buildCompactContextSummary(ctx, { main_goal: "Improve shooting" }, undefined);
+  const compact = buildRealtimeModelContext(ctx, { main_goal: "Improve shooting" }, undefined);
+  const parsed = JSON.parse(compact);
+  const shooting = parsed.drills.find(
+    (drill: { exercise_id: string }) => drill.exercise_id === "shoot"
+  );
+
+  assert(shooting.name === "Shooting", "compact state must preserve drill identity");
+  assert(shooting.sets.total === 2, "compact state must preserve set count");
+  assert(shooting.set_results[0].makes === 8, "compact state must preserve actual makes");
+  assert(shooting.set_results[0].attempts === 12, "compact state must preserve actual attempts");
+  assert(shooting.set_results[0].side_label === "left side", "set sides must be preserved");
+  assert(shooting.target_per_set.makes === 8, "per-set makes target must be preserved");
+  assert(shooting.target_per_set.attempts === 12, "per-set attempts target must be preserved");
+  assert(parsed.current_set.set_number === 2, "authoritative current set must be preserved");
+  assert(parsed.next_exercise.name === "Finishing", "next exercise must be preserved");
+  assert(parsed.totals.makes === 8 && parsed.totals.attempts === 12, "totals must be preserved");
+  assert(compact.length < legacy.length * 0.72, "model state should be at least 28% smaller");
+
+  const update = JSON.parse(buildRealtimeNavigationUpdate(ctx));
+  assert(update.current_set.set_number === 2, "state deltas must preserve the current set");
+  assert(update.drills.length === 3, "state deltas must preserve every drill");
+  assert(!("sequence" in update), "state deltas must not repeat the legacy expanded sequence");
+
+  const changed = contextWithPartialShootingSet();
+  changed.logs.set("shoot", {
+    ...changed.logs.get("shoot")!,
+    makes: 10,
+    attempts: 15,
+    notes:
+      '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":8,"attempts":12,"minutes":null,"completed":true},{"set_number":2,"makes":2,"attempts":3,"minutes":null,"completed":false}]}',
+  });
+  const delta = JSON.parse(buildRealtimeNavigationUpdate(changed, ctx));
+  assert(delta.state_scope === "delta", "mutation updates must identify themselves as deltas");
+  assert(
+    delta.drills.length === 1 && delta.drills[0].exercise_id === "shoot",
+    "mutation updates should repeat only changed drill state"
+  );
+  assert(delta.current_set.progress.attempts === 3, "delta navigation must contain fresh progress");
+});
+
 Deno.test("saved shooting results report target status and add requires permission", async () => {
   const outcome = await executeCoachTool(
     successfulSupabaseMock(),
@@ -718,5 +764,28 @@ Deno.test("realtime shooting tools make single shots deterministic", () => {
       "save only the athlete's actual cumulative makes and actual cumulative attempts"
     ) && COACH_SYSTEM_PROMPT.includes("Never save the prescribed target makes"),
     "saved shooting results must never substitute target or remaining numbers"
+  );
+});
+
+Deno.test("realtime sessions transcribe audio and retain stable tool contracts", () => {
+  const config = buildRealtimeSessionConfig("instructions", "model", "voice") as {
+    audio: { input: { transcription?: { model?: string; language?: string } } };
+    tools: Array<{ name: string }>;
+    truncation: { type?: string; retention_ratio?: number };
+  };
+  assert(
+    config.audio.input.transcription?.model === "gpt-4o-mini-transcribe",
+    "input transcription should allow older audio tokens to be discarded"
+  );
+  assert(config.audio.input.transcription?.language === "en", "coach transcription is English");
+  assert(config.tools.length === getRealtimeTools().length, "all realtime tools must remain enabled");
+  assert(
+    config.truncation.type === "retention_ratio" && config.truncation.retention_ratio === 0.8,
+    "prompt-cache-friendly truncation must remain enabled"
+  );
+  assert(COACH_SYSTEM_PROMPT.length < 7_000, "static realtime rules exceeded their safe budget");
+  assert(
+    JSON.stringify(getRealtimeTools()).length < 9_000,
+    "realtime tool schemas exceeded their safe budget"
   );
 });
