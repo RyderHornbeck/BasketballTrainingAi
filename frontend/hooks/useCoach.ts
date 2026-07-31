@@ -8,7 +8,7 @@ import {
   fetchDailyCoachBudget,
   isCoachLimitMessage,
 } from "@/lib/coachUsage";
-import { onWorkoutUpdated } from "@/lib/coachEvents";
+import { emitWorkoutUpdated, onWorkoutUpdated } from "@/lib/coachEvents";
 import { type CoachMachineState } from "@/lib/coachStateMachine";
 import {
   RealtimeCoachSession,
@@ -311,6 +311,9 @@ export function useCoach(dayId: string | null): UseCoachResult {
     sessionRef.current = null;
     teardownRef.current = session?.disconnect("overlay_closed") ?? Promise.resolve();
     await teardownRef.current;
+    // The disconnect flushes any locally tracked shots first. Trigger a fresh
+    // pull only after that write has finished so the Workouts screen updates.
+    emitWorkoutUpdated("coach_progress");
     await refreshDailyBudget();
   }, [refreshDailyBudget]);
 
@@ -354,7 +357,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
     const unsubscribe = onWorkoutUpdated((source) => {
       // The coach tool response already contains the canonical post-mutation
       // state. Refreshing again here causes a competing session.update.
-      if (source === "coach") return;
+      if (source === "coach" || source === "coach_progress") return;
       if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
         refreshTimer = null;

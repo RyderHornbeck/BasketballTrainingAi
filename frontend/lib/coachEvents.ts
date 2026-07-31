@@ -1,7 +1,7 @@
 // Tiny event bus so the voice coach (mounted in the tab layout) can tell
 // screens like Days/Analytics to refetch after it writes workout updates.
 
-export type WorkoutUpdateSource = "manual" | "external" | "coach";
+export type WorkoutUpdateSource = "manual" | "external" | "coach" | "coach_progress";
 type Listener = (source: WorkoutUpdateSource) => void;
 
 const listeners = new Set<Listener>();

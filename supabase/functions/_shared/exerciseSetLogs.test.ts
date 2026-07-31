@@ -40,3 +40,19 @@ Deno.test("different per-set attempts are not a drill-wide override", () => {
     "different set prescriptions must remain per-set values"
   );
 });
+
+Deno.test("matching progress attempts never shrink the prescribed target", () => {
+  const rows: SetLogEntry[] = [
+    { set_number: 1, completed: false, makes: null, attempts: 3, minutes: null },
+    { set_number: 2, completed: false, makes: null, attempts: 3, minutes: null },
+  ];
+
+  assert(
+    resolveAttemptsOverride({}, rows) === null,
+    "matching progress rows must not turn a 20-shot target into 3 shots"
+  );
+  assert(
+    resolveAttemptsOverride({ per_set_attempts_override: 3 }, rows) === null,
+    "legacy metadata must not replace the workout exercise target"
+  );
+});

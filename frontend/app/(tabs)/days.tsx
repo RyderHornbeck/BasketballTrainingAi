@@ -341,6 +341,13 @@ export default function DaysScreen() {
         void loadWeeklyStats();
         return;
       }
+      if (source === "coach_progress") {
+        // Pull the saved coach values into the mounted cards without
+        // reloading the plan or showing a loading state.
+        void loadDetail(false, true);
+        void loadWeeklyStats();
+        return;
+      }
       detailCacheRef.current.clear();
       void refreshPlan();
       void loadDetail(false, true);

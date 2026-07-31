@@ -7,6 +7,7 @@ import {
   rankCatalogExercises,
   type WorkoutContext,
 } from "./coachCore.ts";
+import { decodeExerciseLogMeta } from "./exerciseSetLogs.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -100,8 +101,45 @@ Deno.test("coach navigation uses the grouped Workouts order and the next unfinis
     "every set should expose its exact side label"
   );
   assert(
+    navigation.current_set_state?.progress.makes === 0 &&
+      navigation.current_set_state.progress.attempts === 0,
+    "an untouched set must expose zero actual progress, not its prescribed attempts"
+  );
+  assert(
+    navigation.current_set_state?.target.makes === 8 &&
+      navigation.current_set_state.target.attempts === 12,
+    "the current set must expose its prescribed target separately"
+  );
+  assert(
+    navigation.current_set_state?.remaining.makes === 8 &&
+      navigation.current_set_state.remaining.attempts === 12,
+    "the current set must expose precomputed remaining work"
+  );
+  assert(
     navigation.next_exercise_after_current?.name === "Finishing",
     "the following drill should be separate from the next work item"
+  );
+});
+
+Deno.test("current shooting progress never replaces the prescribed set target", () => {
+  const ctx = contextWithPartialShootingSet();
+  const shootingLog = ctx.logs.get("shoot");
+  assert(shootingLog, "shooting log fixture is required");
+  shootingLog.notes =
+    '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":2,"attempts":3,"minutes":null,"completed":false},{"set_number":2,"makes":null,"attempts":null,"minutes":null,"completed":false}],"per_set_attempts_override":3}';
+
+  const current = buildWorkoutNavigation(ctx).current_set_state;
+  assert(
+    current?.progress.makes === 2 && current.progress.attempts === 3,
+    "progress must describe only shots already taken"
+  );
+  assert(
+    current?.target.makes === 8 && current.target.attempts === 12,
+    "the workout exercise target must remain authoritative over legacy progress metadata"
+  );
+  assert(
+    current?.remaining.makes === 6 && current.remaining.attempts === 9,
+    "remaining work must be calculated from target minus progress"
   );
 });
 
@@ -393,9 +431,38 @@ Deno.test("saved shooting results report target status and add requires permissi
 
   assert(outcome.result.includes("below target and needs work"), "low results must be explicit");
   assert(outcome.result.includes("Target:"), "saved result should include the authoritative target");
+  assert(outcome.result.includes("1 for 10"), "shooting results must always use the word for");
+  assert(
+    COACH_SYSTEM_PROMPT.includes('Never say "X slash Y," "X over Y,"'),
+    "the realtime coach must never pronounce shooting results as slash or over"
+  );
   assert(
     addTool?.description.includes("only after the athlete explicitly requested"),
     "adding a weakness drill must require explicit permission"
+  );
+});
+
+Deno.test("saving a set keeps guidance on the same drill while another set remains", async () => {
+  const ctx = contextWithPartialShootingSet();
+  const shootingLog = ctx.logs.get("shoot");
+  assert(shootingLog, "shooting log fixture is required");
+  shootingLog.completed = false;
+  shootingLog.makes = null;
+  shootingLog.attempts = null;
+  shootingLog.notes = null;
+
+  const outcome = await executeCoachTool(
+    successfulSupabaseMock(),
+    "user",
+    "day",
+    ctx,
+    "save_shooting_results",
+    { drill_name: "Shooting", set_number: 1, makes: 8, attempts: 12, completed: true }
+  );
+
+  assert(
+    outcome.result.includes("Next up: set 2 (right side) of Shooting."),
+    "the next unfinished set of the same drill must take priority over the next exercise"
   );
 });
 
@@ -560,5 +627,96 @@ Deno.test("another recommendation balances weakness severity against existing fo
   assert(
     results[0]?.id === "finishing-focus",
     "existing focused coverage should allow another measured weakness to take priority"
+  );
+});
+
+Deno.test("buffer flush preserves partial shooting without completing the set", async () => {
+  const rows: Record<string, unknown>[] = [];
+  const outcome = await executeCoachTool(
+    capturingSupabaseMock(rows),
+    "user",
+    "day",
+    contextWithPartialShootingSet(),
+    "save_shooting_results",
+    {
+      drill_name: "Shooting",
+      set_number: 2,
+      makes: 4,
+      attempts: 5,
+      completed: false,
+    }
+  );
+  const meta = decodeExerciseLogMeta(String(rows[0].notes ?? ""));
+  assert(outcome.dbChanged, "flushing buffered progress should persist");
+  assert(rows[0].completed === false, "partial buffered shots must not complete the drill");
+  assert(meta.set_logs?.[1].makes === 4, "partial makes should remain in set metadata");
+  assert(meta.set_logs?.[1].attempts === 5, "partial attempts should remain in set metadata");
+  assert(meta.set_logs?.[1].completed === false, "the partial set must remain current");
+});
+
+Deno.test("buffer flush completes shooting exactly at the attempt target", async () => {
+  const rows: Record<string, unknown>[] = [];
+  await executeCoachTool(
+    capturingSupabaseMock(rows),
+    "user",
+    "day",
+    contextWithPartialShootingSet(),
+    "save_shooting_results",
+    {
+      drill_name: "Shooting",
+      set_number: 2,
+      makes: 7,
+      attempts: 12,
+      completed: true,
+    }
+  );
+  const meta = decodeExerciseLogMeta(String(rows[0].notes ?? ""));
+  assert(rows[0].completed === true, "the final target attempt should complete the drill");
+  assert(meta.set_logs?.[1].completed === true, "the target-complete set should be saved complete");
+});
+
+Deno.test("realtime shooting tools make single shots deterministic", () => {
+  const tools = getRealtimeTools();
+  const makeTool = tools.find((tool) => tool.name === "record_make");
+  const missTool = tools.find((tool) => tool.name === "record_miss");
+  const makesTool = tools.find((tool) => tool.name === "record_makes");
+  const missesTool = tools.find((tool) => tool.name === "record_misses");
+  const addTool = tools.find((tool) => tool.name === "add_shooting_result");
+  const totalTool = tools.find((tool) => tool.name === "set_shooting_total");
+  assert(
+    Boolean(makeTool && missTool && makesTool && missesTool && addTool && totalTool),
+    "all deterministic shot tools must exist"
+  );
+  assert(
+    !("attempts" in ((makeTool?.parameters?.properties ?? {}) as Record<string, unknown>)) &&
+      !("makes" in ((missTool?.parameters?.properties ?? {}) as Record<string, unknown>)),
+    "single make/miss tools must not accept model-provided shot counts"
+  );
+  assert(
+    COACH_SYSTEM_PROMPT.includes("hard-code one attempt"),
+    "Realtime instructions should require deterministic single-shot accounting"
+  );
+  assert(
+    COACH_SYSTEM_PROMPT.includes('"Made another,"') &&
+      COACH_SYSTEM_PROMPT.includes("Never invent a denominator"),
+    "single-shot phrasing must never be converted into a guessed multi-shot result"
+  );
+  assert(
+    makesTool?.parameters?.required?.includes("count") &&
+      missesTool?.parameters?.required?.includes("count") &&
+      COACH_SYSTEM_PROMPT.includes("call record_makes once with count N") &&
+      COACH_SYSTEM_PROMPT.includes("call record_misses once with count N"),
+    "consecutive makes and misses must map to deterministic counted tools"
+  );
+  assert(
+    COACH_SYSTEM_PROMPT.includes('respond with exactly: "You\'re X for Y, N shots left."') &&
+      COACH_SYSTEM_PROMPT.includes("Say nothing before or after it"),
+    "ordinary shot updates must contain only the exact progress sentence"
+  );
+  assert(
+    COACH_SYSTEM_PROMPT.includes(
+      "save only the athlete's actual cumulative makes and actual cumulative attempts"
+    ) && COACH_SYSTEM_PROMPT.includes("Never save the prescribed target makes"),
+    "saved shooting results must never substitute target or remaining numbers"
   );
 });

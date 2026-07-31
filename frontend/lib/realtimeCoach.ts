@@ -83,6 +83,118 @@ interface FunctionCallItem {
   arguments: string;
 }
 
+interface RealtimeSetResult {
+  set_number: number;
+  makes: number | null;
+  attempts: number | null;
+  completed: boolean;
+  side_label?: string | null;
+  progress?: { makes: number; attempts: number; misses: number };
+  target?: { makes: number | null; attempts: number | null };
+  remaining?: { makes: number | null; attempts: number | null };
+}
+
+interface RealtimeDrillState {
+  exercise_id: string;
+  name: string | null;
+  target: {
+    makes: number | null;
+    attempts: number | null;
+  };
+  sets: {
+    next_unfinished: number | null;
+  };
+  set_results: RealtimeSetResult[];
+}
+
+interface RealtimeWorkoutState {
+  sequence?: { drills?: RealtimeDrillState[] };
+  navigation?: {
+    next_work_item?: (RealtimeDrillState & {
+      set_number?: number | null;
+      set_side_label?: string | null;
+    }) | null;
+    current_set_state?: {
+      exercise_id: string;
+      drill_name: string | null;
+      set_number: number;
+      side_label?: string | null;
+      completed: boolean;
+      progress: { makes: number; attempts: number; misses: number };
+      target: { makes: number | null; attempts: number | null };
+      remaining: { makes: number | null; attempts: number | null };
+    } | null;
+  };
+}
+
+interface PendingShotSet {
+  exerciseId: string;
+  drillName: string;
+  setNumber: number;
+  sideLabel: string | null;
+  makes: number;
+  attempts: number;
+  targetMakes: number | null;
+  targetAttempts: number | null;
+  completed: boolean;
+}
+
+interface NextSetGuidance {
+  drillName: string;
+  setNumber: number;
+  sideLabel: string | null;
+}
+
+type ToolExecutionKind = "read_only" | "mutation" | "buffered_shot" | "completed_shot";
+
+interface CoachToolResponse {
+  result: string;
+  client_action: ClientTimerAction | null;
+  db_changed: boolean;
+  local_confirmation?: string | null;
+  skip_model_response?: boolean;
+  deduplicated?: boolean;
+  updated_context?: string | null;
+  updated_instructions?: string | null;
+  tool_kind?: "read_only" | "mutation";
+  requires_spoken_confirmation?: boolean;
+  error?: string;
+}
+
+const FLUSH_BEFORE_TOOLS = new Set([
+  "set_current_drill",
+  "skip_drill",
+  "complete_drill",
+  "set_set_completion",
+  "finish_workout",
+  "add_workout_exercise",
+  "remove_workout_exercise",
+]);
+
+const LOCAL_SHOT_TOOLS = new Set([
+  "record_make",
+  "record_miss",
+  "record_makes",
+  "record_misses",
+  "add_shooting_result",
+  "set_shooting_total",
+  // Compatibility for a session created just before this update.
+  "save_shooting_results",
+]);
+const DETERMINISTIC_SHOT_TOOLS = new Set([
+  "record_make",
+  "record_miss",
+  "record_makes",
+  "record_misses",
+]);
+
+function normalizeDrillReference(value: unknown): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 const MIC_CONSTRAINTS = {
   echoCancellation: true,
   noiseSuppression: true,
@@ -158,6 +270,11 @@ export class RealtimeCoachSession {
   private usageTracker: ReturnType<typeof createUsageTracker> | null = null;
   private handledToolCalls = new Set<string>();
   private loggedUsageSessionKeys = new Set<string>();
+  private workoutState: RealtimeWorkoutState | null = null;
+  private pendingShotSets = new Map<string, PendingShotSet>();
+  private shotFlushPromise: Promise<void> | null = null;
+  private exactBufferedShotReply: string | null = null;
+  private exactCompletedShotReply: string | null = null;
 
   getSessionKey(): string | null {
     return this.sessionKey;
@@ -201,6 +318,8 @@ export class RealtimeCoachSession {
     this.responseCreatePending = false;
     this.queuedResponseInstruction = null;
     this.contextRefreshPending = false;
+    this.exactBufferedShotReply = null;
+    this.exactCompletedShotReply = null;
     this.usageTracker = createUsageTracker(this.model);
     callbacks.onStatus("connecting");
 
@@ -336,6 +455,7 @@ export class RealtimeCoachSession {
 
       this.model = data.model ?? this.model;
       this.usageTracker = createUsageTracker(this.model);
+      this.updateWorkoutState(data.workout_context);
 
       await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: data.sdp }));
       await waitForDataChannelOpen(dc);
@@ -423,6 +543,333 @@ export class RealtimeCoachSession {
     void this.refreshWorkoutContext();
   }
 
+  private updateWorkoutState(serialized: string | null | undefined): void {
+    if (!serialized) return;
+    try {
+      const parsed = JSON.parse(serialized) as RealtimeWorkoutState;
+      if (parsed?.sequence?.drills) this.workoutState = parsed;
+    } catch {
+      console.warn("Could not parse realtime workout state.");
+    }
+  }
+
+  private pendingShotKey(exerciseId: string, setNumber: number): string {
+    return `${exerciseId}:${setNumber}`;
+  }
+
+  private resolveRealtimeDrill(args: Record<string, unknown>): RealtimeDrillState | null {
+    const drills = this.workoutState?.sequence?.drills ?? [];
+    const exerciseId = typeof args.exercise_id === "string" ? args.exercise_id : null;
+    if (exerciseId) {
+      const exactId = drills.find((drill) => drill.exercise_id === exerciseId);
+      if (exactId) return exactId;
+    }
+    const requestedName = normalizeDrillReference(args.drill_name);
+    if (requestedName) {
+      const exact = drills.filter(
+        (drill) => normalizeDrillReference(drill.name) === requestedName
+      );
+      if (exact.length === 1) return exact[0];
+      const partial = drills.filter((drill) => {
+        const name = normalizeDrillReference(drill.name);
+        return name.includes(requestedName) || requestedName.includes(name);
+      });
+      if (partial.length === 1) return partial[0];
+    }
+    return this.workoutState?.navigation?.next_work_item ?? null;
+  }
+
+  private updateBufferedSetInWorkoutState(entry: PendingShotSet): void {
+    const state = this.workoutState;
+    const drill = state?.sequence?.drills?.find(
+      (candidate) => candidate.exercise_id === entry.exerciseId
+    );
+    if (!drill) return;
+    const set = drill.set_results.find((candidate) => candidate.set_number === entry.setNumber);
+    if (set) {
+      set.makes = entry.makes;
+      set.attempts = entry.attempts;
+      set.completed = entry.completed;
+      set.progress = {
+        makes: entry.makes,
+        attempts: entry.attempts,
+        misses: Math.max(0, entry.attempts - entry.makes),
+      };
+      set.target = { makes: entry.targetMakes, attempts: entry.targetAttempts };
+      set.remaining = {
+        makes:
+          entry.targetMakes == null ? null : Math.max(0, entry.targetMakes - entry.makes),
+        attempts:
+          entry.targetAttempts == null
+            ? null
+            : Math.max(0, entry.targetAttempts - entry.attempts),
+      };
+    }
+    const current = state?.navigation?.current_set_state;
+    if (
+      current &&
+      current.exercise_id === entry.exerciseId &&
+      current.set_number === entry.setNumber
+    ) {
+      current.completed = entry.completed;
+      current.progress = {
+        makes: entry.makes,
+        attempts: entry.attempts,
+        misses: Math.max(0, entry.attempts - entry.makes),
+      };
+      current.target = { makes: entry.targetMakes, attempts: entry.targetAttempts };
+      current.remaining = {
+        makes:
+          entry.targetMakes == null ? null : Math.max(0, entry.targetMakes - entry.makes),
+        attempts:
+          entry.targetAttempts == null
+            ? null
+            : Math.max(0, entry.targetAttempts - entry.attempts),
+      };
+    }
+  }
+
+  private async invokeCoachTool(
+    toolName: string,
+    args: Record<string, unknown>
+  ): Promise<CoachToolResponse> {
+    const dayId = this.dayId;
+    const sessionKey = this.sessionKey;
+    if (!dayId || !sessionKey) throw new Error("Coach session is not active.");
+    const requestArgs = { ...args };
+    if (typeof requestArgs.client_request_id !== "string") {
+      requestArgs.client_request_id = createClientRequestId(toolName);
+    }
+    if (toolName === "finish_workout") {
+      requestArgs.timezone_offset_minutes = new Date().getTimezoneOffset();
+    }
+    const { data, error } = await supabase.functions.invoke<CoachToolResponse>("coach-tools", {
+      body: {
+        day_id: dayId,
+        session_key: sessionKey,
+        tool_name: toolName,
+        arguments: requestArgs,
+      },
+    });
+    if (error) throw new Error(await edgeFunctionErrorMessage(error));
+    if (!data) throw new Error("Empty tool response.");
+    if (data.error) throw new Error(data.error);
+    if (data.client_action) this.callbacks?.onTimerAction(data.client_action);
+    // Buffered shooting writes are surfaced once when the overlay closes,
+    // avoiding repeated background pulls for every flushed set.
+    if (data.db_changed && toolName !== "save_shooting_results") {
+      emitWorkoutUpdated("coach");
+    }
+    this.updateWorkoutState(data.updated_context);
+    return data;
+  }
+
+  private async persistPendingShotSet(key: string): Promise<CoachToolResponse | null> {
+    const entry = this.pendingShotSets.get(key);
+    if (!entry) return null;
+    const data = await this.invokeCoachTool("save_shooting_results", {
+      exercise_id: entry.exerciseId,
+      drill_name: entry.drillName,
+      set_number: entry.setNumber,
+      makes: entry.makes,
+      attempts: entry.attempts,
+      completed: entry.completed,
+    });
+    this.pendingShotSets.delete(key);
+    return data;
+  }
+
+  private async flushPendingShotSets(): Promise<void> {
+    if (this.shotFlushPromise) return this.shotFlushPromise;
+    if (this.pendingShotSets.size === 0) return;
+    this.shotFlushPromise = (async () => {
+      for (const key of [...this.pendingShotSets.keys()]) {
+        await this.persistPendingShotSet(key);
+      }
+    })().finally(() => {
+      this.shotFlushPromise = null;
+    });
+    return this.shotFlushPromise;
+  }
+
+  private bufferedProgressOutput(): string | null {
+    const current = this.workoutState?.navigation?.next_work_item;
+    if (!current) return null;
+    const setNumber = current.set_number ?? current.sets.next_unfinished ?? 1;
+    const entry = this.pendingShotSets.get(
+      this.pendingShotKey(current.exercise_id, setNumber)
+    );
+    if (!entry || entry.completed) return null;
+    const remainingShots =
+      entry.targetAttempts == null ? null : Math.max(0, entry.targetAttempts - entry.attempts);
+    const remainingMakes =
+      entry.targetMakes == null ? null : Math.max(0, entry.targetMakes - entry.makes);
+    return `AUTHORITATIVE CURRENT SET STATE: set ${entry.setNumber}${
+      entry.sideLabel ? ` (${entry.sideLabel})` : ""
+    }. Actual progress: ${entry.makes} makes in ${entry.attempts} attempts. Prescribed whole-set target: ${
+      entry.targetMakes ?? "no makes target"
+    } makes in ${entry.targetAttempts ?? "no attempts target"} attempts. Remaining: ${
+      remainingMakes ?? "unknown"
+    } makes and ${remainingShots ?? "unknown"} attempts. The progress denominator is shots already taken, not the target. Keep the athlete on this set unless they explicitly finish or move on.`;
+  }
+
+  private normalizedShotArguments(
+    toolName: string,
+    args: Record<string, unknown>
+  ): Record<string, unknown> {
+    if (toolName === "record_make") {
+      return { ...args, makes: 1, attempts: 1, update_mode: "increment", completed: false };
+    }
+    if (toolName === "record_miss") {
+      return { ...args, makes: 0, attempts: 1, update_mode: "increment", completed: false };
+    }
+    if (toolName === "record_makes") {
+      const count = Number(args.count);
+      return {
+        ...args,
+        makes: count,
+        attempts: count,
+        update_mode: "increment",
+        completed: false,
+      };
+    }
+    if (toolName === "record_misses") {
+      const count = Number(args.count);
+      return {
+        ...args,
+        makes: 0,
+        attempts: count,
+        update_mode: "increment",
+        completed: false,
+      };
+    }
+    if (toolName === "add_shooting_result") {
+      return { ...args, update_mode: "increment", completed: false };
+    }
+    if (toolName === "set_shooting_total") {
+      return { ...args, update_mode: "replace" };
+    }
+    return args;
+  }
+
+  private nextIncompleteSetInSameDrill(entry: PendingShotSet): NextSetGuidance | null {
+    const drill = this.workoutState?.sequence?.drills?.find(
+      (candidate) => candidate.exercise_id === entry.exerciseId
+    );
+    const nextSet = drill?.set_results
+      .filter((set) => !set.completed)
+      .sort((a, b) => a.set_number - b.set_number)[0];
+    if (!drill || !nextSet) return null;
+    return {
+      drillName: drill.name ?? entry.drillName,
+      setNumber: nextSet.set_number,
+      sideLabel: nextSet.side_label ?? null,
+    };
+  }
+
+  private completedShotReply(
+    entry: PendingShotSet,
+    nextSetInSameDrill: NextSetGuidance | null
+  ): string {
+    const result = `Set saved. You shot ${entry.makes} for ${entry.attempts}.`;
+    if (nextSetInSameDrill) {
+      const side = nextSetInSameDrill.sideLabel ? `, ${nextSetInSameDrill.sideLabel}` : "";
+      return `${result} Next up: set ${nextSetInSameDrill.setNumber}${side} of ${nextSetInSameDrill.drillName}.`;
+    }
+    const next = this.workoutState?.navigation?.next_work_item;
+    if (!next || next.set_number == null) {
+      return `${result} Workout complete.`;
+    }
+    const side = next.set_side_label ? `, ${next.set_side_label}` : "";
+    if (next.exercise_id === entry.exerciseId) {
+      return `${result} Next up: set ${next.set_number}${side} of ${
+        next.name ?? entry.drillName
+      }.`;
+    }
+    return `${result} Next up: ${next.name ?? "the next exercise"}, set ${
+      next.set_number
+    }${side}.`;
+  }
+
+  private async bufferShootingResult(
+    args: Record<string, unknown>
+  ): Promise<{ kind: ToolExecutionKind; output: string }> {
+    const drill = this.resolveRealtimeDrill(args);
+    if (!drill) {
+      return { kind: "read_only", output: "I couldn't uniquely match that workout drill." };
+    }
+    const requestedSet = Number(args.set_number);
+    const setNumber =
+      Number.isInteger(requestedSet) && requestedSet > 0
+        ? requestedSet
+        : this.workoutState?.navigation?.next_work_item?.exercise_id === drill.exercise_id
+          ? this.workoutState.navigation.next_work_item.set_number ??
+            drill.sets.next_unfinished ??
+            1
+          : drill.sets.next_unfinished ?? 1;
+    const key = this.pendingShotKey(drill.exercise_id, setNumber);
+    const saved = drill.set_results.find((set) => set.set_number === setNumber);
+    const existing = this.pendingShotSets.get(key);
+    const baseMakes = existing?.makes ?? saved?.makes ?? 0;
+    const baseAttempts =
+      existing?.attempts ?? (saved?.makes != null ? saved.attempts ?? 0 : 0);
+    const reportedMakes = Number(args.makes);
+    const reportedAttempts = Number(args.attempts);
+    if (!Number.isInteger(reportedMakes) || reportedMakes < 0) {
+      return { kind: "read_only", output: "Makes must be a whole number zero or greater." };
+    }
+    if (!Number.isInteger(reportedAttempts) || reportedAttempts <= 0) {
+      return { kind: "read_only", output: "Attempts must be a positive whole number." };
+    }
+    const updateMode = args.update_mode === "increment" ? "increment" : "replace";
+    const nextMakes =
+      updateMode === "increment" ? baseMakes + reportedMakes : reportedMakes;
+    const attemptValue = reportedAttempts;
+    const nextAttempts = Math.max(
+      nextMakes,
+      updateMode === "increment" ? baseAttempts + attemptValue : attemptValue
+    );
+    const targetAttempts = drill.target.attempts;
+    const completed =
+      args.completed === true ||
+      (targetAttempts != null && targetAttempts > 0 && nextAttempts >= targetAttempts);
+    const entry: PendingShotSet = {
+      exerciseId: drill.exercise_id,
+      drillName: drill.name ?? "current drill",
+      setNumber,
+      sideLabel: saved?.side_label ?? null,
+      makes: nextMakes,
+      attempts: nextAttempts,
+      targetMakes: drill.target.makes,
+      targetAttempts,
+      completed,
+    };
+    this.pendingShotSets.set(key, entry);
+    this.updateBufferedSetInWorkoutState(entry);
+
+    const remainingShots =
+      targetAttempts == null ? null : Math.max(0, targetAttempts - nextAttempts);
+    if (completed) {
+      // Capture this before the persistence refresh. Even if refreshed
+      // navigation advances too aggressively, an unfinished set in this
+      // drill always takes priority over the next exercise.
+      const nextSetInSameDrill = this.nextIncompleteSetInSameDrill(entry);
+      await this.persistPendingShotSet(key);
+      return {
+        kind: "completed_shot",
+        output: this.completedShotReply(entry, nextSetInSameDrill),
+      };
+    }
+    return {
+      kind: "buffered_shot",
+      output: `You're ${nextMakes} for ${nextAttempts}${
+        remainingShots == null
+          ? "."
+          : `, ${remainingShots} shot${remainingShots === 1 ? "" : "s"} left.`
+      }`,
+    };
+  }
+
   markTimerSetComplete(exerciseId: string, setNumber: number): void {
     this.sendEvent({
       type: "conversation.item.create",
@@ -488,6 +935,17 @@ export class RealtimeCoachSession {
       if (this.responseCreateTimeout) clearTimeout(this.responseCreateTimeout);
       this.disconnectGraceTimeout = null;
       this.responseCreateTimeout = null;
+
+      if (this.pendingShotSets.size > 0 && sessionKey && dayId) {
+        try {
+          await this.flushPendingShotSets();
+        } catch (err) {
+          console.error("Failed to save buffered shooting progress before disconnect:", err);
+          callbacks?.onError(
+            "Your latest shooting progress could not be saved. Check your connection and try again."
+          );
+        }
+      }
 
       try {
         this.dc?.close();
@@ -754,21 +1212,20 @@ export class RealtimeCoachSession {
 
     const sessionKey = this.sessionKey;
     if (sessionKey) {
-      const daily = await logCoachUsage({ dayId: this.dayId, sessionKey, totals });
-      if (daily) {
+      // Do not put usage persistence on the spoken-response critical path.
+      // Totals are cumulative, so later writes and disconnect safely reconcile it.
+      void logCoachUsage({ dayId: this.dayId, sessionKey, totals }).then((daily) => {
+        if (!daily) {
+          console.warn("Coach usage persistence delayed; it will retry.");
+          return;
+        }
         this.dailyBudgetUsd = daily.budgetUsd;
         this.callbacks?.onBudgetUpdate?.(daily.spentUsd, daily.budgetUsd);
         if (daily.remainingUsd <= 0) {
           this.callbacks?.onError(COACH_LIMIT_MESSAGES.dailyBudgetExhausted);
           void this.disconnect("daily_budget");
-          return;
         }
-      } else {
-        // Keep the conversation alive on a transient logging failure. Totals
-        // are cumulative, so the next response and normal disconnect both
-        // retry the complete session usage without losing prior tokens.
-        console.warn("Coach usage persistence delayed; it will retry.");
-      }
+      });
     }
     const output = event.response?.output ?? [];
     const functionCalls = output.filter(
@@ -778,10 +1235,34 @@ export class RealtimeCoachSession {
     if (functionCalls.length > 0) {
       this.toolBusy = true;
       this.updateStatus();
-      let hasMutation = false;
+      let strongestResult: ToolExecutionKind = "read_only";
+      const singleShotCalls = new Set<string>();
       try {
         for (const call of functionCalls) {
-          hasMutation = (await this.executeToolCall(call, generation)) || hasMutation;
+          if (
+            DETERMINISTIC_SHOT_TOOLS.has(call.name) &&
+            singleShotCalls.has(call.name)
+          ) {
+            this.sendEvent({
+              type: "conversation.item.create",
+              item: {
+                type: "function_call_output",
+                call_id: call.call_id,
+                output: "Duplicate single-shot call ignored; progress is unchanged.",
+              },
+            });
+            continue;
+          }
+          if (DETERMINISTIC_SHOT_TOOLS.has(call.name)) {
+            singleShotCalls.add(call.name);
+          }
+          const result = await this.executeToolCall(call, generation);
+          if (result === "completed_shot") strongestResult = "completed_shot";
+          else if (result === "mutation" && strongestResult !== "completed_shot") {
+            strongestResult = "mutation";
+          } else if (result === "buffered_shot" && strongestResult === "read_only") {
+            strongestResult = "buffered_shot";
+          }
         }
       } finally {
         if (generation === this.connectionGeneration) {
@@ -791,10 +1272,24 @@ export class RealtimeCoachSession {
       }
       if (generation !== this.connectionGeneration) return;
       this.requestResponse(
-        hasMutation
-          ? "Answer the athlete's latest request in one short natural sentence using the tool results. Confirm any completed actions, but never mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless the results are genuinely ambiguous."
-          : "Answer the athlete's latest request directly and briefly using the lookup result. Do not mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless the lookup result is genuinely ambiguous."
+        strongestResult === "buffered_shot"
+          ? this.exactBufferedShotReply
+            ? `Say only this exact sentence verbatim. Output no acknowledgment, encouragement, praise, reaction, or any other words before or after it: ${JSON.stringify(
+                this.exactBufferedShotReply
+              )}`
+            : "Reply with only the short progress result. Do not calculate any numbers yourself."
+          : strongestResult === "completed_shot"
+            ? this.exactCompletedShotReply
+              ? `Repeat this exact sentence verbatim without recalculating, changing the next item, or skipping a set: ${JSON.stringify(
+                  this.exactCompletedShotReply
+                )}`
+              : "Say the set was saved and direct the athlete to the authoritative next work item."
+            : strongestResult === "mutation"
+              ? "Answer the athlete's latest request in one short natural sentence using the tool results. Confirm completed actions, but never mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless genuinely ambiguous."
+              : "Answer the athlete's latest request directly and briefly using the lookup result. Do not mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless the lookup result is genuinely ambiguous."
       );
+      this.exactBufferedShotReply = null;
+      this.exactCompletedShotReply = null;
       return;
     }
 
@@ -803,11 +1298,14 @@ export class RealtimeCoachSession {
     this.flushQueuedResponse();
   }
 
-  private async executeToolCall(call: FunctionCallItem, generation: number): Promise<boolean> {
+  private async executeToolCall(
+    call: FunctionCallItem,
+    generation: number
+  ): Promise<ToolExecutionKind> {
     const dayId = this.dayId;
     const sessionKey = this.sessionKey;
-    if (!dayId || !sessionKey || generation !== this.connectionGeneration) return false;
-    if (this.handledToolCalls.has(call.call_id)) return false;
+    if (!dayId || !sessionKey || generation !== this.connectionGeneration) return "read_only";
+    if (this.handledToolCalls.has(call.call_id)) return "read_only";
     this.handledToolCalls.add(call.call_id);
 
     let args: Record<string, unknown> = {};
@@ -817,49 +1315,41 @@ export class RealtimeCoachSession {
       args = {};
     }
 
-    if (typeof args.client_request_id !== "string") {
-      args.client_request_id = createClientRequestId(call.name);
-    }
-    if (call.name === "finish_workout") {
-      args.timezone_offset_minutes = new Date().getTimezoneOffset();
-    }
-
     try {
-      const { data, error } = await supabase.functions.invoke<{
-        result: string;
-        client_action: ClientTimerAction | null;
-        db_changed: boolean;
-        local_confirmation?: string | null;
-        skip_model_response?: boolean;
-        deduplicated?: boolean;
-        updated_context?: string | null;
-        updated_instructions?: string | null;
-        tool_kind?: "read_only" | "mutation";
-        requires_spoken_confirmation?: boolean;
-        error?: string;
-      }>("coach-tools", {
-        body: {
-          day_id: dayId,
-          session_key: sessionKey,
-          tool_name: call.name,
-          arguments: args,
-        },
-      });
-
-      if (error) throw new Error(await edgeFunctionErrorMessage(error));
-      if (!data) throw new Error("Empty tool response.");
-      if (data.error) throw new Error(data.error);
-
-      if (data.client_action) {
-        this.callbacks?.onTimerAction(data.client_action);
+      let kind: ToolExecutionKind;
+      let output: string;
+      if (LOCAL_SHOT_TOOLS.has(call.name)) {
+        const buffered = await this.bufferShootingResult(
+          this.normalizedShotArguments(call.name, args)
+        );
+        if (buffered.kind === "buffered_shot") {
+          this.exactBufferedShotReply = buffered.output;
+        } else if (buffered.kind === "completed_shot") {
+          this.exactCompletedShotReply = buffered.output;
+        }
+        kind = buffered.kind;
+        output = buffered.output;
+      } else {
+        const bufferedProgress =
+          ["get_workout_position", "get_next_drill", "get_progress"].includes(call.name)
+            ? this.bufferedProgressOutput()
+            : null;
+        if (bufferedProgress) {
+          kind = "read_only";
+          output = bufferedProgress;
+        } else {
+          if (FLUSH_BEFORE_TOOLS.has(call.name)) {
+            await this.flushPendingShotSets();
+          }
+          const data = await this.invokeCoachTool(call.name, args);
+          kind = data.tool_kind === "read_only" ? "read_only" : "mutation";
+          output = data.updated_context
+            ? `${data.result}\n\nAuthoritative workout state after this call: ${data.updated_context}`
+            : data.result;
+        }
       }
-      if (data.db_changed) {
-        emitWorkoutUpdated("coach");
-      }
-      if (generation !== this.connectionGeneration) return false;
-      const output = data.updated_context
-        ? `${data.result}\n\nAuthoritative workout state after this call: ${data.updated_context}`
-        : data.result;
+
+      if (generation !== this.connectionGeneration) return "read_only";
 
       this.sendEvent({
         type: "conversation.item.create",
@@ -870,18 +1360,18 @@ export class RealtimeCoachSession {
         },
       });
 
-      if (data.result) {
+      if (output) {
         this.conversationSummary = appendConversationSummary(
           this.conversationSummary,
-          data.result
+          output
         );
         this.callbacks?.onConversationSummary?.(this.conversationSummary);
       }
 
-      return data.requires_spoken_confirmation ?? !data.skip_model_response;
+      return kind;
     } catch (err) {
       console.error(`Tool ${call.name} failed:`, err);
-      if (generation !== this.connectionGeneration) return false;
+      if (generation !== this.connectionGeneration) return "read_only";
       this.sendEvent({
         type: "conversation.item.create",
         item: {
@@ -890,7 +1380,7 @@ export class RealtimeCoachSession {
           output: `Error: ${err instanceof Error ? err.message : "tool failed"}`,
         },
       });
-      return true;
+      return "mutation";
     }
   }
 }

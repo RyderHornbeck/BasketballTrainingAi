@@ -118,20 +118,12 @@ export function resolveMinutesOverride(meta: ExerciseLogMeta): number | null {
 }
 
 export function resolveAttemptsOverride(
-  meta: ExerciseLogMeta,
-  setLogs: SetLogEntry[]
+  _meta: ExerciseLogMeta,
+  _setLogs: SetLogEntry[]
 ): number | null {
-  if (meta.per_set_attempts_override != null && meta.per_set_attempts_override > 0) {
-    return meta.per_set_attempts_override;
-  }
-  const attempts = setLogs
-    .map((row) => row.attempts)
-    .filter((value): value is number => value != null && value > 0);
-  if (!attempts.length) return null;
-  const first = attempts[0];
-  // Differing values are intentional per-set edits, not a drill-wide
-  // prescription override.
-  return attempts.every((value) => value === first) ? first : null;
+  // Historical builds wrote observed progress into this legacy override.
+  // The workout exercise target is now the sole source of truth.
+  return null;
 }
 
 export function createEmptySetLogs(plan: ExerciseSetPlan): SetLogEntry[] {
@@ -177,8 +169,9 @@ export function hydrateSetLogs(
 function isSetComplete(entry: SetLogEntry, plan: ExerciseSetPlan): boolean {
   if (entry.completed) return true;
   if (plan.logType === "makes_attempts") {
-    const attempts = entry.attempts ?? plan.perSetAttempts ?? 0;
-    return entry.makes != null && attempts > 0;
+    const attempts = entry.attempts ?? 0;
+    const targetAttempts = plan.perSetAttempts ?? 0;
+    return entry.makes != null && targetAttempts > 0 && attempts >= targetAttempts;
   }
   return false;
 }
