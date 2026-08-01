@@ -3,6 +3,7 @@ import {
   buildRealtimeModelContext,
   buildRealtimeNavigationUpdate,
   buildRealtimeSessionConfig,
+  buildWorkoutDrillListSummary,
   buildWorkoutNavigation,
   COACH_SYSTEM_PROMPT,
   executeCoachTool,
@@ -122,6 +123,12 @@ Deno.test("coach navigation uses the grouped Workouts order and the next unfinis
     navigation.next_exercise_after_current?.name === "Finishing",
     "the following drill should be separate from the next work item"
   );
+});
+
+Deno.test("shooting drill lists exclude the separate finishing category", () => {
+  const summary = buildWorkoutDrillListSummary(contextWithPartialShootingSet(), "shooting");
+  assert(summary.includes("Shooting"), "shooting category drills should be listed");
+  assert(!summary.includes("Finishing"), "finishing must not be treated as a shooting drill");
 });
 
 Deno.test("current shooting progress never replaces the prescribed set target", () => {

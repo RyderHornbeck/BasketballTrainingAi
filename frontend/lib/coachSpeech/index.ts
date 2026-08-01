@@ -146,7 +146,7 @@ function intent<K extends CoachSpeechIntent["kind"]>(
 }
 
 export function normalizeCoachSpeech(transcript: string | null | undefined): string {
-  return String(transcript ?? "")
+  let text = String(transcript ?? "")
     .toLowerCase()
     .replace(/[’']/g, "")
     .replace(/\bi m\b/g, "im")
@@ -158,6 +158,24 @@ export function normalizeCoachSpeech(transcript: string | null | undefined): str
     .replace(/\s*\/\s*/g, "/")
     .replace(/\s+/g, " ")
     .trim();
+  text = text
+    .replace(
+      /^(?:(?:yo|hey|hi|ok|okay)\s+)?(?:court\s+)?coach(?:es|s)?(?:\s+|$)/,
+      ""
+    )
+    .replace(
+      /^(?:(?:can|could|would|will)\s+you|can\s+i|could\s+i|can\s+we)\s+/,
+      ""
+    )
+    .replace(/^please\s+/, "")
+    .replace(/^(?:please\s+)?tell\s+me\s+/, "")
+    .replace(/^please\s+/, "")
+    .replace(/^(?:fire\s+up)\s+/, "start ")
+    .replace(/^(start|set)\s+me\s+(?:a\s+)?/, "$1 a ")
+    .replace(/\s+(?:court\s+)?coach(?:es|s)?$/, "")
+    .replace(/\s+please$/, "")
+    .trim();
+  return text;
 }
 
 export function parseSpokenNumber(value: string): number | null {
@@ -386,11 +404,18 @@ export const parseNavigationIntent: Parser = (text) => {
       "What's next heard"
     );
   }
+  if (/^(?:whats|what is|what do i have) (?:up )?next(?: for me)?$/.test(text)) {
+    return intent(
+      "navigation",
+      { mode: "query", unit: "set", target: { type: "next" } },
+      "What's next heard"
+    );
+  }
   match = text.match(
-    /^(?:where am i|(?:whats|what is) (?:the )?current (set|drill|exercise|thing))$/
+    /^(?:where am i|(?:whats|what is) (?:the )?current (set|drill|exercise|thing)|(?:what|which) (set|drill|exercise|thing) (?:am i|are we) (?:on|doing))$/
   );
   if (match) {
-    const unit = navigationUnit(match[1]);
+    const unit = navigationUnit(match[1] ?? match[2]);
     return intent(
       "navigation",
       { mode: "query", unit, target: { type: "current" } },
@@ -524,6 +549,17 @@ export const parseCompletionIntent: Parser = (text) => {
 };
 
 export const parseProgressIntent: Parser = (text) => {
+  if (
+    /^(?:(?:whats|what is) my |show me my )?(?:total|overall) shooting (?:percentage|percent)(?:\s+(?:for|in)\s+(?:this|my|the)\s+workout)?$/.test(
+      text
+    )
+  ) {
+    return intent(
+      "progress",
+      { metric: "percentage", scope: "workout" },
+      "workout shooting percentage heard"
+    );
+  }
   const remaining = text.match(
     /^how many (shots?|makes?|sets?|drills?|exercises?|things?)(?: do i have)? (?:are )?left$/
   );

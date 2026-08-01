@@ -13,7 +13,6 @@ import {
 import { supabase } from "@/lib/supabase";
 import { isLikelyNetworkError, reportNetworkFailure } from "@/lib/connectivity";
 import {
-  normalizeCoachSpeech,
   parseCoachSpeechIntent,
   type CoachSpeechIntent,
   type NavigationTarget,
@@ -24,13 +23,6 @@ import {
   startVoiceCallAudio,
   stopVoiceCallAudio,
 } from "@/lib/webrtcAudio";
-import {
-  addStreamingPcmListener,
-  cancelStreamingPcm,
-  isStreamingPcmPlayerAvailable,
-  prefetchStreamingPcm,
-  speakStreamingPcm,
-} from "expo-streaming-pcm-player";
 
 async function edgeFunctionErrorMessage(error: {
   message: string;
@@ -314,7 +306,6 @@ export class RealtimeCoachSession {
   private conversationSummary = "";
   private sessionKey: string | null = null;
   private model = "gpt-realtime-2.1-mini";
-  private voice = "ash";
   private active = false;
   private connecting = false;
   private muted = false;
@@ -355,13 +346,6 @@ export class RealtimeCoachSession {
   private exactBufferedShotReply: string | null = null;
   private exactCompletedShotReply: string | null = null;
   private lastDeterministicReply: string | null = null;
-  private activeTtsRequestId: string | null = null;
-  private activeTtsEpoch = 0;
-  private activeTtsText: string | null = null;
-  private activeTtsBaseRequestId: string | null = null;
-  private activeTtsRetryCount = 0;
-  private possibleTtsEcho: { text: string; expiresAt: number } | null = null;
-  private ttsSubscriptions: { remove: () => void }[] = [];
 
   getSessionKey(): string | null {
     return this.sessionKey;
@@ -417,7 +401,6 @@ export class RealtimeCoachSession {
     this.contextRefreshPending = false;
     this.exactBufferedShotReply = null;
     this.exactCompletedShotReply = null;
-    this.possibleTtsEcho = null;
     this.usageTracker = createUsageTracker(this.model);
     callbacks.onStatus("connecting");
 
@@ -553,7 +536,6 @@ export class RealtimeCoachSession {
       }
 
       this.model = data.model ?? this.model;
-      this.voice = data.voice ?? this.voice;
       this.usageTracker = createUsageTracker(this.model);
       this.updateWorkoutState(data.workout_context);
 
@@ -567,7 +549,6 @@ export class RealtimeCoachSession {
       }
 
       this.callbacks?.onStatus("listening");
-      void this.prefetchCommonTts();
     } catch (err) {
       if (generation !== this.connectionGeneration) return;
       console.error("Realtime coach connect failed:", err);
@@ -1427,19 +1408,6 @@ export class RealtimeCoachSession {
     generation: number
   ): Promise<void> {
     if (!this.active || generation !== this.connectionGeneration) return;
-    if (this.possibleTtsEcho?.expiresAt && this.possibleTtsEcho.expiresAt < Date.now()) {
-      this.possibleTtsEcho = null;
-    }
-    if (
-      this.possibleTtsEcho &&
-      normalizeCoachSpeech(transcript) === this.possibleTtsEcho.text
-    ) {
-      this.possibleTtsEcho = null;
-      if (itemId) {
-        this.sendEvent({ type: "conversation.item.delete", item_id: itemId });
-      }
-      return;
-    }
     const turnId = itemId ?? `transcript-${generation}-${Date.now()}`;
     if (this.routedTurns.has(turnId)) return;
     const turn: RoutedCoachTurn = {
@@ -1626,13 +1594,6 @@ export class RealtimeCoachSession {
       this.latestUserTranscript = null;
       this.contextRefreshPending = false;
       this.pendingEvents = [];
-      if (this.activeTtsRequestId) cancelStreamingPcm(this.activeTtsRequestId);
-      this.activeTtsRequestId = null;
-      this.activeTtsText = null;
-      this.activeTtsBaseRequestId = null;
-      this.possibleTtsEcho = null;
-      for (const subscription of this.ttsSubscriptions) subscription.remove();
-      this.ttsSubscriptions = [];
 
       if (this.disconnectGraceTimeout) clearTimeout(this.disconnectGraceTimeout);
       if (this.responseCreateTimeout) clearTimeout(this.responseCreateTimeout);
@@ -1751,7 +1712,7 @@ export class RealtimeCoachSession {
 
   private logVoiceMetric(
     turn: RoutedCoachTurn,
-    stage: "route_decision" | "backend_complete" | "first_tts_byte" | "first_audible_frame"
+    stage: "route_decision" | "backend_complete"
   ): void {
     const now = Date.now();
     const totalRoutes = this.deterministicTurnCount + this.fallbackTurnCount;
@@ -1784,177 +1745,14 @@ export class RealtimeCoachSession {
     );
   }
 
-  private activeTtsTurn(): RoutedCoachTurn | null {
-    const requestId = this.activeTtsBaseRequestId;
-    if (!requestId) return null;
-    return (
-      [...this.routedTurns.values()].find((turn) => requestId.startsWith(turn.requestId)) ??
-      null
-    );
-  }
-
-  private ensureTtsListeners(): void {
-    if (this.ttsSubscriptions.length > 0 || !isStreamingPcmPlayerAvailable) return;
-    const isActiveRequest = (requestId: string) => requestId === this.activeTtsRequestId;
-    this.ttsSubscriptions = [
-      addStreamingPcmListener("started", ({ requestId }) => {
-        if (!isActiveRequest(requestId)) return;
-        this.playbackActive = true;
-        this.updateStatus();
-      }),
-      addStreamingPcmListener("firstByte", ({ requestId }) => {
-        if (!isActiveRequest(requestId)) return;
-        const turn = this.activeTtsTurn();
-        if (turn) this.logVoiceMetric(turn, "first_tts_byte");
-      }),
-      addStreamingPcmListener("firstAudio", ({ requestId }) => {
-        if (!isActiveRequest(requestId)) return;
-        this.playbackActive = true;
-        const turn = this.activeTtsTurn();
-        if (turn) this.logVoiceMetric(turn, "first_audible_frame");
-        this.updateStatus();
-      }),
-      addStreamingPcmListener("finished", ({ requestId }) => {
-        if (!isActiveRequest(requestId)) return;
-        this.activeTtsRequestId = null;
-        this.activeTtsText = null;
-        this.activeTtsBaseRequestId = null;
-        this.playbackActive = false;
-        this.updateStatus();
-        this.flushPendingContextRefresh();
-        this.flushQueuedResponse();
-      }),
-      addStreamingPcmListener("cancelled", ({ requestId }) => {
-        if (!isActiveRequest(requestId)) return;
-        this.activeTtsRequestId = null;
-        this.activeTtsText = null;
-        this.activeTtsBaseRequestId = null;
-        this.playbackActive = false;
-        this.updateStatus();
-      }),
-      addStreamingPcmListener("error", ({ requestId, message }) => {
-        if (!isActiveRequest(requestId)) return;
-        const shouldFallback = this.activeTtsEpoch === this.speechEpoch;
-        const retryText = this.activeTtsText;
-        const retryBaseRequestId = this.activeTtsBaseRequestId;
-        const retryCount = this.activeTtsRetryCount;
-        this.activeTtsRequestId = null;
-        this.activeTtsText = null;
-        this.activeTtsBaseRequestId = null;
-        this.playbackActive = false;
-        if (shouldFallback && retryText && retryBaseRequestId && retryCount < 1) {
-          void this.speakDeterministic(
-            retryText,
-            `${retryBaseRequestId}-retry`,
-            this.activeTtsEpoch,
-            retryCount + 1
-          );
-        } else if (shouldFallback && this.lastDeterministicReply) {
-          this.requestResponse(
-            `Say exactly this sentence and nothing else: ${JSON.stringify(
-              this.lastDeterministicReply
-            )}`,
-            true
-          );
-        } else if (shouldFallback) {
-          this.callbacks?.onError(message || "Coach speech could not play.");
-        }
-        this.updateStatus();
-      }),
-    ];
-  }
-
   private async speakDeterministic(
     text: string,
-    requestId: string,
-    speechEpoch: number,
-    retryCount = 0
+    _requestId: string,
+    speechEpoch: number
   ): Promise<void> {
     if (speechEpoch !== this.speechEpoch || !this.active) return;
     this.lastDeterministicReply = text;
-    if (!isStreamingPcmPlayerAvailable) {
-      this.requestResponse(
-        `Say exactly this sentence and nothing else: ${JSON.stringify(text)}`,
-        true
-      );
-      return;
-    }
-    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-    const { data } = await supabase.auth.getSession();
-    const accessToken = data.session?.access_token;
-    if (!supabaseUrl || !anonKey || !accessToken || !this.sessionKey) {
-      this.requestResponse(
-        `Say exactly this sentence and nothing else: ${JSON.stringify(text)}`,
-        true
-      );
-      return;
-    }
-    this.ensureTtsListeners();
-    const ttsRequestId = `${requestId}-tts`.slice(0, 120);
-    this.activeTtsRequestId = ttsRequestId;
-    this.activeTtsEpoch = speechEpoch;
-    this.activeTtsText = text;
-    this.activeTtsBaseRequestId = requestId;
-    this.activeTtsRetryCount = retryCount;
-    const nativeRequestId = speakStreamingPcm({
-      url: `${supabaseUrl}/functions/v1/coach-tts`,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        apikey: anonKey,
-        "Content-Type": "application/json",
-      },
-      body: {
-        text,
-        session_key: this.sessionKey,
-        request_id: ttsRequestId,
-      },
-      text,
-      voice: this.voice,
-      model: "gpt-4o-mini-tts",
-      requestId: ttsRequestId,
-      useCache: true,
-    });
-    if (!nativeRequestId) {
-      this.activeTtsRequestId = null;
-      this.activeTtsText = null;
-      this.activeTtsBaseRequestId = null;
-      this.requestResponse(
-        `Say exactly this sentence and nothing else: ${JSON.stringify(text)}`,
-        true
-      );
-    }
-  }
-
-  private async prefetchCommonTts(): Promise<void> {
-    if (!isStreamingPcmPlayerAvailable || !this.active || !this.sessionKey) return;
-    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-    const { data } = await supabase.auth.getSession();
-    const accessToken = data.session?.access_token;
-    if (!supabaseUrl || !anonKey || !accessToken || !this.sessionKey || !this.active) return;
-    const clips = ["Timer paused.", "Timer resumed.", "Timer stopped.", "Timer reset."];
-    clips.forEach((text, index) => {
-      const requestId = `prefetch-${this.sessionKey}-${index}`.slice(0, 120);
-      prefetchStreamingPcm({
-        url: `${supabaseUrl}/functions/v1/coach-tts`,
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          apikey: anonKey,
-          "Content-Type": "application/json",
-        },
-        body: {
-          text,
-          session_key: this.sessionKey,
-          request_id: requestId,
-        },
-        text,
-        voice: this.voice,
-        model: "gpt-4o-mini-tts",
-        requestId,
-        useCache: true,
-      });
-    });
+    this.requestResponse(`Say this: ${text}`, true);
   }
 
   private requestResponse(
@@ -2032,19 +1830,6 @@ export class RealtimeCoachSession {
         this.latestUserTranscript = null;
         this.speechEpoch += 1;
         this.responseQueue = [];
-        if (this.activeTtsRequestId) {
-          if (this.activeTtsText) {
-            this.possibleTtsEcho = {
-              text: normalizeCoachSpeech(this.activeTtsText),
-              expiresAt: Date.now() + 4_000,
-            };
-          }
-          cancelStreamingPcm(this.activeTtsRequestId);
-          this.activeTtsRequestId = null;
-          this.activeTtsText = null;
-          this.activeTtsBaseRequestId = null;
-          this.playbackActive = false;
-        }
         if (this.generationActive || this.responseCreatePending) {
           this.sendEvent({ type: "response.cancel" }, false);
         }

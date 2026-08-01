@@ -103,6 +103,12 @@ test("parses timer starts, controls, and status", () => {
     ["start the timer for this set", { action: "start", useSetDefault: true }],
     ["start a stopwatch", { action: "start", useSetDefault: true }],
     ["start a 2 minute timer", { action: "start", durationSeconds: 120 }],
+    ["Yo coach, can you start a 5 minute timer?", { action: "start", durationSeconds: 300 }],
+    ["Could you fire up a ninety second timer, coach?", {
+      action: "start",
+      durationSeconds: 90,
+    }],
+    ["Can we start me a one minute timer?", { action: "start", durationSeconds: 60 }],
     ["timer for 90 seconds", { action: "start", durationSeconds: 90 }],
     ["set timer for one minute", { action: "start", durationSeconds: 60 }],
     ["pause timer", { action: "pause" }],
@@ -126,11 +132,27 @@ test("keeps navigation queries separate from movement", () => {
     kind: "navigation",
     args: { mode: "query", unit: "set", target: { type: "next" } },
   });
+  expectIntent("Coach's, what's next?", {
+    kind: "navigation",
+    args: { mode: "query", unit: "set", target: { type: "next" } },
+  });
+  expectIntent("Hey coach, what do I have up next for me?", {
+    kind: "navigation",
+    args: { mode: "query", unit: "set", target: { type: "next" } },
+  });
   expectIntent("what's the next set", {
     kind: "navigation",
     args: { mode: "query", unit: "set", target: { type: "next" } },
   });
   expectIntent("what drill am I on", {
+    kind: "navigation",
+    args: { mode: "query", unit: "drill", target: { type: "current" } },
+  });
+  expectIntent("Yo coach, can you tell me what exercise am I on?", {
+    kind: "navigation",
+    args: { mode: "query", unit: "drill", target: { type: "current" } },
+  });
+  expectIntent("Which exercise am I doing, coach?", {
     kind: "navigation",
     args: { mode: "query", unit: "drill", target: { type: "current" } },
   });
@@ -219,6 +241,11 @@ test("parses scoped percentage and progress queries", () => {
     ["what's my shooting percentage for this set", { metric: "percentage", scope: "set" }],
     ["percentage for this exercise", { metric: "percentage", scope: "exercise" }],
     ["shooting percent for my workout", { metric: "percentage", scope: "workout" }],
+    ["what's my total shooting percentage", { metric: "percentage", scope: "workout" }],
+    ["show me my overall shooting percent for this workout", {
+      metric: "percentage",
+      scope: "workout",
+    }],
     ["what's my progress for this set", { metric: "progress", scope: "set" }],
     ["show me my progress on this drill", { metric: "progress", scope: "exercise" }],
     ["how is my progress in the workout", { metric: "progress", scope: "workout" }],
