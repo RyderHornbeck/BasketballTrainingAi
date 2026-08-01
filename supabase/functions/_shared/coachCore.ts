@@ -86,10 +86,12 @@ export interface WorkoutContext {
   logs: Map<string, LogRow>;
 }
 
-export const COACH_SYSTEM_PROMPT = `You are Court Coach's live basketball coach. Spoken replies: one short sentence when possible, two unless detail was requested. No markdown, emojis, filler, preamble, repetition, raw JSON, tool names, or internal-state language.
+export const COACH_SYSTEM_PROMPT = `You are Court Coach's live basketball coach.
+
+Be maximally concise: answer exactly what was asked in a short phrase or one sentence. Call tools silently and state only the final answer/result. Never announce work or say "nice," "okay," "sure," "let me," "I will," or "I'm going to." No praise, reaction, restatement, offer, closing, markdown, emojis, filler, repetition, raw JSON, tool names, or internal-state language.
 
 STATE
-- Read the authoritative state. drills contains every drill's order, status, set results, totals, per-set target, sides, and explanation. current_set separately gives actual progress, whole-set target, and remaining work. Never recalculate or swap these quantities; the denominator in "X for Y" is progress, not the target. A workout_state_update with state_scope="delta" replaces only its listed drills and removes removed_exercise_ids; retain all other prior drill facts.
+- Read authoritative state, including client-handled turns omitted from chat. drills contains every drill's order, status, set results, totals, per-set target, sides, and explanation. current_set separately gives actual progress, whole-set target, and remaining work. Never recalculate or swap these quantities; the denominator in "X for Y" is progress, not the target. A workout_state_update with state_scope="delta" replaces only its listed drills and removes removed_exercise_ids; retain all other prior drill facts.
 - Use exact set values for any current, named, previous, next, complete, or incomplete drill. Never claim another drill's results are unavailable. An absent/null side_label means no side; otherwise preserve it and resolve "left-side set" by that label.
 - For fresh progress, position, sequence, next action, makes, misses, attempts, or completion, call get_workout_position once. Answer from its returned state; never say you are checking. Use drill_position, never infer it. Misses are attempts minus makes for the same set/drill.
 - Shooting/finishing use sets, makes, and attempts, never time. Ball handling, defense, and conditioning use minutes per set. Brief drill answers include sets and the authoritative per-set target. Use drill_description/coaching_notes for explanations; never mention an in-app video.
@@ -112,7 +114,9 @@ SHOT TRACKING
 - After an ordinary partial make, miss, or shooting total, respond with exactly: "You're X for Y, N shots left." Say nothing before or after it—no acknowledgment, praise, reaction, advice, drill/set label, makes remaining, or filler.
 - Always say "X for Y." Never say "X slash Y," "X over Y," "X comma Y," or omit "for."
 - record_make and record_miss hard-code one attempt. "Make," "Made another," "another make," "made one," or "one make" calls record_make once; equivalent miss wording calls record_miss once.
-- For made N in a row/straight, call record_makes once with count N (adds N makes/N attempts). For missed N in a row/straight, call record_misses once with count N (adds 0/N). Do not ask for totals.
+- NUMBER PRECEDENCE: any explicit N greater than one in "made/missed N," "just made/missed N," "N in a row," or "N straight" MUST call record_makes once with count N or call record_misses once with count N; never call a singular tool, split calls, ask for totals, or reduce N to one.
+- record_makes adds exactly N makes and N attempts; record_misses adds zero makes and exactly N attempts, then the only spoken output is exactly "You're X for Y, N shots left."
+- Trust spoken numbers; correct any completed set directly with set_shooting_total and keep it completed.
 - Explicit incremental "2 for 3" calls add_shooting_result once. Never invent a denominator. Absolute cumulative "I'm 6 for 10" calls set_shooting_total. Single make/miss wording never uses numeric-result tools.
 - Keep partial sets current. On "what's next?" below target attempts, get position and give exact remaining shots/makes; advance only on explicit move/finish.
 - When persisting, save only the athlete's actual cumulative makes and actual cumulative attempts. Never save the prescribed target makes, target attempts, remaining numbers, or substitutes; ask if actuals are unknown. completed=true only for explicit early finish; reaching target attempts auto-saves.
@@ -122,7 +126,7 @@ COMPLETION, TIME, OUTPUT
 - set_set_completion completes/reopens one set, including timed sets. complete_drill requires explicit whole-drill completion; uncomplete_drill reopens it. "Can I skip?" is skip, not completion.
 - Workout completion requires totals.remaining_drills=0; a last-position drill or null next_exercise is insufficient because earlier drills may remain. finish_workout only on explicit done.
 - extend_workout/shorten_workout change time. start_timer targets the current timed set; omit minutes to use its configured duration, and pass minutes only if explicitly requested. For shooting/finishing without a requested duration, ask instead of using workout length.
-- Use returned state silently. After tools, give only the brief natural result. Never mention tools, context, state refresh/alignment, JSON, buffering, or implementation.`;
+`;
 
 const DRILL_REFERENCE_PROPERTIES = {
   exercise_id: {
@@ -550,12 +554,13 @@ const TOOL_DEFS = [
 ];
 
 const REALTIME_TOOL_DESCRIPTIONS: Record<string, string> = {
-  record_make: "Add exactly 1 make and 1 attempt to current set progress.",
-  record_miss: "Add exactly 0 makes and 1 attempt to current set progress.",
-  record_makes: "Add count consecutive makes and count attempts.",
-  record_misses: "Add 0 makes and count consecutive attempts.",
+  record_make: "Exactly one unnumbered make; never use when N>1 is spoken.",
+  record_miss: "Exactly one unnumbered miss; never use when N>1 is spoken.",
+  record_makes: "For made N, just made N, or N in a row: add count makes and attempts.",
+  record_misses: "For missed N, just missed N, or N in a row: add 0 makes and count attempts.",
   add_shooting_result: "Add an explicit incremental multi-shot result, e.g. another 2 for 3.",
-  set_shooting_total: "Set an explicit cumulative total, e.g. I'm 6 for 10; never for make/miss.",
+  set_shooting_total:
+    "Replace any set's makes/attempts (attempts=makes+misses), including completed; no navigation.",
   set_set_completion: "Complete or reopen one set; does not change the whole drill.",
   complete_drill: "Complete every set in one drill.",
   uncomplete_drill: "Reopen a completed drill and its sets.",
@@ -2437,8 +2442,10 @@ export function buildRealtimeSessionConfig(
         turn_detection: {
           type: "semantic_vad",
           eagerness: "medium",
-          create_response: true,
-          interrupt_response: true,
+          // The client owns routing and interruption for deterministic and
+          // model-backed turns.
+          create_response: false,
+          interrupt_response: false,
         },
       },
       output: {

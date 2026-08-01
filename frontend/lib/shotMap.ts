@@ -1,4 +1,4 @@
-import { decodeExerciseLogMeta } from "./exerciseSetLogs";
+import { decodeExerciseLogMeta, observedShotResult } from "./exerciseSetLogs";
 import {
   SHOT_ZONE_LAYOUTS,
   ShotZoneId,
@@ -365,17 +365,22 @@ export function computeShotMapData(exerciseLogs: ShotMapLogEntry[]): ShotMapData
 
     if (meta.set_logs?.length) {
       for (const entry of meta.set_logs) {
-        if (!entry.completed) continue;
-        const makes = entry.makes ?? 0;
-        const attempts = entry.attempts ?? makes;
-        if (attempts <= 0) continue;
+        const observed = observedShotResult(entry);
+        if (!observed) continue;
         const entryZones = classifyShotZonesForSet(
           name,
           category,
           instructions,
           sideLabels?.[entry.set_number - 1]
         );
-        dotSeed = addShotResults(zoneAgg, dots, entryZones, makes, attempts, dotSeed);
+        dotSeed = addShotResults(
+          zoneAgg,
+          dots,
+          entryZones,
+          observed.makes,
+          observed.attempts,
+          dotSeed
+        );
       }
       continue;
     }

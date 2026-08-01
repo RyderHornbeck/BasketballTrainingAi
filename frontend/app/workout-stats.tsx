@@ -4,7 +4,12 @@ import { Skeleton } from "@/components/Skeleton";
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { calculateDayPerformance, getPerformanceColor } from "@/lib/dayPerformance";
-import { buildSetPlan, decodeExerciseLogMeta, hydrateSetLogs } from "@/lib/exerciseSetLogs";
+import {
+  aggregateObservedShots,
+  buildSetPlan,
+  decodeExerciseLogMeta,
+  hydrateSetLogs,
+} from "@/lib/exerciseSetLogs";
 import { actionHaptic } from "@/lib/haptics";
 import { getWorkoutDayWithExercises } from "@/lib/plan";
 import { ShotMapLogEntry } from "@/lib/shotMap";
@@ -103,11 +108,10 @@ export default function WorkoutStatsScreen() {
 
       const plan = buildSetPlan(exercise);
       const setLogs = hydrateSetLogs(plan, decodeExerciseLogMeta(log.notes), log);
-      for (const set of setLogs) {
-        if (!set.completed) continue;
-        const setMakes = set.makes ?? 0;
-        makes += setMakes;
-        shots += set.attempts ?? plan.perSetAttempts ?? setMakes;
+      const observed = aggregateObservedShots(setLogs);
+      if (observed) {
+        makes += observed.makes;
+        shots += observed.attempts;
       }
 
       shotMapLogs.push({

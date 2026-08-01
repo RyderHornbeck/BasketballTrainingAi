@@ -13,6 +13,7 @@ import {
 import { emitWorkoutUpdated } from "./coachEvents";
 import { calculateDayPerformance } from "./dayPerformance";
 import {
+  aggregateObservedShots,
   buildSetPlan,
   decodeExerciseLogMeta,
   hydrateSetLogs,
@@ -82,18 +83,15 @@ export async function getWeeklyWorkoutStats(): Promise<WeeklyWorkoutStats> {
       for (const exercise of day.exercises) {
         if (exercise.log_type !== "makes_attempts" || !exercise.log) continue;
         const plan = buildSetPlan(exercise);
-        // Weekly shots follow the Shot Map rule: a user must explicitly
-        // complete a set before its attempts count toward the weekly total.
         const setLogs = hydrateSetLogs(
           plan,
           decodeExerciseLogMeta(exercise.log.notes),
           exercise.log
         );
-        for (const set of setLogs) {
-          if (!set.completed) continue;
-          makes += set.makes ?? 0;
-          attempts += set.attempts ?? plan.perSetAttempts ?? 0;
-        }
+        const observed = aggregateObservedShots(setLogs);
+        if (!observed) continue;
+        makes += observed.makes;
+        attempts += observed.attempts;
       }
       return calculateDayPerformance(day.exercises);
     })

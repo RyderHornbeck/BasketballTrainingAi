@@ -1,6 +1,6 @@
 import { OnboardingAnswers } from "@/types/database";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { decodeExerciseLogMeta } from "./exerciseSetLogs";
+import { aggregateObservedShots, decodeExerciseLogMeta } from "./exerciseSetLogs";
 import {
   computeSkillProfile,
   DisciplineWorkout,
@@ -105,28 +105,11 @@ function workoutActivityDate(log: { activity_date?: string | null; completed_at:
   return log.activity_date ?? localDateKey(new Date(log.completed_at));
 }
 
-/**
- * Match the Shot Map's source of truth: only completed per-set results count.
- * Legacy logs without set metadata retain their recorded aggregate result.
- */
-function completedShotTotals(log: any): CompletedShotTotals | null {
+/** Includes recorded partial sets while excluding untouched target-filled rows. */
+function observedShotTotals(log: any): CompletedShotTotals | null {
   const meta = decodeExerciseLogMeta(log.notes ?? null);
   if (meta.set_logs?.length) {
-    const completedSets = meta.set_logs.filter((set) => set.completed);
-    if (completedSets.length === 0) return null;
-    const totals = completedSets.reduce(
-      (totals, set) => {
-        const makes = set.makes ?? 0;
-        const attempts = set.attempts ?? makes;
-        if (attempts <= 0) return totals;
-        return {
-          makes: totals.makes + makes,
-          attempts: totals.attempts + attempts,
-        };
-      },
-      { makes: 0, attempts: 0 }
-    );
-    return totals.attempts > 0 ? totals : null;
+    return aggregateObservedShots(meta.set_logs);
   }
 
   if (!log.completed && log.makes == null) return null;
@@ -138,7 +121,7 @@ function completedShotTotals(log: any): CompletedShotTotals | null {
 let cachedAnalytics: { userId: string; summary: AnalyticsSummary } | null = null;
 let analyticsRequest: { userId: string; promise: Promise<AnalyticsSummary> } | null = null;
 const hydratedAnalyticsUsers = new Set<string>();
-const analyticsStorageKey = (userId: string) => `court-coach.analytics-cache.${userId}`;
+const analyticsStorageKey = (userId: string) => `court-coach.analytics-cache.v2.${userId}`;
 
 function isAnalyticsSummary(value: unknown): value is AnalyticsSummary {
   return (
@@ -293,7 +276,7 @@ async function fetchAnalyticsSummary(userId: string): Promise<AnalyticsSummary> 
     categoryMap[category].total += 1;
     if (log.completed) categoryMap[category].completed += 1;
 
-    const shotTotals = completedShotTotals(log);
+    const shotTotals = observedShotTotals(log);
     if (shotTotals) {
       categoryMap[category].makes += shotTotals.makes;
       categoryMap[category].attempts += shotTotals.attempts;
@@ -346,7 +329,7 @@ async function fetchAnalyticsSummary(userId: string): Promise<AnalyticsSummary> 
   const weeklyShooting = computeWeeklyShooting(analyticsExerciseLogs);
   const weeklyPctTrend = computeWeeklyPctTrend(analyticsExerciseLogs);
   const shootingLogs = analyticsExerciseLogs.flatMap((log) => {
-    const totals = completedShotTotals(log);
+    const totals = observedShotTotals(log);
     return totals
       ? [
           {
@@ -536,7 +519,7 @@ function computeWeeklyPctTrend(
   }
 
   for (const log of exerciseLogs) {
-    const shotTotals = completedShotTotals(log);
+    const shotTotals = observedShotTotals(log);
     if (!shotTotals) continue;
     const category = log.workout_exercises?.category ?? "";
     const date = new Date(log.activity_at ?? log.created_at);
@@ -602,7 +585,7 @@ function computeWeeklyShooting(
   }
 
   for (const log of exerciseLogs) {
-    const shotTotals = completedShotTotals(log);
+    const shotTotals = observedShotTotals(log);
     if (!shotTotals) continue;
     const date = new Date(log.activity_at ?? log.created_at);
     for (const bucket of buckets) {

@@ -44,6 +44,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     timerRunning,
     elapsedSeconds,
     timerDurationSeconds,
+    commandHeard,
     dailyBudget,
     startSession,
     stopSession,
@@ -208,6 +209,32 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
         ) : null}
 
         <View style={styles.center}>
+          <View style={styles.heardSlot} pointerEvents="none">
+            {commandHeard ? (
+              <View
+                style={[
+                  styles.heardPill,
+                  {
+                    backgroundColor: colors.card,
+                    borderColor:
+                      commandHeard.state === "failed" ? colors.danger : colors.border,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.heardText,
+                    {
+                      color:
+                        commandHeard.state === "failed" ? colors.danger : colors.accent,
+                    },
+                  ]}
+                >
+                  {commandHeard.label}
+                </Text>
+              </View>
+            ) : null}
+          </View>
           <Text style={[styles.statusLabel, { color: colors.text }]}>{statusLabel}</Text>
 
           <Pressable
@@ -356,6 +383,26 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 32,
+  },
+  heardSlot: {
+    position: "absolute",
+    top: 24,
+    left: 24,
+    right: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heardPill: {
+    maxWidth: 300,
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  heardText: {
+    fontSize: 13,
+    fontWeight: "700",
+    textAlign: "center",
   },
   statusLabel: {
     fontSize: 22,

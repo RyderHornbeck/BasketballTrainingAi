@@ -82,7 +82,8 @@
           ],
           "isAccessMediaLocationEnabled": false
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "extra": {
       "eas": {

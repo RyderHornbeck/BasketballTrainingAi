@@ -13,6 +13,7 @@ import { type CoachMachineState } from "@/lib/coachStateMachine";
 import {
   RealtimeCoachSession,
   type ClientTimerAction,
+  type RecognizedCoachCommand,
   type TimerState,
 } from "@/lib/realtimeCoach";
 import { useTimerAudioCues } from "@/hooks/useTimerAudioCues";
@@ -27,6 +28,7 @@ export interface UseCoachResult {
   timerRunning: boolean;
   elapsedSeconds: number;
   timerDurationSeconds: number | null;
+  commandHeard: RecognizedCoachCommand | null;
   lastUsage: CoachUsageTotals | null;
   dailyBudget: CoachDailyBudget | null;
   startSession: () => Promise<void>;
@@ -62,10 +64,12 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const [timerRunning, setTimerRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [timerDurationSeconds, setTimerDurationSeconds] = useState<number | null>(null);
+  const [commandHeard, setCommandHeard] = useState<RecognizedCoachCommand | null>(null);
   const [lastUsage, setLastUsage] = useState<CoachUsageTotals | null>(null);
   const [dailyBudget, setDailyBudget] = useState<CoachDailyBudget | null>(null);
   const [muted, setMuted] = useState(false);
   const timerAudio = useTimerAudioCues();
+  const commandHeardTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const markLimitReached = useCallback((msg: string) => {
     limitBlockedRef.current = true;
@@ -93,7 +97,18 @@ export function useCoach(dayId: string | null): UseCoachResult {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (commandHeardTimeoutRef.current) clearTimeout(commandHeardTimeoutRef.current);
     };
+  }, []);
+
+  const showCommandHeard = useCallback((event: RecognizedCoachCommand) => {
+    if (!mountedRef.current) return;
+    if (commandHeardTimeoutRef.current) clearTimeout(commandHeardTimeoutRef.current);
+    setCommandHeard(event);
+    commandHeardTimeoutRef.current = setTimeout(() => {
+      commandHeardTimeoutRef.current = null;
+      if (mountedRef.current) setCommandHeard(null);
+    }, 2_000);
   }, []);
 
   const currentElapsed = useCallback(() => {
@@ -239,6 +254,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
             setError(msg);
           },
           onTimerAction: applyTimerAction,
+          onCommandHeard: showCommandHeard,
           onConversationSummary: (summary) => {
             conversationSummaryRef.current = summary;
           },
@@ -293,6 +309,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
     ensureSession,
     getTimerState,
     applyTimerAction,
+    showCommandHeard,
     muted,
     refreshDailyBudget,
     markLimitReached,
@@ -338,7 +355,6 @@ export function useCoach(dayId: string | null): UseCoachResult {
     }
     overlayOpenRef.current = true;
     limitBlockedRef.current = false;
-    setError(null);
     void startSessionRef.current();
 
     return () => {
@@ -396,6 +412,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
     timerRunning,
     elapsedSeconds,
     timerDurationSeconds,
+    commandHeard,
     lastUsage,
     dailyBudget,
     startSession,

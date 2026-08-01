@@ -13,10 +13,24 @@ import {
 import { supabase } from "@/lib/supabase";
 import { isLikelyNetworkError, reportNetworkFailure } from "@/lib/connectivity";
 import {
+  normalizeCoachSpeech,
+  parseCoachSpeechIntent,
+  type CoachSpeechIntent,
+  type NavigationTarget,
+} from "@/lib/coachSpeech";
+import { parseSpokenShotCount } from "@/lib/shotSpeech";
+import {
   inferVoiceAudioProfile,
   startVoiceCallAudio,
   stopVoiceCallAudio,
 } from "@/lib/webrtcAudio";
+import {
+  addStreamingPcmListener,
+  cancelStreamingPcm,
+  isStreamingPcmPlayerAvailable,
+  prefetchStreamingPcm,
+  speakStreamingPcm,
+} from "expo-streaming-pcm-player";
 
 async function edgeFunctionErrorMessage(error: {
   message: string;
@@ -70,10 +84,17 @@ export interface RealtimeCoachCallbacks {
   onStatus: (status: RealtimeCoachStatus) => void;
   onError: (message: string) => void;
   onTimerAction: (action: ClientTimerAction) => void;
+  onCommandHeard?: (event: RecognizedCoachCommand) => void;
   onConversationSummary?: (summary: string) => void;
   onUsage?: (totals: ReturnType<ReturnType<typeof createUsageTracker>["snapshot"]>) => void;
   onBudgetUpdate?: (spentUsd: number, budgetUsd: number) => void;
   onSessionEnded?: (reason: string) => void;
+}
+
+export interface RecognizedCoachCommand {
+  turnId: string;
+  label: string;
+  state: "recognized" | "failed";
 }
 
 interface FunctionCallItem {
@@ -81,6 +102,25 @@ interface FunctionCallItem {
   name: string;
   call_id: string;
   arguments: string;
+}
+
+interface QueuedCoachResponse {
+  instructions: string;
+  outOfBand: boolean;
+  itemId: string | null;
+  sourceTranscript: string | null;
+  speechEpoch: number;
+}
+
+interface RoutedCoachTurn {
+  itemId: string;
+  transcript: string;
+  requestId: string;
+  speechEpoch: number;
+  speechStoppedAt: number | null;
+  transcriptCompletedAt: number;
+  routeDecidedAt: number | null;
+  backendCompletedAt: number | null;
 }
 
 interface RealtimeSetResult {
@@ -95,35 +135,59 @@ interface RealtimeSetResult {
 }
 
 interface RealtimeDrillState {
+  drill_position?: number;
   exercise_id: string;
   name: string | null;
+  category?: string | null;
+  status?: "complete" | "in_progress" | "not_started";
   target: {
     makes: number | null;
     attempts: number | null;
+    minutes?: number | null;
   };
   sets: {
+    total?: number;
+    completed?: number;
     next_unfinished: number | null;
   };
+  logged_totals?: {
+    makes: number | null;
+    attempts: number | null;
+    misses: number | null;
+  };
+  log_type?: string | null;
   set_results: RealtimeSetResult[];
 }
 
+interface RealtimeCurrentSetState {
+  exercise_id: string;
+  drill_name: string | null;
+  set_number: number;
+  side_label?: string | null;
+  completed: boolean;
+  progress: { makes: number; attempts: number; misses: number };
+  target: { makes: number | null; attempts: number | null };
+  remaining: { makes: number | null; attempts: number | null };
+}
+
 interface RealtimeWorkoutState {
+  workout_day?: { title?: string | null; focus?: string | null };
   sequence?: { drills?: RealtimeDrillState[] };
   navigation?: {
     next_work_item?: (RealtimeDrillState & {
       set_number?: number | null;
       set_side_label?: string | null;
     }) | null;
-    current_set_state?: {
-      exercise_id: string;
-      drill_name: string | null;
-      set_number: number;
-      side_label?: string | null;
-      completed: boolean;
-      progress: { makes: number; attempts: number; misses: number };
-      target: { makes: number | null; attempts: number | null };
-      remaining: { makes: number | null; attempts: number | null };
-    } | null;
+    next_exercise_after_current?: RealtimeDrillState | null;
+    current_set_state?: RealtimeCurrentSetState | null;
+  };
+  progress?: {
+    completed_drills?: number;
+    total_drills?: number;
+    remaining_drills?: number;
+    makes_today?: number;
+    attempts_today?: number;
+    shooting_pct?: number | null;
   };
 }
 
@@ -137,6 +201,7 @@ interface PendingShotSet {
   targetMakes: number | null;
   targetAttempts: number | null;
   completed: boolean;
+  requestId?: string;
 }
 
 interface NextSetGuidance {
@@ -249,6 +314,7 @@ export class RealtimeCoachSession {
   private conversationSummary = "";
   private sessionKey: string | null = null;
   private model = "gpt-realtime-2.1-mini";
+  private voice = "ash";
   private active = false;
   private connecting = false;
   private muted = false;
@@ -257,8 +323,18 @@ export class RealtimeCoachSession {
   private activeResponseId: string | null = null;
   private toolBusy = false;
   private responseCreatePending = false;
-  private queuedResponseInstruction: string | null = null;
-  private queuedResponseOutOfBand = false;
+  private responseQueue: QueuedCoachResponse[] = [];
+  private pendingResponseTranscript: string | null = null;
+  private pendingResponseEpoch = 0;
+  private responseTranscripts = new Map<string, string>();
+  private responseEpochs = new Map<string, number>();
+  private routedTurns = new Map<string, RoutedCoachTurn>();
+  private speechStoppedAtByItem = new Map<string, number>();
+  private deterministicTurnCount = 0;
+  private fallbackTurnCount = 0;
+  private selectedSetByExercise = new Map<string, number>();
+  private speechEpoch = 0;
+  private latestUserTranscript: string | null = null;
   private pendingEvents: Record<string, unknown>[] = [];
   private responseCreateTimeout: ReturnType<typeof setTimeout> | null = null;
   private disconnectGraceTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -266,6 +342,7 @@ export class RealtimeCoachSession {
   private contextRefreshPromise: Promise<void> | null = null;
   private contextRefreshPending = false;
   private responseDoneQueue: Promise<void> = Promise.resolve();
+  private transcriptRouteQueue: Promise<void> = Promise.resolve();
   private connectionGeneration = 0;
   private dailySpentBaseline = 0;
   private dailyBudgetUsd = 0.75;
@@ -277,6 +354,14 @@ export class RealtimeCoachSession {
   private shotFlushPromise: Promise<void> | null = null;
   private exactBufferedShotReply: string | null = null;
   private exactCompletedShotReply: string | null = null;
+  private lastDeterministicReply: string | null = null;
+  private activeTtsRequestId: string | null = null;
+  private activeTtsEpoch = 0;
+  private activeTtsText: string | null = null;
+  private activeTtsBaseRequestId: string | null = null;
+  private activeTtsRetryCount = 0;
+  private possibleTtsEcho: { text: string; expiresAt: number } | null = null;
+  private ttsSubscriptions: { remove: () => void }[] = [];
 
   getSessionKey(): string | null {
     return this.sessionKey;
@@ -318,11 +403,21 @@ export class RealtimeCoachSession {
     this.playbackActive = false;
     this.activeResponseId = null;
     this.responseCreatePending = false;
-    this.queuedResponseInstruction = null;
-    this.queuedResponseOutOfBand = false;
+    this.responseQueue = [];
+    this.pendingResponseTranscript = null;
+    this.responseTranscripts.clear();
+    this.responseEpochs.clear();
+    this.routedTurns.clear();
+    this.speechStoppedAtByItem.clear();
+    this.deterministicTurnCount = 0;
+    this.fallbackTurnCount = 0;
+    this.selectedSetByExercise.clear();
+    this.speechEpoch = 0;
+    this.latestUserTranscript = null;
     this.contextRefreshPending = false;
     this.exactBufferedShotReply = null;
     this.exactCompletedShotReply = null;
+    this.possibleTtsEcho = null;
     this.usageTracker = createUsageTracker(this.model);
     callbacks.onStatus("connecting");
 
@@ -418,6 +513,7 @@ export class RealtimeCoachSession {
         error?: string;
         code?: string;
         model?: string;
+        voice?: string;
         session_key?: string;
         workout_context?: string;
         workout_usage?: {
@@ -457,6 +553,7 @@ export class RealtimeCoachSession {
       }
 
       this.model = data.model ?? this.model;
+      this.voice = data.voice ?? this.voice;
       this.usageTracker = createUsageTracker(this.model);
       this.updateWorkoutState(data.workout_context);
 
@@ -470,6 +567,7 @@ export class RealtimeCoachSession {
       }
 
       this.callbacks?.onStatus("listening");
+      void this.prefetchCommonTts();
     } catch (err) {
       if (generation !== this.connectionGeneration) return;
       console.error("Realtime coach connect failed:", err);
@@ -679,6 +777,7 @@ export class RealtimeCoachSession {
       makes: entry.makes,
       attempts: entry.attempts,
       completed: entry.completed,
+      client_request_id: entry.requestId,
     });
     this.pendingShotSets.delete(key);
     return data;
@@ -837,7 +936,11 @@ export class RealtimeCoachSession {
     const targetAttempts = drill.target.attempts;
     const completed =
       args.completed === true ||
-      (targetAttempts != null && targetAttempts > 0 && nextAttempts >= targetAttempts);
+      saved?.completed === true ||
+      (targetAttempts != null &&
+        targetAttempts > 0 &&
+        baseAttempts < targetAttempts &&
+        nextAttempts >= targetAttempts);
     const entry: PendingShotSet = {
       exerciseId: drill.exercise_id,
       drillName: drill.name ?? "current drill",
@@ -848,6 +951,10 @@ export class RealtimeCoachSession {
       targetMakes: drill.target.makes,
       targetAttempts,
       completed,
+      requestId:
+        typeof args.client_request_id === "string"
+          ? args.client_request_id
+          : existing?.requestId,
     };
     this.pendingShotSets.set(key, entry);
     this.updateBufferedSetInWorkoutState(entry);
@@ -860,6 +967,7 @@ export class RealtimeCoachSession {
       // drill always takes priority over the next exercise.
       const nextSetInSameDrill = this.nextIncompleteSetInSameDrill(entry);
       await this.persistPendingShotSet(key);
+      this.selectedSetByExercise.delete(entry.exerciseId);
       return {
         kind: "completed_shot",
         output: this.completedShotReply(entry, nextSetInSameDrill),
@@ -875,23 +983,598 @@ export class RealtimeCoachSession {
     };
   }
 
-  markTimerSetComplete(exerciseId: string, setNumber: number): void {
-    this.sendEvent({
-      type: "conversation.item.create",
-      item: {
-        type: "message",
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: `The timer just ended. The athlete finished set ${setNumber} of exercise_id ${exerciseId}. Call set_set_completion with completed true for that exact set, then briefly confirm it aloud.`,
-          },
-        ],
-      },
-    });
-    this.requestResponse(
-      "The timer ended. Call set_set_completion for the exact set described by the latest user message, then confirm it briefly."
+  private orderedDrills(): RealtimeDrillState[] {
+    return [...(this.workoutState?.sequence?.drills ?? [])].sort(
+      (a, b) => (a.drill_position ?? 0) - (b.drill_position ?? 0)
     );
+  }
+
+  private currentDrill(): RealtimeDrillState | null {
+    const currentId = this.workoutState?.navigation?.current_set_state?.exercise_id;
+    return (
+      this.orderedDrills().find((drill) => drill.exercise_id === currentId) ??
+      this.workoutState?.navigation?.next_work_item ??
+      null
+    );
+  }
+
+  private currentSetState(): RealtimeCurrentSetState | null {
+    const drill = this.currentDrill();
+    if (!drill) return null;
+    const selectedSet = this.selectedSetByExercise.get(drill.exercise_id);
+    if (!selectedSet) return this.workoutState?.navigation?.current_set_state ?? null;
+    const result = drill.set_results.find((set) => set.set_number === selectedSet);
+    if (!result) return this.workoutState?.navigation?.current_set_state ?? null;
+    const makes = result.progress?.makes ?? result.makes ?? 0;
+    const attempts = result.progress?.attempts ?? result.attempts ?? 0;
+    const targetMakes = result.target?.makes ?? drill.target.makes;
+    const targetAttempts = result.target?.attempts ?? drill.target.attempts;
+    return {
+      exercise_id: drill.exercise_id,
+      drill_name: drill.name,
+      set_number: result.set_number,
+      side_label: result.side_label,
+      completed: result.completed,
+      progress: { makes, attempts, misses: Math.max(0, attempts - makes) },
+      target: { makes: targetMakes, attempts: targetAttempts },
+      remaining: {
+        makes:
+          targetMakes == null ? null : Math.max(0, targetMakes - makes),
+        attempts:
+          targetAttempts == null ? null : Math.max(0, targetAttempts - attempts),
+      },
+    };
+  }
+
+  private resolveNavigationTarget(target: NavigationTarget): RealtimeDrillState | null {
+    const drills = this.orderedDrills();
+    const current = this.currentDrill();
+    const currentIndex = current
+      ? drills.findIndex((drill) => drill.exercise_id === current.exercise_id)
+      : -1;
+    if (target.type === "current") return current;
+    if (target.type === "first") return drills[0] ?? null;
+    if (target.type === "last") return drills.at(-1) ?? null;
+    if (target.type === "ordinal") return drills[target.ordinal - 1] ?? null;
+    if (target.type === "from_end") return drills[drills.length - target.offset] ?? null;
+    if (target.type === "next") {
+      return (
+        this.workoutState?.navigation?.next_exercise_after_current ??
+        drills.slice(currentIndex + 1).find((drill) => drill.status !== "complete") ??
+        null
+      );
+    }
+    if (target.type === "previous") {
+      return currentIndex > 0 ? drills[currentIndex - 1] : null;
+    }
+    if (!("name" in target)) return null;
+    const normalizedName = normalizeDrillReference(target.name);
+    const matches = drills.filter(
+      (drill) => normalizeDrillReference(drill.name) === normalizedName
+    );
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  private nextWorkReply(unit: "set" | "drill", target: NavigationTarget): string {
+    const current = this.currentDrill();
+    if (unit === "set" && (target.type === "next" || target.type === "current")) {
+      const currentSet = this.currentSetState();
+      if (!current || !currentSet) return "There isn't a current set.";
+      if (target.type === "next") {
+        const currentIndex = current.set_results.findIndex(
+          (set) => set.set_number === currentSet.set_number
+        );
+        const nextSet = current.set_results
+          .slice(currentIndex + 1)
+          .find((set) => !set.completed);
+        if (nextSet) {
+          const side = nextSet.side_label ? `, ${nextSet.side_label}` : "";
+          return `Next is set ${nextSet.set_number}${side} of ${
+            current.name ?? "the current drill"
+          }.`;
+        }
+        const nextDrill = this.workoutState?.navigation?.next_exercise_after_current;
+        return nextDrill
+          ? `Next is ${nextDrill.name ?? "the next drill"}, set ${
+              nextDrill.sets.next_unfinished ?? 1
+            }.`
+          : "There are no unfinished sets left.";
+      }
+      if (target.type === "current") {
+        const side = currentSet.side_label ? `, ${currentSet.side_label}` : "";
+        return `You're on set ${currentSet.set_number}${side} of ${current.name ?? "the current drill"}.`;
+      }
+    }
+    const drill = this.resolveNavigationTarget(target);
+    if (!drill) return "There isn't another matching drill.";
+    return target.type === "current"
+      ? `You're on ${drill.name ?? "the current drill"}, drill ${drill.drill_position ?? 1}.`
+      : `Next is ${drill.name ?? "the next drill"}, drill ${drill.drill_position ?? 1}.`;
+  }
+
+  private progressReply(
+    scope: "set" | "exercise" | "workout",
+    metric: "progress" | "percentage" | "remaining" | "target" | "totals"
+  ): string {
+    const current = this.currentDrill();
+    const currentSet = this.currentSetState();
+    if (metric === "remaining") {
+      if (scope === "set") {
+        if (!currentSet) return "There isn't a current set.";
+        const shots = currentSet.remaining.attempts;
+        const makes = currentSet.remaining.makes;
+        if (shots == null) return "This set doesn't have a shot target.";
+        return `${shots} shot${shots === 1 ? "" : "s"} left${
+          makes == null ? "." : ` and ${makes} make${makes === 1 ? "" : "s"} left.`
+        }`;
+      }
+      if (scope === "exercise") {
+        if (!current) return "There isn't a current drill.";
+        const remainingSets = current.set_results.filter((set) => !set.completed).length;
+        return `${remainingSets} set${remainingSets === 1 ? "" : "s"} left in ${
+          current.name ?? "this drill"
+        }.`;
+      }
+      const remainingDrills = this.orderedDrills().filter(
+        (drill) => drill.status !== "complete"
+      ).length;
+      return `${remainingDrills} drill${remainingDrills === 1 ? "" : "s"} left in this workout.`;
+    }
+    if (metric === "target") {
+      if (!current || !currentSet) return "There isn't a current set.";
+      const targetMakes = currentSet.target.makes;
+      const targetAttempts = currentSet.target.attempts;
+      if (targetAttempts == null && current.target.minutes) {
+        return `The target is ${current.target.minutes} minute${
+          current.target.minutes === 1 ? "" : "s"
+        } per set.`;
+      }
+      if (targetAttempts == null) return "This drill doesn't have a shooting target.";
+      return `The target is ${targetMakes ?? 0} make${
+        targetMakes === 1 ? "" : "s"
+      } in ${targetAttempts} attempts per set.`;
+    }
+    let makes = 0;
+    let attempts = 0;
+    let label = "This workout";
+    if (scope === "set") {
+      const set = this.currentSetState();
+      if (!set) return "There isn't a current set.";
+      makes = set.progress.makes;
+      attempts = set.progress.attempts;
+      label = `Set ${set.set_number}`;
+    } else if (scope === "exercise") {
+      if (!current) return "There isn't a current drill.";
+      makes = current.set_results.reduce((sum, set) => sum + (set.makes ?? 0), 0);
+      attempts = current.set_results.reduce((sum, set) => sum + (set.attempts ?? 0), 0);
+      label = current.name ?? "This drill";
+    } else {
+      for (const drill of this.orderedDrills()) {
+        makes += drill.set_results.reduce((sum, set) => sum + (set.makes ?? 0), 0);
+        attempts += drill.set_results.reduce((sum, set) => sum + (set.attempts ?? 0), 0);
+      }
+    }
+    if (attempts === 0) return `${label} doesn't have any logged shots yet.`;
+    const pct = Math.round((makes / attempts) * 100);
+    return metric === "percentage"
+      ? `${label} shooting is ${pct} percent, ${makes} for ${attempts}.`
+      : `${label}: ${makes} for ${attempts}, ${Math.max(0, attempts - makes)} misses.`;
+  }
+
+  private timerStatusReply(): string {
+    const elapsed = Math.max(0, Math.round(this.timer.elapsed_seconds));
+    const duration = this.timer.duration_seconds;
+    if (duration == null) {
+      return this.timer.running
+        ? `The timer is running at ${elapsed} seconds.`
+        : elapsed > 0
+          ? `The timer is paused at ${elapsed} seconds.`
+          : "The timer is stopped.";
+    }
+    const remaining = Math.max(0, Math.round(duration - elapsed));
+    return this.timer.running
+      ? `${remaining} second${remaining === 1 ? "" : "s"} left.`
+      : elapsed > 0
+        ? `The timer is paused with ${remaining} second${remaining === 1 ? "" : "s"} left.`
+        : "The timer is stopped.";
+  }
+
+  private async executeDeterministicIntent(
+    command: CoachSpeechIntent,
+    turn: RoutedCoachTurn
+  ): Promise<string | null> {
+    const requestArgs = { client_request_id: turn.requestId };
+    if (command.kind === "shot") {
+      const current = this.currentSetState();
+      const result = await this.bufferShootingResult({
+        ...command.args,
+        exercise_id: current?.exercise_id,
+        drill_name: current?.drill_name,
+        set_number: current?.set_number,
+        completed: false,
+        ...requestArgs,
+      });
+      return result.output;
+    }
+
+    if (command.kind === "timer") {
+      const current = this.currentSetState();
+      const action = command.args.action;
+      if (action === "status") return this.timerStatusReply();
+      if (action === "pause") {
+        const wasRunning = this.timer.running;
+        this.callbacks?.onTimerAction({ type: "pause_timer" });
+        return wasRunning ? "Timer paused." : "The timer is already paused.";
+      }
+      if (action === "resume") {
+        const canResume = !this.timer.running && this.timer.elapsed_seconds > 0;
+        this.callbacks?.onTimerAction({ type: "resume_timer" });
+        return canResume ? "Timer resumed." : "There isn't a paused timer.";
+      }
+      if (action === "stop" || action === "reset") {
+        this.callbacks?.onTimerAction({ type: "stop_timer" });
+        return action === "reset" ? "Timer reset." : "Timer stopped.";
+      }
+      if (action === "restart") {
+        if (!this.timer.duration_seconds) return null;
+        this.callbacks?.onTimerAction({ type: "stop_timer" });
+        this.callbacks?.onTimerAction({
+          type: "start_timer",
+          duration_seconds: this.timer.duration_seconds,
+          timer_exercise_id: current?.exercise_id ?? null,
+          timer_set_number: current?.set_number ?? null,
+        });
+        return "Timer restarted.";
+      }
+      if (command.args.durationSeconds) {
+        this.callbacks?.onTimerAction({
+          type: "start_timer",
+          duration_seconds: command.args.durationSeconds,
+          timer_exercise_id: current?.exercise_id ?? null,
+          timer_set_number: current?.set_number ?? null,
+        });
+        const seconds = command.args.durationSeconds;
+        return seconds % 60 === 0
+          ? `Timer started for ${seconds / 60} minute${seconds === 60 ? "" : "s"}.`
+          : `Timer started for ${seconds} seconds.`;
+      }
+      const result = await this.invokeCoachTool("start_timer", requestArgs);
+      return result.result;
+    }
+
+    if (command.kind === "navigation") {
+      if (command.args.mode === "query") {
+        return this.nextWorkReply(command.args.unit, command.args.target);
+      }
+      if (command.args.unit === "set") {
+        const current = this.currentDrill();
+        const currentSet = this.currentSetState();
+        if (!current || !currentSet) return null;
+        const orderedSets = [...current.set_results].sort(
+          (a, b) => a.set_number - b.set_number
+        );
+        const index = orderedSets.findIndex(
+          (set) => set.set_number === currentSet.set_number
+        );
+        const target = command.args.target;
+        const nextSet =
+          target.type === "first"
+            ? orderedSets[0]
+            : target.type === "last"
+              ? orderedSets.at(-1)
+              : target.type === "ordinal"
+                ? orderedSets[target.ordinal - 1]
+                : target.type === "next"
+                  ? orderedSets[index + 1]
+                  : target.type === "previous"
+                    ? orderedSets[index - 1]
+                    : target.type === "current"
+                      ? orderedSets[index]
+                      : null;
+        if (!nextSet) return null;
+        this.selectedSetByExercise.set(current.exercise_id, nextSet.set_number);
+        const side = nextSet.side_label ? `, ${nextSet.side_label}` : "";
+        return `Moved to set ${nextSet.set_number}${side} of ${
+          current.name ?? "the current drill"
+        }.`;
+      }
+      const current = this.currentDrill();
+      if (command.args.skip && current) {
+        await this.flushPendingShotSets();
+        const result = await this.invokeCoachTool("skip_drill", {
+          exercise_id: current.exercise_id,
+          drill_name: current.name,
+          ...requestArgs,
+        });
+        return result.result;
+      }
+      const target = this.resolveNavigationTarget(command.args.target);
+      if (!target) return null;
+      await this.flushPendingShotSets();
+      const result = await this.invokeCoachTool("set_current_drill", {
+        exercise_id: target.exercise_id,
+        drill_name: target.name,
+        ...requestArgs,
+      });
+      return result.result;
+    }
+
+    if (command.kind === "completion") {
+      const current = this.currentDrill();
+      const set = this.currentSetState();
+      if (command.args.scope === "workout") {
+        if (command.args.action === "reopen") return null;
+        await this.flushPendingShotSets();
+        return (await this.invokeCoachTool("finish_workout", requestArgs)).result;
+      }
+      if (!current) return null;
+      await this.flushPendingShotSets();
+      if (command.args.scope === "set") {
+        if (!set) return null;
+        const result = await this.invokeCoachTool("set_set_completion", {
+          exercise_id: current.exercise_id,
+          drill_name: current.name,
+          set_number: set.set_number,
+          completed: command.args.action === "complete",
+          ...requestArgs,
+        });
+        this.selectedSetByExercise.delete(current.exercise_id);
+        return command.args.action === "complete"
+          ? `Set ${set.set_number} complete. ${this.nextWorkReply("set", {
+              type: "next",
+            })}`
+          : result.result;
+      }
+      return (
+        await this.invokeCoachTool(
+          command.args.action === "complete" ? "complete_drill" : "uncomplete_drill",
+          {
+            exercise_id: current.exercise_id,
+            drill_name: current.name,
+            ...requestArgs,
+          }
+        )
+      ).result;
+    }
+
+    if (command.kind === "progress") {
+      return this.progressReply(command.args.scope, command.args.metric);
+    }
+    if (command.kind === "list_drills") {
+      const names = this.orderedDrills().map(
+        (drill, index) => `${index + 1}, ${drill.name ?? "unnamed drill"}`
+      );
+      if (names.length === 0) return "There aren't any drills in this workout.";
+      return `Your workout drills are: ${names.join("; ")}.`.slice(0, 295);
+    }
+    if (command.kind === "repeat") return this.lastDeterministicReply;
+    if (command.kind === "save_note") {
+      return (
+        await this.invokeCoachTool("save_note", {
+          note: command.args.note,
+          ...requestArgs,
+        })
+      ).result;
+    }
+    if (command.kind === "remove_drill") {
+      const normalized = normalizeDrillReference(command.args.name);
+      const matches = this.orderedDrills().filter(
+        (drill) => normalizeDrillReference(drill.name) === normalized
+      );
+      if (matches.length !== 1) return null;
+      await this.flushPendingShotSets();
+      return (
+        await this.invokeCoachTool("remove_workout_exercise", {
+          exercise_id: matches[0].exercise_id,
+          drill_name: matches[0].name,
+          ...requestArgs,
+        })
+      ).result;
+    }
+    if (command.kind === "adjust_workout") {
+      return (
+        await this.invokeCoachTool(
+          command.args.action === "extend" ? "extend_workout" : "shorten_workout",
+          {
+            minutes: command.args.durationSeconds / 60,
+            ...requestArgs,
+          }
+        )
+      ).result;
+    }
+    return null;
+  }
+
+  private fallbackTurnInstructions(transcript: string, prefix: string): string {
+    const drills = this.orderedDrills().map((drill) => ({
+      position: drill.drill_position,
+      id: drill.exercise_id,
+      name: drill.name,
+      category: drill.category,
+      status: drill.status,
+      sets: drill.sets,
+      target: drill.target,
+      results: drill.set_results.map((set) => ({
+        set: set.set_number,
+        side: set.side_label ?? null,
+        complete: set.completed,
+        makes: set.makes,
+        attempts: set.attempts,
+      })),
+    }));
+    const state = {
+      current_set: this.currentSetState(),
+      next_exercise: this.workoutState?.navigation?.next_exercise_after_current
+        ? {
+            id: this.workoutState.navigation.next_exercise_after_current.exercise_id,
+            name: this.workoutState.navigation.next_exercise_after_current.name,
+            position:
+              this.workoutState.navigation.next_exercise_after_current.drill_position,
+          }
+        : null,
+      drills,
+      timer: this.timer,
+      summary: this.conversationSummary.slice(-800) || null,
+    };
+    return `${prefix}\nUser transcript: ${JSON.stringify(
+      transcript
+    )}\nLatest authoritative client state: ${JSON.stringify(state)}`;
+  }
+
+  private async routeTranscribedTurn(
+    transcript: string,
+    itemId: string | null,
+    generation: number
+  ): Promise<void> {
+    if (!this.active || generation !== this.connectionGeneration) return;
+    if (this.possibleTtsEcho?.expiresAt && this.possibleTtsEcho.expiresAt < Date.now()) {
+      this.possibleTtsEcho = null;
+    }
+    if (
+      this.possibleTtsEcho &&
+      normalizeCoachSpeech(transcript) === this.possibleTtsEcho.text
+    ) {
+      this.possibleTtsEcho = null;
+      if (itemId) {
+        this.sendEvent({ type: "conversation.item.delete", item_id: itemId });
+      }
+      return;
+    }
+    const turnId = itemId ?? `transcript-${generation}-${Date.now()}`;
+    if (this.routedTurns.has(turnId)) return;
+    const turn: RoutedCoachTurn = {
+      itemId: turnId,
+      transcript,
+      requestId: `voice-${turnId}`.slice(0, 180),
+      speechEpoch: this.speechEpoch,
+      speechStoppedAt: this.speechStoppedAtByItem.get(turnId) ?? null,
+      transcriptCompletedAt: Date.now(),
+      routeDecidedAt: null,
+      backendCompletedAt: null,
+    };
+    this.speechStoppedAtByItem.delete(turnId);
+    this.routedTurns.set(turnId, turn);
+    const command = parseCoachSpeechIntent(transcript);
+    if (!command) {
+      turn.routeDecidedAt = Date.now();
+      this.fallbackTurnCount += 1;
+      this.logVoiceMetric(turn, "route_decision");
+      this.latestUserTranscript = transcript;
+      this.requestResponse(
+        this.fallbackTurnInstructions(
+          transcript,
+          "Respond normally to this turn using the full coach instructions and latest state."
+        ),
+        false,
+        null,
+        transcript
+      );
+      return;
+    }
+
+    this.latestUserTranscript = null;
+    this.toolBusy = true;
+    this.updateStatus();
+    try {
+      const output = await this.executeDeterministicIntent(command, turn);
+      if (generation !== this.connectionGeneration) return;
+      if (!output) {
+        turn.routeDecidedAt = Date.now();
+        turn.backendCompletedAt = turn.routeDecidedAt;
+        this.fallbackTurnCount += 1;
+        this.logVoiceMetric(turn, "route_decision");
+        this.requestResponse(
+          this.fallbackTurnInstructions(
+            transcript,
+            "The deterministic router declined this command. Resolve it using the full coach instructions and tools."
+          ),
+          false,
+          null,
+          transcript
+        );
+        return;
+      }
+      turn.routeDecidedAt = turn.routeDecidedAt ?? turn.transcriptCompletedAt;
+      turn.backendCompletedAt = Date.now();
+      this.deterministicTurnCount += 1;
+      this.logVoiceMetric(turn, "backend_complete");
+      this.callbacks?.onCommandHeard?.({
+        turnId,
+        label: command.heardLabel,
+        state: "recognized",
+      });
+      if (itemId && command.safeToDelete) {
+        this.sendEvent({
+          type: "conversation.item.delete",
+          item_id: itemId,
+        });
+      }
+      this.conversationSummary = appendConversationSummary(
+        this.conversationSummary,
+        output
+      );
+      this.lastDeterministicReply = output;
+      this.callbacks?.onConversationSummary?.(this.conversationSummary);
+      if (turn.speechEpoch === this.speechEpoch) {
+        await this.speakDeterministic(output, turn.requestId, turn.speechEpoch);
+      }
+    } catch (err) {
+      console.error("Failed to route transcribed coach command:", err);
+      if (generation === this.connectionGeneration) {
+        this.callbacks?.onCommandHeard?.({
+          turnId,
+          label: "Command could not be completed",
+          state: "failed",
+        });
+        this.callbacks?.onError(
+          err instanceof Error ? err.message : "Could not complete that coach command."
+        );
+      }
+    } finally {
+      if (generation === this.connectionGeneration) {
+        this.toolBusy = false;
+        this.updateStatus();
+        this.flushQueuedResponse();
+      }
+    }
+  }
+
+  markTimerSetComplete(exerciseId: string, setNumber: number): void {
+    const generation = this.connectionGeneration;
+    const speechEpoch = this.speechEpoch;
+    const requestId = `timer-${this.sessionKey ?? "session"}-${exerciseId}-${setNumber}`.slice(0, 180);
+    this.toolBusy = true;
+    this.updateStatus();
+    void (async () => {
+      try {
+        await this.flushPendingShotSets();
+        const result = await this.invokeCoachTool("set_set_completion", {
+          exercise_id: exerciseId,
+          set_number: setNumber,
+          completed: true,
+          client_request_id: requestId,
+        });
+        if (generation !== this.connectionGeneration) return;
+        const reply =
+          result.local_confirmation ||
+          `Set ${setNumber} complete. ${this.nextWorkReply("set", { type: "next" })}`;
+        this.conversationSummary = appendConversationSummary(this.conversationSummary, reply);
+        this.callbacks?.onConversationSummary?.(this.conversationSummary);
+        await this.speakDeterministic(reply, requestId, speechEpoch);
+      } catch (err) {
+        if (generation === this.connectionGeneration) {
+          this.callbacks?.onError(
+            err instanceof Error ? err.message : "Could not complete the timed set."
+          );
+        }
+      } finally {
+        if (generation === this.connectionGeneration) {
+          this.toolBusy = false;
+          this.updateStatus();
+          this.flushQueuedResponse();
+        }
+      }
+    })();
   }
 
   mute(): void {
@@ -932,10 +1615,24 @@ export class RealtimeCoachSession {
       this.activeResponseId = null;
       this.toolBusy = false;
       this.responseCreatePending = false;
-      this.queuedResponseInstruction = null;
-      this.queuedResponseOutOfBand = false;
+      this.responseQueue = [];
+      this.pendingResponseTranscript = null;
+      this.responseTranscripts.clear();
+      this.responseEpochs.clear();
+      this.routedTurns.clear();
+      this.speechStoppedAtByItem.clear();
+      this.selectedSetByExercise.clear();
+      this.speechEpoch += 1;
+      this.latestUserTranscript = null;
       this.contextRefreshPending = false;
       this.pendingEvents = [];
+      if (this.activeTtsRequestId) cancelStreamingPcm(this.activeTtsRequestId);
+      this.activeTtsRequestId = null;
+      this.activeTtsText = null;
+      this.activeTtsBaseRequestId = null;
+      this.possibleTtsEcho = null;
+      for (const subscription of this.ttsSubscriptions) subscription.remove();
+      this.ttsSubscriptions = [];
 
       if (this.disconnectGraceTimeout) clearTimeout(this.disconnectGraceTimeout);
       if (this.responseCreateTimeout) clearTimeout(this.responseCreateTimeout);
@@ -1052,15 +1749,233 @@ export class RealtimeCoachSession {
     }
   }
 
-  private requestResponse(instructions: string, outOfBand = false): void {
-    this.queuedResponseInstruction = instructions;
-    this.queuedResponseOutOfBand = outOfBand;
+  private logVoiceMetric(
+    turn: RoutedCoachTurn,
+    stage: "route_decision" | "backend_complete" | "first_tts_byte" | "first_audible_frame"
+  ): void {
+    const now = Date.now();
+    const totalRoutes = this.deterministicTurnCount + this.fallbackTurnCount;
+    console.info(
+      "[coach_voice_metric]",
+      JSON.stringify({
+        stage,
+        turn_id: turn.itemId,
+        speech_stop_to_transcript_ms:
+          turn.speechStoppedAt == null
+            ? null
+            : Math.max(0, turn.transcriptCompletedAt - turn.speechStoppedAt),
+        transcript_to_route_ms:
+          turn.routeDecidedAt == null
+            ? null
+            : Math.max(0, turn.routeDecidedAt - turn.transcriptCompletedAt),
+        route_to_backend_ms:
+          turn.routeDecidedAt == null || turn.backendCompletedAt == null
+            ? null
+            : Math.max(0, turn.backendCompletedAt - turn.routeDecidedAt),
+        backend_to_stage_ms:
+          turn.backendCompletedAt == null ? null : Math.max(0, now - turn.backendCompletedAt),
+        deterministic_route_pct:
+          totalRoutes === 0
+            ? 0
+            : Math.round((this.deterministicTurnCount / totalRoutes) * 100),
+        fallback_route_pct:
+          totalRoutes === 0 ? 0 : Math.round((this.fallbackTurnCount / totalRoutes) * 100),
+      })
+    );
+  }
+
+  private activeTtsTurn(): RoutedCoachTurn | null {
+    const requestId = this.activeTtsBaseRequestId;
+    if (!requestId) return null;
+    return (
+      [...this.routedTurns.values()].find((turn) => requestId.startsWith(turn.requestId)) ??
+      null
+    );
+  }
+
+  private ensureTtsListeners(): void {
+    if (this.ttsSubscriptions.length > 0 || !isStreamingPcmPlayerAvailable) return;
+    const isActiveRequest = (requestId: string) => requestId === this.activeTtsRequestId;
+    this.ttsSubscriptions = [
+      addStreamingPcmListener("started", ({ requestId }) => {
+        if (!isActiveRequest(requestId)) return;
+        this.playbackActive = true;
+        this.updateStatus();
+      }),
+      addStreamingPcmListener("firstByte", ({ requestId }) => {
+        if (!isActiveRequest(requestId)) return;
+        const turn = this.activeTtsTurn();
+        if (turn) this.logVoiceMetric(turn, "first_tts_byte");
+      }),
+      addStreamingPcmListener("firstAudio", ({ requestId }) => {
+        if (!isActiveRequest(requestId)) return;
+        this.playbackActive = true;
+        const turn = this.activeTtsTurn();
+        if (turn) this.logVoiceMetric(turn, "first_audible_frame");
+        this.updateStatus();
+      }),
+      addStreamingPcmListener("finished", ({ requestId }) => {
+        if (!isActiveRequest(requestId)) return;
+        this.activeTtsRequestId = null;
+        this.activeTtsText = null;
+        this.activeTtsBaseRequestId = null;
+        this.playbackActive = false;
+        this.updateStatus();
+        this.flushPendingContextRefresh();
+        this.flushQueuedResponse();
+      }),
+      addStreamingPcmListener("cancelled", ({ requestId }) => {
+        if (!isActiveRequest(requestId)) return;
+        this.activeTtsRequestId = null;
+        this.activeTtsText = null;
+        this.activeTtsBaseRequestId = null;
+        this.playbackActive = false;
+        this.updateStatus();
+      }),
+      addStreamingPcmListener("error", ({ requestId, message }) => {
+        if (!isActiveRequest(requestId)) return;
+        const shouldFallback = this.activeTtsEpoch === this.speechEpoch;
+        const retryText = this.activeTtsText;
+        const retryBaseRequestId = this.activeTtsBaseRequestId;
+        const retryCount = this.activeTtsRetryCount;
+        this.activeTtsRequestId = null;
+        this.activeTtsText = null;
+        this.activeTtsBaseRequestId = null;
+        this.playbackActive = false;
+        if (shouldFallback && retryText && retryBaseRequestId && retryCount < 1) {
+          void this.speakDeterministic(
+            retryText,
+            `${retryBaseRequestId}-retry`,
+            this.activeTtsEpoch,
+            retryCount + 1
+          );
+        } else if (shouldFallback && this.lastDeterministicReply) {
+          this.requestResponse(
+            `Say exactly this sentence and nothing else: ${JSON.stringify(
+              this.lastDeterministicReply
+            )}`,
+            true
+          );
+        } else if (shouldFallback) {
+          this.callbacks?.onError(message || "Coach speech could not play.");
+        }
+        this.updateStatus();
+      }),
+    ];
+  }
+
+  private async speakDeterministic(
+    text: string,
+    requestId: string,
+    speechEpoch: number,
+    retryCount = 0
+  ): Promise<void> {
+    if (speechEpoch !== this.speechEpoch || !this.active) return;
+    this.lastDeterministicReply = text;
+    if (!isStreamingPcmPlayerAvailable) {
+      this.requestResponse(
+        `Say exactly this sentence and nothing else: ${JSON.stringify(text)}`,
+        true
+      );
+      return;
+    }
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    const { data } = await supabase.auth.getSession();
+    const accessToken = data.session?.access_token;
+    if (!supabaseUrl || !anonKey || !accessToken || !this.sessionKey) {
+      this.requestResponse(
+        `Say exactly this sentence and nothing else: ${JSON.stringify(text)}`,
+        true
+      );
+      return;
+    }
+    this.ensureTtsListeners();
+    const ttsRequestId = `${requestId}-tts`.slice(0, 120);
+    this.activeTtsRequestId = ttsRequestId;
+    this.activeTtsEpoch = speechEpoch;
+    this.activeTtsText = text;
+    this.activeTtsBaseRequestId = requestId;
+    this.activeTtsRetryCount = retryCount;
+    const nativeRequestId = speakStreamingPcm({
+      url: `${supabaseUrl}/functions/v1/coach-tts`,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        apikey: anonKey,
+        "Content-Type": "application/json",
+      },
+      body: {
+        text,
+        session_key: this.sessionKey,
+        request_id: ttsRequestId,
+      },
+      text,
+      voice: this.voice,
+      model: "gpt-4o-mini-tts",
+      requestId: ttsRequestId,
+      useCache: true,
+    });
+    if (!nativeRequestId) {
+      this.activeTtsRequestId = null;
+      this.activeTtsText = null;
+      this.activeTtsBaseRequestId = null;
+      this.requestResponse(
+        `Say exactly this sentence and nothing else: ${JSON.stringify(text)}`,
+        true
+      );
+    }
+  }
+
+  private async prefetchCommonTts(): Promise<void> {
+    if (!isStreamingPcmPlayerAvailable || !this.active || !this.sessionKey) return;
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    const { data } = await supabase.auth.getSession();
+    const accessToken = data.session?.access_token;
+    if (!supabaseUrl || !anonKey || !accessToken || !this.sessionKey || !this.active) return;
+    const clips = ["Timer paused.", "Timer resumed.", "Timer stopped.", "Timer reset."];
+    clips.forEach((text, index) => {
+      const requestId = `prefetch-${this.sessionKey}-${index}`.slice(0, 120);
+      prefetchStreamingPcm({
+        url: `${supabaseUrl}/functions/v1/coach-tts`,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          apikey: anonKey,
+          "Content-Type": "application/json",
+        },
+        body: {
+          text,
+          session_key: this.sessionKey,
+          request_id: requestId,
+        },
+        text,
+        voice: this.voice,
+        model: "gpt-4o-mini-tts",
+        requestId,
+        useCache: true,
+      });
+    });
+  }
+
+  private requestResponse(
+    instructions: string,
+    outOfBand = false,
+    itemId: string | null = null,
+    sourceTranscript: string | null = null
+  ): void {
+    this.responseQueue.push({
+      instructions,
+      outOfBand,
+      itemId,
+      sourceTranscript,
+      speechEpoch: this.speechEpoch,
+    });
     this.flushQueuedResponse();
   }
 
   private flushQueuedResponse(): void {
     if (
-      !this.queuedResponseInstruction ||
+      this.responseQueue.length === 0 ||
       this.generationActive ||
       this.playbackActive ||
       this.responseCreatePending ||
@@ -1069,29 +1984,29 @@ export class RealtimeCoachSession {
     ) {
       return;
     }
-    const instructions = this.queuedResponseInstruction;
-    const outOfBand = this.queuedResponseOutOfBand;
-    this.queuedResponseInstruction = null;
-    this.queuedResponseOutOfBand = false;
+    const queued = this.responseQueue.shift();
+    if (!queued) return;
+    const { instructions, outOfBand, itemId } = queued;
     const sent = this.sendEvent(
       {
         type: "response.create",
-        response: outOfBand
+        response: outOfBand || itemId
           ? {
               instructions,
               conversation: "none",
-              input: [],
-              tool_choice: "none",
+              input: itemId ? [{ type: "item_reference", id: itemId }] : [],
+              ...(outOfBand ? { tool_choice: "none", tools: [] } : {}),
             }
           : { instructions },
       },
       false
     );
     if (!sent) {
-      this.queuedResponseInstruction = instructions;
-      this.queuedResponseOutOfBand = outOfBand;
+      this.responseQueue.unshift(queued);
       return;
     }
+    this.pendingResponseTranscript = queued.sourceTranscript;
+    this.pendingResponseEpoch = queued.speechEpoch;
     this.responseCreatePending = true;
     this.updateStatus();
     if (this.responseCreateTimeout) clearTimeout(this.responseCreateTimeout);
@@ -1114,17 +2029,69 @@ export class RealtimeCoachSession {
         // VAD is transport state only. Adding synthetic user messages or
         // racing a session.update here makes an automatic VAD response see
         // conflicting instructions and can trigger state-check loops.
+        this.latestUserTranscript = null;
+        this.speechEpoch += 1;
+        this.responseQueue = [];
+        if (this.activeTtsRequestId) {
+          if (this.activeTtsText) {
+            this.possibleTtsEcho = {
+              text: normalizeCoachSpeech(this.activeTtsText),
+              expiresAt: Date.now() + 4_000,
+            };
+          }
+          cancelStreamingPcm(this.activeTtsRequestId);
+          this.activeTtsRequestId = null;
+          this.activeTtsText = null;
+          this.activeTtsBaseRequestId = null;
+          this.playbackActive = false;
+        }
+        if (this.generationActive || this.responseCreatePending) {
+          this.sendEvent({ type: "response.cancel" }, false);
+        }
+        if (this.playbackActive) {
+          this.sendEvent({ type: "output_audio_buffer.clear" }, false);
+        }
         this.callbacks?.onStatus("listening");
         break;
       }
 
-      case "input_audio_buffer.speech_stopped":
+      case "input_audio_buffer.speech_stopped": {
+        const itemId = typeof event.item_id === "string" ? event.item_id : null;
+        if (itemId) this.speechStoppedAtByItem.set(itemId, Date.now());
+        break;
+      }
+
+      case "conversation.item.input_audio_transcription.completed": {
+        const transcript = typeof event.transcript === "string" ? event.transcript.trim() : "";
+        const itemId = typeof event.item_id === "string" ? event.item_id : null;
+        const generation = this.connectionGeneration;
+        if (!transcript) break;
+        this.transcriptRouteQueue = this.transcriptRouteQueue
+          .then(() => this.routeTranscribedTurn(transcript, itemId, generation))
+          .catch((err) => {
+            console.error("Failed to route coach transcript:", err);
+          });
+        break;
+      }
+
+      case "conversation.item.input_audio_transcription.failed":
+        this.latestUserTranscript = null;
+        this.requestResponse(
+          "Transcription was unavailable; respond normally to the latest user audio using the full coach instructions."
+        );
         break;
 
       case "response.created": {
         const response = event.response as { id?: string } | undefined;
         this.generationActive = true;
         this.activeResponseId = response?.id ?? null;
+        if (response?.id) {
+          if (this.pendingResponseTranscript) {
+            this.responseTranscripts.set(response.id, this.pendingResponseTranscript);
+          }
+          this.responseEpochs.set(response.id, this.pendingResponseEpoch);
+        }
+        this.pendingResponseTranscript = null;
         this.responseCreatePending = false;
         if (this.responseCreateTimeout) clearTimeout(this.responseCreateTimeout);
         this.responseCreateTimeout = null;
@@ -1147,6 +2114,10 @@ export class RealtimeCoachSession {
       }
 
       case "response.cancelled":
+        if (this.activeResponseId) {
+          this.responseTranscripts.delete(this.activeResponseId);
+          this.responseEpochs.delete(this.activeResponseId);
+        }
         this.generationActive = false;
         this.activeResponseId = null;
         this.updateStatus();
@@ -1244,21 +2215,80 @@ export class RealtimeCoachSession {
         }
       });
     }
+    const responseId = response?.id;
+    const correlatedTranscript = responseId
+      ? this.responseTranscripts.get(responseId) ?? null
+      : null;
+    const responseEpoch = responseId
+      ? this.responseEpochs.get(responseId) ?? this.speechEpoch
+      : this.speechEpoch;
+    if (responseId) {
+      this.responseTranscripts.delete(responseId);
+      this.responseEpochs.delete(responseId);
+    }
     const output = event.response?.output ?? [];
     const functionCalls = output.filter(
       (item): item is FunctionCallItem => item.type === "function_call"
     );
+    const transcriptShot = parseSpokenShotCount(
+      correlatedTranscript ?? this.latestUserTranscript
+    );
+    this.latestUserTranscript = null;
 
     if (functionCalls.length > 0) {
+      if (responseEpoch !== this.speechEpoch) {
+        this.updateStatus();
+        this.flushQueuedResponse();
+        return;
+      }
       this.toolBusy = true;
       this.updateStatus();
       let strongestResult: ToolExecutionKind = "read_only";
       const singleShotCalls = new Set<string>();
+      let transcriptShotHandled = false;
       try {
         for (const call of functionCalls) {
+          let effectiveCall = call;
+          if (transcriptShot && LOCAL_SHOT_TOOLS.has(call.name)) {
+            if (transcriptShotHandled) {
+              this.sendEvent({
+                type: "conversation.item.create",
+                item: {
+                  type: "function_call_output",
+                  call_id: call.call_id,
+                  output: "Additional shot call ignored; the transcript was already counted once.",
+                },
+              });
+              continue;
+            }
+            let originalArgs: Record<string, unknown> = {};
+            try {
+              originalArgs = JSON.parse(call.arguments || "{}");
+            } catch {
+              originalArgs = {};
+            }
+            const name = transcriptShot.made
+              ? transcriptShot.count === 1
+                ? "record_make"
+                : "record_makes"
+              : transcriptShot.count === 1
+                ? "record_miss"
+                : "record_misses";
+            effectiveCall = {
+              ...call,
+              name,
+              arguments: JSON.stringify({
+                exercise_id: originalArgs.exercise_id,
+                drill_name: originalArgs.drill_name,
+                set_number: originalArgs.set_number,
+                ...(transcriptShot.count > 1 ? { count: transcriptShot.count } : {}),
+              }),
+            };
+            transcriptShotHandled = true;
+          }
           if (
-            DETERMINISTIC_SHOT_TOOLS.has(call.name) &&
-            singleShotCalls.has(call.name)
+            DETERMINISTIC_SHOT_TOOLS.has(effectiveCall.name) &&
+            singleShotCalls.has(effectiveCall.name)
           ) {
             this.sendEvent({
               type: "conversation.item.create",
@@ -1270,10 +2300,10 @@ export class RealtimeCoachSession {
             });
             continue;
           }
-          if (DETERMINISTIC_SHOT_TOOLS.has(call.name)) {
-            singleShotCalls.add(call.name);
+          if (DETERMINISTIC_SHOT_TOOLS.has(effectiveCall.name)) {
+            singleShotCalls.add(effectiveCall.name);
           }
-          const result = await this.executeToolCall(call, generation);
+          const result = await this.executeToolCall(effectiveCall, generation);
           if (result === "completed_shot") strongestResult = "completed_shot";
           else if (result === "mutation" && strongestResult !== "completed_shot") {
             strongestResult = "mutation";
@@ -1302,7 +2332,7 @@ export class RealtimeCoachSession {
                 )}`
               : "Say the set was saved and direct the athlete to the authoritative next work item."
             : strongestResult === "mutation"
-              ? "Answer the athlete's latest request in one short natural sentence using the tool results. Confirm completed actions, but never mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless genuinely ambiguous."
+              ? "State only the completed result in one short sentence. No acknowledgment, praise, preamble, action narration, offer, or closing sentence. Never mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless genuinely ambiguous."
               : "Answer the athlete's latest request directly and briefly using the lookup result. Do not mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless the lookup result is genuinely ambiguous.",
         strongestResult === "buffered_shot" || strongestResult === "completed_shot"
       );

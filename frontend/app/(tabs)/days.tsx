@@ -11,6 +11,7 @@ import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { reportNetworkFailure } from "@/lib/connectivity";
 import { calculateDayPerformance, getPerformanceColor } from "@/lib/dayPerformance";
 import {
+  aggregateObservedShots,
   buildSetPlan,
   decodeExerciseLogMeta,
   hydrateSetLogs,
@@ -563,12 +564,10 @@ export default function DaysScreen() {
       if (!log) continue;
       const plan = buildSetPlan(exercise);
       const setLogs = hydrateSetLogs(plan, decodeExerciseLogMeta(log.notes), log);
-      for (const set of setLogs) {
-        if (!set.completed) continue;
-        const setMakes = set.makes ?? 0;
-        makes += setMakes;
-        shots += set.attempts ?? plan.perSetAttempts ?? setMakes;
-      }
+      const observed = aggregateObservedShots(setLogs);
+      if (!observed) continue;
+      makes += observed.makes;
+      shots += observed.attempts;
     }
 
     return {

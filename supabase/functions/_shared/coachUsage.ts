@@ -9,6 +9,20 @@ export const COACH_LIMITS = {
 
 export const COACH_DAILY_BUDGET_USD = COACH_LIMITS.maxDailyCostUsd;
 
+export const TTS_MODEL = "gpt-4o-mini-tts";
+export const TTS_MAX_TEXT_LENGTH = 300;
+export const TTS_MAX_REQUESTS_PER_MINUTE = 30;
+export const TTS_MAX_REQUESTS_PER_SESSION = 200;
+
+/** Published estimate for gpt-4o-mini-tts, plus its text-input token rate. */
+export const TTS_RATES = {
+  audioPerMinute: 0.015,
+  textInputPerToken: 0.6 / 1_000_000,
+  estimatedWordsPerMinute: 150,
+  estimatedCharactersPerToken: 4,
+  minimumAudioSeconds: 0.4,
+} as const;
+
 export const COACH_LIMIT_MESSAGES = {
   workoutBudgetExhausted:
     "Coach time used up for this workout. Your assistant refills on your next workout.",
@@ -49,5 +63,77 @@ export function estimateRealtimeCostUsd(tokens: UsageTokenBreakdown): number {
     tokens.cached_audio_tokens * REALTIME_MINI_RATES.cachedAudioInput +
     tokens.output_text_tokens * REALTIME_MINI_RATES.textOutput +
     tokens.output_audio_tokens * REALTIME_MINI_RATES.audioOutput
+  );
+}
+
+export interface ValidatedTtsRequest {
+  text: string;
+  requestId: string;
+  sessionKey: string;
+}
+
+export type TtsValidationResult =
+  | { ok: true; value: ValidatedTtsRequest }
+  | { ok: false; error: string };
+
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
+export function validateTtsRequest(input: unknown): TtsValidationResult {
+  if (!input || typeof input !== "object") {
+    return { ok: false, error: "Request body must be an object" };
+  }
+  const body = input as Record<string, unknown>;
+  if (typeof body.text !== "string") {
+    return { ok: false, error: "text is required" };
+  }
+  const text = body.text.trim();
+  if (!text || text.length > TTS_MAX_TEXT_LENGTH) {
+    return {
+      ok: false,
+      error: `text must be between 1 and ${TTS_MAX_TEXT_LENGTH} characters`,
+    };
+  }
+  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(text)) {
+    return { ok: false, error: "text contains unsupported control characters" };
+  }
+  if (
+    typeof body.request_id !== "string" ||
+    body.request_id.length < 8 ||
+    body.request_id.length > 128 ||
+    !REQUEST_ID_PATTERN.test(body.request_id)
+  ) {
+    return { ok: false, error: "Invalid request_id" };
+  }
+  if (
+    typeof body.session_key !== "string" ||
+    body.session_key.length < 16 ||
+    body.session_key.length > 128
+  ) {
+    return { ok: false, error: "Invalid session_key" };
+  }
+  return {
+    ok: true,
+    value: {
+      text,
+      requestId: body.request_id,
+      sessionKey: body.session_key,
+    },
+  };
+}
+
+/**
+ * Speech responses do not include token usage when streamed as raw PCM.
+ * Reserve a deterministic estimate from text length and a 150 WPM delivery.
+ */
+export function estimateTtsCostUsd(text: string): number {
+  const words = Math.max(1, text.trim().split(/\s+/).filter(Boolean).length);
+  const audioMinutes = Math.max(
+    TTS_RATES.minimumAudioSeconds / 60,
+    words / TTS_RATES.estimatedWordsPerMinute
+  );
+  const textTokens = Math.ceil(text.length / TTS_RATES.estimatedCharactersPerToken);
+  return (
+    audioMinutes * TTS_RATES.audioPerMinute +
+    textTokens * TTS_RATES.textInputPerToken
   );
 }

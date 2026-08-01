@@ -734,6 +734,15 @@ Deno.test("realtime shooting tools make single shots deterministic", () => {
     "all deterministic shot tools must exist"
   );
   assert(
+    totalTool?.description.includes("attempts=makes+misses") &&
+      totalTool.description.includes("including completed") &&
+      totalTool.description.includes("no navigation") &&
+      COACH_SYSTEM_PROMPT.includes(
+        "correct any completed set directly with set_shooting_total and keep it completed"
+      ),
+    "completed-set corrections must replace the named set without navigation"
+  );
+  assert(
     !("attempts" in ((makeTool?.parameters?.properties ?? {}) as Record<string, unknown>)) &&
       !("makes" in ((missTool?.parameters?.properties ?? {}) as Record<string, unknown>)),
     "single make/miss tools must not accept model-provided shot counts"
@@ -751,12 +760,18 @@ Deno.test("realtime shooting tools make single shots deterministic", () => {
     makesTool?.parameters?.required?.includes("count") &&
       missesTool?.parameters?.required?.includes("count") &&
       COACH_SYSTEM_PROMPT.includes("call record_makes once with count N") &&
-      COACH_SYSTEM_PROMPT.includes("call record_misses once with count N"),
+      COACH_SYSTEM_PROMPT.includes("call record_misses once with count N") &&
+      COACH_SYSTEM_PROMPT.includes("NUMBER PRECEDENCE") &&
+      makeTool?.description.includes("never use when N>1") &&
+      missTool?.description.includes("never use when N>1"),
     "consecutive makes and misses must map to deterministic counted tools"
   );
   assert(
     COACH_SYSTEM_PROMPT.includes('respond with exactly: "You\'re X for Y, N shots left."') &&
-      COACH_SYSTEM_PROMPT.includes("Say nothing before or after it"),
+      COACH_SYSTEM_PROMPT.includes("Say nothing before or after it") &&
+      COACH_SYSTEM_PROMPT.includes("record_makes adds exactly N makes and N attempts") &&
+      COACH_SYSTEM_PROMPT.includes("record_misses adds zero makes and exactly N attempts") &&
+      COACH_SYSTEM_PROMPT.includes("never call a singular tool"),
     "ordinary shot updates must contain only the exact progress sentence"
   );
   assert(
@@ -769,7 +784,12 @@ Deno.test("realtime shooting tools make single shots deterministic", () => {
 
 Deno.test("realtime sessions transcribe audio and retain stable tool contracts", () => {
   const config = buildRealtimeSessionConfig("instructions", "model", "voice") as {
-    audio: { input: { transcription?: { model?: string; language?: string } } };
+    audio: {
+      input: {
+        transcription?: { model?: string; language?: string };
+        turn_detection?: { create_response?: boolean; interrupt_response?: boolean };
+      };
+    };
     tools: Array<{ name: string }>;
     truncation: { type?: string; retention_ratio?: number };
   };
@@ -778,6 +798,11 @@ Deno.test("realtime sessions transcribe audio and retain stable tool contracts",
     "input transcription should allow older audio tokens to be discarded"
   );
   assert(config.audio.input.transcription?.language === "en", "coach transcription is English");
+  assert(
+    config.audio.input.turn_detection?.create_response === false &&
+      config.audio.input.turn_detection?.interrupt_response === false,
+    "the client must route transcripts and interruption explicitly"
+  );
   assert(config.tools.length === getRealtimeTools().length, "all realtime tools must remain enabled");
   assert(
     config.truncation.type === "retention_ratio" && config.truncation.retention_ratio === 0.8,

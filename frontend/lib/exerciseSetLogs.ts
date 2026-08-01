@@ -203,6 +203,31 @@ export function normalizeSetLogs(setLogs: SetLogEntry[], plan: ExerciseSetPlan):
   }));
 }
 
+export interface ObservedShotTotals {
+  makes: number;
+  attempts: number;
+}
+
+/** Counts recorded shots without treating untouched target-filled rows as activity. */
+export function observedShotResult(entry: SetLogEntry): ObservedShotTotals | null {
+  if (!entry.completed && entry.makes == null) return null;
+  const makes = entry.makes ?? 0;
+  const attempts = entry.attempts ?? makes;
+  return attempts > 0 ? { makes, attempts } : null;
+}
+
+export function aggregateObservedShots(setLogs: SetLogEntry[]): ObservedShotTotals | null {
+  let makes = 0;
+  let attempts = 0;
+  for (const entry of setLogs) {
+    const observed = observedShotResult(entry);
+    if (!observed) continue;
+    makes += observed.makes;
+    attempts += observed.attempts;
+  }
+  return attempts > 0 ? { makes, attempts } : null;
+}
+
 export function aggregateSetLogs(
   setLogs: SetLogEntry[],
   plan: ExerciseSetPlan

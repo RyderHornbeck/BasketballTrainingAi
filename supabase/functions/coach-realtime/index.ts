@@ -259,6 +259,7 @@ Deno.serve(async (req: Request) => {
       sdp: answerSdp,
       session_key: body.session_key,
       model: REALTIME_MODEL,
+      voice: realtimeVoice,
       workout_context: contextJson,
       limits: COACH_LIMITS,
       daily_usage: {
