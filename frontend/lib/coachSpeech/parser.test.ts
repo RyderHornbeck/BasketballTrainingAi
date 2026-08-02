@@ -3,7 +3,11 @@ import {
   parseSpokenNumber,
   type CoachSpeechIntent,
 } from "./index";
-import { parseShotSpeechCommand, parseSpokenShotCount } from "../shotSpeech";
+import {
+  mergeShotProgress,
+  parseShotSpeechCommand,
+  parseSpokenShotCount,
+} from "../shotSpeech";
 
 function fail(message: string): never {
   throw new Error(message);
@@ -69,6 +73,10 @@ test("parses make and miss vocabulary", () => {
     ["air ball", { mode: "increment", makes: 0, attempts: 1, source: "count" }],
     ["airballed", { mode: "increment", makes: 0, attempts: 1, source: "count" }],
     ["made three in a row", { mode: "increment", makes: 3, attempts: 3, source: "count" }],
+    ["I missed again", { mode: "increment", makes: 0, attempts: 1, source: "count" }],
+    ["I made again", { mode: "increment", makes: 1, attempts: 1, source: "count" }],
+    ["I missed 2 in a row again", { mode: "increment", makes: 0, attempts: 2, source: "count" }],
+    ["I just made 2 more again", { mode: "increment", makes: 2, attempts: 2, source: "count" }],
     ["4 buckets", { mode: "increment", makes: 4, attempts: 4, source: "count" }],
     ["bricked two shots", { mode: "increment", makes: 0, attempts: 2, source: "count" }],
     ["three airballs", { mode: "increment", makes: 0, attempts: 3, source: "count" }],
@@ -103,6 +111,9 @@ test("parses timer starts, controls, and status", () => {
     ["start the timer for this set", { action: "start", useSetDefault: true }],
     ["start a stopwatch", { action: "start", useSetDefault: true }],
     ["start a 2 minute timer", { action: "start", durationSeconds: 120 }],
+    ["Start a 5-minute timer.", { action: "start", durationSeconds: 300 }],
+    ["Start a five-minute time.", { action: "start", durationSeconds: 300 }],
+    ["Start five minutes.", { action: "start", durationSeconds: 300 }],
     ["Yo coach, can you start a 5 minute timer?", { action: "start", durationSeconds: 300 }],
     ["Could you fire up a ninety second timer, coach?", {
       action: "start",
@@ -111,16 +122,25 @@ test("parses timer starts, controls, and status", () => {
     ["Can we start me a one minute timer?", { action: "start", durationSeconds: 60 }],
     ["timer for 90 seconds", { action: "start", durationSeconds: 90 }],
     ["set timer for one minute", { action: "start", durationSeconds: 60 }],
+    ["give me a 45 second countdown", { action: "start", durationSeconds: 45 }],
+    ["three minute timer", { action: "start", durationSeconds: 180 }],
+    ["run a timer for 2 minutes", { action: "start", durationSeconds: 120 }],
     ["pause timer", { action: "pause" }],
     ["hold the timer", { action: "pause" }],
+    ["freeze the countdown", { action: "pause" }],
     ["resume timer", { action: "resume" }],
     ["continue the timer", { action: "resume" }],
+    ["unpause the stopwatch", { action: "resume" }],
     ["stop timer", { action: "stop" }],
     ["end the timer", { action: "stop" }],
     ["cancel timer", { action: "stop" }],
+    ["clear the countdown", { action: "stop" }],
     ["reset timer", { action: "reset" }],
     ["restart the timer", { action: "restart" }],
+    ["start the timer over", { action: "restart" }],
     ["how much time is left", { action: "status" }],
+    ["how long is remaining on the countdown", { action: "status" }],
+    ["time remaining", { action: "status" }],
     ["what's time left on the timer", { action: "status" }],
     ["timer status", { action: "status" }],
   ];
@@ -239,14 +259,28 @@ test("parses completion and reopen commands at explicit scopes", () => {
 test("parses scoped percentage and progress queries", () => {
   const cases: [string, Record<string, unknown>][] = [
     ["what's my shooting percentage for this set", { metric: "percentage", scope: "set" }],
+    ["what's my shooting percentage", { metric: "percentage", scope: "exercise" }],
+    ["shooting percentage", { metric: "percentage", scope: "exercise" }],
+    ["what am I shooting right now", { metric: "percentage", scope: "exercise" }],
+    ["how am I shooting so far", { metric: "percentage", scope: "exercise" }],
     ["percentage for this exercise", { metric: "percentage", scope: "exercise" }],
     ["shooting percent for my workout", { metric: "percentage", scope: "workout" }],
+    ["What's my shooting percentage for this work out?", {
+      metric: "percentage",
+      scope: "workout",
+    }],
+    ["What's my shooting percentage for the whole workout so far?", {
+      metric: "percentage",
+      scope: "workout",
+    }],
     ["what's my total shooting percentage", { metric: "percentage", scope: "workout" }],
     ["show me my overall shooting percent for this workout", {
       metric: "percentage",
       scope: "workout",
     }],
     ["what's my progress for this set", { metric: "progress", scope: "set" }],
+    ["what's my progress", { metric: "progress", scope: "exercise" }],
+    ["how far am I through this workout", { metric: "progress", scope: "workout" }],
     ["show me my progress on this drill", { metric: "progress", scope: "exercise" }],
     ["how is my progress in the workout", { metric: "progress", scope: "workout" }],
   ];
@@ -256,10 +290,17 @@ test("parses scoped percentage and progress queries", () => {
 test("parses targets, totals, and remaining-work queries", () => {
   const cases: [string, Record<string, unknown>][] = [
     ["how many shots left", { metric: "remaining", scope: "set" }],
+    ["shots remaining", { metric: "remaining", scope: "set" }],
+    ["how many more shots to go", { metric: "remaining", scope: "set" }],
     ["how many sets do I have left", { metric: "remaining", scope: "exercise" }],
+    ["sets to go", { metric: "remaining", scope: "exercise" }],
     ["how many exercises are left", { metric: "remaining", scope: "workout" }],
+    ["what's left in this workout", { metric: "remaining", scope: "workout" }],
     ["what's my target for this set", { metric: "target", scope: "set" }],
+    ["what's the goal", { metric: "target", scope: "set" }],
+    ["what am I aiming for", { metric: "target", scope: "set" }],
     ["how many makes do I have in this set", { metric: "totals", scope: "set" }],
+    ["makes so far", { metric: "totals", scope: "exercise" }],
     ["how many misses in this workout", { metric: "totals", scope: "workout" }],
   ];
   for (const [phrase, args] of cases) expectIntent(phrase, { kind: "progress", args });
@@ -314,7 +355,6 @@ test("rejects ambiguous, unsafe, impossible, and compound phrases", () => {
     "go to shooting",
     "I'm done",
     "finish this",
-    "what's my percentage",
     "save this thought",
     "note my elbow hurts",
     "remove this drill",
@@ -346,4 +386,17 @@ test("preserves the shotSpeech compatibility exports", () => {
   assert.deepEqual(parseSpokenShotCount("three swishes"), { made: true, count: 3 });
   assert.equal(parseSpokenShotCount("made 2 and missed 1"), null);
   assert.equal(parseShotSpeechCommand("pause timer"), null);
+  const first = mergeShotProgress(
+    { makes: 0, attempts: 0 },
+    { makes: 2, attempts: 2, mode: "increment" }
+  );
+  assert.deepEqual(first, { makes: 2, attempts: 2 });
+  assert.deepEqual(
+    mergeShotProgress(first, { makes: 2, attempts: 2, mode: "increment" }),
+    { makes: 4, attempts: 4 }
+  );
+  assert.deepEqual(
+    mergeShotProgress(first, { makes: 0, attempts: 2, mode: "increment" }),
+    { makes: 2, attempts: 4 }
+  );
 });

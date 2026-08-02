@@ -632,6 +632,257 @@ function findCategoryClip(
   );
 }
 
+type CoreShootingFamily = "form" | "midrange" | "three_point" | null;
+
+function normalizedDrillName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function coreShootingFamily(name: string): CoreShootingFamily {
+  const normalized = normalizedDrillName(name);
+  if (normalized === "form shooting") return "form";
+  if (/\b(mid range|midrange)\b/.test(normalized)) return "midrange";
+  if (/\b(?:3 (?:point|pt|spot|pointer)|three point)\b|\binto a 3\b/.test(normalized)) {
+    return "three_point";
+  }
+  return null;
+}
+
+function isEasyBallHandlingWarmup(name: string): boolean {
+  return /^(pound dribble|low pound dribble|right and left pounds|v dribble|half circle pound dribbles)$/.test(
+    normalizedDrillName(name)
+  );
+}
+
+export function isRequiredWorkoutCoreClip(
+  clip: Pick<PlanClip, "exercise_name" | "category">,
+  hasCourtAccess: boolean
+): boolean {
+  if (clip.category === "ball_handling") {
+    return isEasyBallHandlingWarmup(clip.exercise_name);
+  }
+  return (
+    hasCourtAccess &&
+    clip.category === "shooting" &&
+    coreShootingFamily(clip.exercise_name) !== null
+  );
+}
+
+function difficultyRank(difficulty: string | null): number {
+  const index = ["beginner", "intermediate", "advanced", "elite"].indexOf(
+    difficulty?.toLowerCase() ?? ""
+  );
+  return index < 0 ? 5 : index;
+}
+
+function orderedWorkoutExercises(exercises: SmartExercise[]): SmartExercise[] {
+  const categoryOrder: Record<string, number> = {
+    ball_handling: 0,
+    shooting: 1,
+    finishing: 2,
+    defense: 3,
+    conditioning: 4,
+    warmup: 5,
+    mobility: 6,
+    footwork: 7,
+    strength: 8,
+    basketball_iq: 9,
+  };
+  const drillOrder = (exercise: SmartExercise): number => {
+    if (exercise.category === "ball_handling") {
+      return isEasyBallHandlingWarmup(exercise.name) ? 0 : 1;
+    }
+    if (exercise.category === "shooting") {
+      const family = coreShootingFamily(exercise.name);
+      return family === "form"
+        ? 0
+        : family === "midrange"
+          ? 1
+          : family === "three_point"
+            ? 2
+            : 3;
+    }
+    return 0;
+  };
+  return [...exercises]
+    .sort(
+      (a, b) =>
+        (categoryOrder[a.category] ?? Number.MAX_SAFE_INTEGER) -
+          (categoryOrder[b.category] ?? Number.MAX_SAFE_INTEGER) ||
+        drillOrder(a) - drillOrder(b) ||
+        a.order_index - b.order_index
+    )
+    .map((exercise, index) => ({ ...exercise, order_index: index + 1 }));
+}
+
+function selectRequiredClip(
+  pool: PlanClip[],
+  predicate: (clip: PlanClip) => boolean,
+  context: BuildContext,
+  day: DayPickState,
+  key: string,
+  allowConsecutive = false
+): PlanClip | null {
+  let candidates = pool.filter((clip) => predicate(clip) && !day.usedInDay.has(clip.id));
+  if (!allowConsecutive) {
+    const nonConsecutive = candidates.filter((clip) => !day.previousDayClipIds.has(clip.id));
+    if (nonConsecutive.length) candidates = nonConsecutive;
+  }
+  const preferredDifficulty = context.preferredDifficulty?.toLowerCase() ?? "";
+  candidates.sort(
+    (a, b) =>
+      Number(b.difficulty_level?.toLowerCase() === preferredDifficulty) -
+        Number(a.difficulty_level?.toLowerCase() === preferredDifficulty) ||
+      difficultyRank(a.difficulty_level) - difficultyRank(b.difficulty_level) ||
+      stablePositiveHash(`${context.randomSeed}:${key}:${a.id}`) -
+        stablePositiveHash(`${context.randomSeed}:${key}:${b.id}`) ||
+      a.id.localeCompare(b.id)
+  );
+  return candidates[0] ?? null;
+}
+
+function replaceWithRequiredClip(
+  exercises: SmartExercise[],
+  clip: PlanClip,
+  context: BuildContext,
+  day: DayPickState,
+  block: BlockPickState,
+  perSetMinutes: number,
+  preserve: (exercise: SmartExercise) => boolean
+): SmartExercise[] {
+  if (exercises.some((exercise) => exercise.video_clip_id === clip.id)) return exercises;
+  const sameCategoryIndex = [...exercises]
+    .map((exercise, index) => ({ exercise, index }))
+    .reverse()
+    .find(({ exercise }) => exercise.category === clip.category && !preserve(exercise))?.index;
+  const flexibleIndex = [...exercises]
+    .map((exercise, index) => ({ exercise, index }))
+    .reverse()
+    .find(
+      ({ exercise }) =>
+        exercise.allocation_role !== "core_required" &&
+        exercise.allocation_role !== "warmup" &&
+        !preserve(exercise)
+    )?.index;
+  const replaceIndex = sameCategoryIndex ?? flexibleIndex ?? exercises.length - 1;
+  if (replaceIndex < 0) return exercises;
+  const result = [...exercises];
+  day.usedInDay.delete(result[replaceIndex].video_clip_id);
+  result[replaceIndex] = buildExercise(clip, "core_required", context, perSetMinutes);
+  commitClip(clip, day, block);
+  return result;
+}
+
+function enforceWorkoutCoreSequence(
+  exercises: SmartExercise[],
+  pool: PlanClip[],
+  context: BuildContext,
+  day: DayPickState,
+  block: BlockPickState,
+  perSetMinutes: number,
+  dayNumber: number
+): SmartExercise[] {
+  let result = [...exercises];
+  const easyHandling = selectRequiredClip(
+    pool,
+    (clip) => clip.category === "ball_handling" && isEasyBallHandlingWarmup(clip.exercise_name),
+    context,
+    day,
+    `${dayNumber}:handling-warmup`
+  );
+  if (
+    easyHandling &&
+    !result.some(
+      (exercise) =>
+        exercise.category === "ball_handling" && isEasyBallHandlingWarmup(exercise.name)
+    )
+  ) {
+    result = replaceWithRequiredClip(
+      result,
+      easyHandling,
+      context,
+      day,
+      block,
+      perSetMinutes,
+      (exercise) =>
+        exercise.category === "ball_handling" && isEasyBallHandlingWarmup(exercise.name)
+    );
+  }
+
+  if (context.hasCourtAccess && !context.history.painExcludedCategories.has("shooting")) {
+    const formShooting = selectRequiredClip(
+      pool,
+      (clip) => clip.category === "shooting" && coreShootingFamily(clip.exercise_name) === "form",
+      context,
+      day,
+      `${dayNumber}:form-shooting`,
+      true
+    );
+    if (
+      formShooting &&
+      !result.some((exercise) => coreShootingFamily(exercise.name) === "form")
+    ) {
+      result = replaceWithRequiredClip(
+        result,
+        formShooting,
+        context,
+        day,
+        block,
+        perSetMinutes,
+        (exercise) => {
+          const family = coreShootingFamily(exercise.name);
+          return family === "midrange" || family === "three_point";
+        }
+      );
+    }
+
+    const hasSupportingShooting = result.some((exercise) => {
+      const family = coreShootingFamily(exercise.name);
+      return family === "midrange" || family === "three_point";
+    });
+    if (!hasSupportingShooting) {
+      const preferredFamily: CoreShootingFamily =
+        dayNumber % 2 === 0 ? "three_point" : "midrange";
+      const supportingShooting =
+        selectRequiredClip(
+          pool,
+          (clip) =>
+            clip.category === "shooting" &&
+            coreShootingFamily(clip.exercise_name) === preferredFamily,
+          context,
+          day,
+          `${dayNumber}:${preferredFamily}`
+        ) ??
+        selectRequiredClip(
+          pool,
+          (clip) => {
+            const family = coreShootingFamily(clip.exercise_name);
+            return (
+              clip.category === "shooting" &&
+              (family === "midrange" || family === "three_point")
+            );
+          },
+          context,
+          day,
+          `${dayNumber}:supporting-shooting`
+        );
+      if (supportingShooting) {
+        result = replaceWithRequiredClip(
+          result,
+          supportingShooting,
+          context,
+          day,
+          block,
+          perSetMinutes,
+          (exercise) => coreShootingFamily(exercise.name) === "form"
+        );
+      }
+    }
+  }
+
+  return orderedWorkoutExercises(result);
+}
+
 function insertCategoryExercise(
   exercises: SmartExercise[],
   clip: PlanClip,
@@ -756,7 +1007,7 @@ function daySlotSpecs(context: BuildContext, dayOffset: number): SlotSpec[] {
 
   if (composition.shortSession) {
     return [
-      { role: "warmup", categories: ["warmup", "mobility"], count: 1 },
+      { role: "warmup", categories: ["ball_handling"], count: 1 },
       { role: "weakness", categories: weaknessCategories, count: 2 },
       { role: "strength", categories: adaptiveProfile.strengths, count: 1 },
       { role: "other", categories: otherCategories, count: 1 },
@@ -764,7 +1015,7 @@ function daySlotSpecs(context: BuildContext, dayOffset: number): SlotSpec[] {
   }
 
   return [
-    { role: "warmup", categories: ["warmup", "mobility"], count: composition.warmups },
+    { role: "warmup", categories: ["ball_handling"], count: composition.warmups },
     { role: "core_required", categories: ["shooting"], count: 2 },
     { role: "core_required", categories: ["ball_handling"], count: 2 },
     { role: "core_required", categories: ["finishing"], count: 2 },
@@ -920,8 +1171,17 @@ function buildDay(
   let exercises = ordered.map((item) => buildExercise(item.clip, item.role, context, perSetMinutes));
   exercises = ensureShooting(exercises, pool, context, day, block);
   exercises = injectMissingCoreDrills(exercises, pool, context, day, block, perSetMinutes);
+  exercises = enforceWorkoutCoreSequence(
+    exercises,
+    pool,
+    context,
+    day,
+    block,
+    perSetMinutes,
+    dayNumber
+  );
   exercises = ensureMeasurable(exercises, perSetMinutes);
-  exercises = exercises.map((exercise, index) => ({ ...exercise, order_index: index + 1 }));
+  exercises = orderedWorkoutExercises(exercises);
 
   const plannedMinutes = exercises.reduce(
     (total, exercise) => total + parseExerciseMinutes(exercise),
@@ -1133,9 +1393,15 @@ function enforcePlanRequirements(
       );
     }
 
-    exercises = exercises
-      .slice(0, context.composition.totalExercises)
-      .map((exercise, index) => ({ ...exercise, order_index: index + 1 }));
+    exercises = enforceWorkoutCoreSequence(
+      exercises.slice(0, context.composition.totalExercises),
+      pool,
+      context,
+      dayState,
+      block,
+      perSetMinutes,
+      day.day_number
+    );
 
     const plannedMinutes = exercises.reduce(
       (total, exercise) => total + parseExerciseMinutes(exercise),

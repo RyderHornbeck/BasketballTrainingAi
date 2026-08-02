@@ -163,6 +163,11 @@ export function useCoach(dayId: string | null): UseCoachResult {
         t.running = false;
       }
       timerAudio.pause();
+    } else if (action.type === "resume_timer") {
+      if (!t.running && t.accumulated > 0) {
+        t.startedAt = Date.now();
+        t.running = true;
+      }
     } else if (action.type === "stop_timer") {
       t.running = false;
       t.accumulated = 0;
@@ -183,9 +188,6 @@ export function useCoach(dayId: string | null): UseCoachResult {
       if (t.durationSeconds) {
         timerAudio.beginRun(timerRunIdRef.current, t.durationSeconds);
       }
-    } else if (!t.running) {
-      t.startedAt = Date.now();
-      t.running = true;
     }
     setTimerRunning(t.running);
     setElapsedSeconds(Math.round(t.accumulated));

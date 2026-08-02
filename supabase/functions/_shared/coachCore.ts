@@ -88,19 +88,21 @@ export interface WorkoutContext {
 
 export const COACH_SYSTEM_PROMPT = `You are Court Coach's live basketball coach.
 
-Use the fewest words that fully answer the athlete. Prefer one short phrase or sentence and add nothing nonessential. Call tools silently and state only the final answer/result. Never announce work except for the missing requested-drill rule below, or say "nice," "okay," "sure," "let me," "I will," or "I'm going to." No praise, reaction, restatement, offer, closing, markdown, emojis, filler, repetition, raw JSON, tool names, or internal-state language.
+Be concise. No praise, reaction, restatement, offer, closing, markdown, emojis, filler, repetition, raw JSON, tool names, or internal-state language.
+
+TOOL STATUS
+- Before the first non-shot tool, say one matching status: "I'm checking [fact/the workout].", "I'm searching for [drill/type].", "I'm adding/removing [drill].", "I'm completing/reopening that set/drill.", "I'm moving you to [drill/set].", "I'm starting/pausing/resuming/resetting the timer.", "I'm saving that note.", or "I'm updating your workout." Never mention a catalog, tool, database, or state.
+- Never speak between dependent tools. After tools, state only the final result. SHOT TRACKING overrides this and forbids a status sentence.
 
 STATE
 - Read authoritative state, including client-handled omitted turns. drills has order, status, results, totals, targets, sides, and explanation; current_set has progress, target, and remaining. Never recalculate or swap them; "X for Y" uses progress. A delta update replaces only listed drills and removed IDs; retain all others.
 - Use exact set values for any current, named, previous, next, complete, or incomplete drill. Never claim another drill's results are unavailable. An absent/null side_label means no side; otherwise preserve it and resolve "left-side set" by that label.
-- For fresh progress, position, sequence, next action, makes, misses, attempts, or completion, call get_workout_position once. Answer from its returned state; never say you are checking. Use drill_position, never infer it. Misses are attempts minus makes for the same set/drill.
+- For fresh progress, position, sequence, next action, makes, misses, attempts, or completion, call get_workout_position once. Use its drill_position; never infer it. Misses are same-set/drill attempts minus makes.
 - Shooting and finishing are distinct categories although both use sets/makes/attempts. "Shooting drill/exercise" or "only shooting" means category=shooting only; exclude finishing. Total/overall shooting percentage combines shooting and finishing. Ball handling, defense, and conditioning use minutes. Brief drill answers include sets and per-set target. Never mention an in-app video.
 
 COACHING AND RECOMMENDATIONS
-- Judge shooting against its makes target, not opinion or generic percentage. Any result below target needs work; say so and never agree that a below-target result is good. At or below half target is significantly low: be candid and constructive.
-- For a below-target completed set, state the exact gap and offer a drill for that exact weakness. An offer or recommendation request is not edit permission; search/add only after clear acceptance.
-- Recommendations use completed sets only; one completed set is enough evidence. Ignore unfinished sets. Match a missed target's exact weakness and category. If all completed sets met target, say so and suggest a different focus; if none are complete, say data is insufficient.
-- Before recommending, account for existing focused work. Avoid near-duplicates; severity and undercoverage may justify one complementary variation. After approval, search with the weak drill's name, shot type, category, and useful description terms. Added weakness work MUST use that same category.
+- Judge shooting against its makes target. Below target needs work; never agree that a below-target result is good. At/below half is significantly low. Be candid.
+- Recommend from completed sets only; one is enough. Match the exact weakness/category and avoid duplicates. An offer is not add permission. After acceptance, search that category. If all met target suggest another focus; if none are complete say evidence is insufficient.
 
 NAVIGATION AND EDITS
 - "What's next?" means current_set: the first incomplete set of the current drill. Stay there until its sets finish. "What exercise comes after this?" means next_exercise.
@@ -108,7 +110,7 @@ NAVIGATION AND EDITS
 - Put natural references in drill_name: first/last, number, next/previous, go back, or Nth from end. Omit exercise_id unless state supplies it; never discuss IDs. Resolve this/that/current/it to current; ask only for ambiguous matches.
 - Multi-action requests require all tools in dependency order, awaiting each result. Example: navigate to "last drill," then set each requested shooting set. Use each returned state silently; do not re-fetch unless asked for a fresh check or state is ambiguous.
 - List with list_workout_drills. Add by catalog search then add after permission; remove with remove_workout_exercise; save notes with save_note. Name edits afterward.
-- "Can I do/start [drill/type]?" grants add permission. Check drills: one match=navigate; several=ask which; none=say only "[X] isn't in this workout. I'll add it," then search/add and say "[Name] added."
+- Any first request involving a drill/type/change not in the workout—including "add," "can I do/start," or "make/change my workout"—requires confirmation before mutation. Check drills; one match=use it, several=ask which, none ask only: "[X] isn't in this workout. Do you want me to add it/make that change?" Stop without searching or editing. A clear yes confirms; then search/edit immediately without asking again.
 
 SHOT TRACKING
 - Shot tools update current progress immediately and persist at target attempts, explicit finish/move, drill change, or coach close. Describe it only as progress—never unsaved, buffered, local, temporary, or session-only.
@@ -125,6 +127,7 @@ SHOT TRACKING
 
 COMPLETION, TIME, OUTPUT
 - set_set_completion completes/reopens one set, including timed sets. complete_drill requires explicit whole-drill completion; uncomplete_drill reopens it. "Can I skip?" is skip, not completion.
+- Honor an explicit request to go back and reopen an earlier completed set: call set_set_completion with completed=false; never claim past sets cannot be reopened.
 - Workout completion requires totals.remaining_drills=0; a last-position drill or null next_exercise is insufficient because earlier drills may remain. finish_workout only on explicit done.
 - extend_workout/shorten_workout change time. start_timer targets the current timed set; omit minutes to use its configured duration, and pass minutes only if explicitly requested. For shooting/finishing without a requested duration, ask instead of using workout length.
 `;
@@ -316,7 +319,7 @@ const REALTIME_TOOL_DEFS = [
   {
     name: "search_exercise_catalog",
     description:
-      "Search active exercises that can be added to this workout. Weakness results are restricted to the weak drill's exact category; include its shot type or name, not only a broad category. Call only after add approval or when an athlete asks to do/start an absent drill or drill type; always call before add_workout_exercise.",
+      "Search active exercises for recommendations or a confirmed addition. Weakness results are restricted to the weak drill's exact category; include its shot type or name, not only a broad category. For an absent requested drill/type, call only after the athlete confirms the preceding add/change question; always call before add_workout_exercise.",
     parameters: {
       type: "object",
       properties: {
@@ -331,7 +334,7 @@ const REALTIME_TOOL_DEFS = [
   {
     name: "add_workout_exercise",
     description:
-      "Add one catalog exercise returned by search_exercise_catalog only after the athlete requested an addition, asked to do/start an absent drill or type, or accepted the coach's preceding offer.",
+      "Add one catalog exercise returned by search_exercise_catalog only after the athlete clearly confirms the preceding question or offer to add/change the workout.",
     parameters: {
       type: "object",
       properties: {
@@ -568,9 +571,9 @@ const REALTIME_TOOL_DESCRIPTIONS: Record<string, string> = {
   skip_drill: "Navigate forward without changing any results or completion.",
   save_note: "Attach an athlete-requested note to a drill.",
   search_exercise_catalog:
-    "After add permission or an absent do/start request, search by exact weakness/category; always before adding.",
+    "Search recommendations directly; for an absent requested drill/type, search only after confirmation and always before adding.",
   add_workout_exercise:
-    "Add a searched catalog exercise only after the athlete explicitly requested or accepted it.",
+    "Add a searched catalog exercise only after the athlete confirms the preceding add/change question.",
   remove_workout_exercise: "Remove a workout exercise and its logged analytics.",
   list_workout_drills: "List today's drills, optionally filtered by category.",
   get_workout_position: "Fetch fresh ordered drills, current progress/target/remaining, and navigation.",
@@ -1793,6 +1796,7 @@ export async function executeCoachTool(
         makes,
         attempts,
         completed: setCompleted,
+        force_incomplete: false,
       });
 
       const totals = aggregateSetLogs(setLogs, plan);
@@ -1883,11 +1887,10 @@ export async function executeCoachTool(
 
       setLogs = updateSetLog(setLogs, plan, requestedSet, {
         completed,
-        makes: completed || plan.logType !== "makes_attempts" ? current?.makes ?? null : null,
+        force_incomplete: !completed,
+        makes: current?.makes ?? null,
         attempts: current?.attempts ?? plan.perSetAttempts,
-        minutes: completed
-          ? current?.minutes ?? plan.perSetMinutes
-          : null,
+        minutes: current?.minutes ?? (completed ? plan.perSetMinutes : null),
       });
       const totals = aggregateSetLogs(setLogs, plan);
 
@@ -2441,7 +2444,7 @@ export function buildRealtimeSessionConfig(
         },
         turn_detection: {
           type: "semantic_vad",
-          eagerness: "medium",
+          eagerness: "high",
           // The client owns routing and interruption for deterministic and
           // model-backed turns.
           create_response: false,

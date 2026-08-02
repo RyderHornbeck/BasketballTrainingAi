@@ -29,6 +29,7 @@ import {
 import {
   buildSmartPlan,
   extractUserNotes,
+  isRequiredWorkoutCoreClip,
   repairSmartPlan,
   SmartExercise,
   SmartPlan,
@@ -49,7 +50,13 @@ const DIFFICULTY_ALLOWANCE: Record<string, string[]> = {
 };
 
 const GOAL_CATEGORY_MAP: Record<string, string[]> = {
-  "make the team": ["shooting", "ball_handling", "finishing", "defense", "conditioning"],
+  "make the team": [
+    "shooting",
+    "ball_handling",
+    "finishing",
+    "defense",
+    "conditioning",
+  ],
   "improve shooting": ["shooting"],
   "improve handles": ["ball_handling"],
   "improve finishing": ["finishing"],
@@ -142,7 +149,7 @@ function jsonResponse(body: unknown, status = 200) {
 function scoreClip(
   clip: VideoClip,
   answers: OnboardingAnswers,
-  adaptiveProfile?: AdaptiveProfile
+  adaptiveProfile?: AdaptiveProfile,
 ): number {
   let score = 0;
 
@@ -174,20 +181,32 @@ function scoreClip(
   }
 
   if (!answers.has_court_access) {
-    if (["ball_handling", "footwork", "strength", "mobility", "conditioning"].includes(clip.category)) {
+    if (
+      ["ball_handling", "footwork", "strength", "mobility", "conditioning"]
+        .includes(clip.category)
+    ) {
       score += 1;
     }
     if (clip.category === "shooting") score -= 1;
   }
 
-  if (adaptiveProfile?.weaknesses.some((category) => category === clip.category)) score += 5;
-  if (adaptiveProfile?.strengths.some((category) => category === clip.category)) score += 3;
+  if (
+    adaptiveProfile?.weaknesses.some((category) => category === clip.category)
+  ) score += 5;
+  if (
+    adaptiveProfile?.strengths.some((category) => category === clip.category)
+  ) score += 3;
 
   return score;
 }
 
-function clipEquipmentCompatible(clip: VideoClip, answers: OnboardingAnswers): boolean {
-  const available = new Set((answers.equipment ?? []).map((item) => item.toLowerCase()));
+function clipEquipmentCompatible(
+  clip: VideoClip,
+  answers: OnboardingAnswers,
+): boolean {
+  const available = new Set(
+    (answers.equipment ?? []).map((item) => item.toLowerCase()),
+  );
   const requirements = (clip.equipment ?? []).map((item) => item.toLowerCase());
   for (const requirement of requirements) {
     if (
@@ -199,7 +218,9 @@ function clipEquipmentCompatible(clip: VideoClip, answers: OnboardingAnswers): b
       return false;
     }
     if (requirement.includes("cone") && !available.has("cones")) return false;
-    if (requirement.includes("band") && !available.has("resistance bands")) return false;
+    if (requirement.includes("band") && !available.has("resistance bands")) {
+      return false;
+    }
     if (
       (requirement.includes("weight") || requirement.includes("dumbbell")) &&
       !available.has("weights")
@@ -230,7 +251,7 @@ function dedupeClips(clips: VideoClip[]): VideoClip[] {
 function buildClipPool(
   clips: VideoClip[],
   answers: OnboardingAnswers,
-  adaptiveProfile: AdaptiveProfile
+  adaptiveProfile: AdaptiveProfile,
 ): VideoClip[] {
   const level = (answers.overall_skill_level ?? "beginner").toLowerCase();
   const allowedDifficulties = DIFFICULTY_ALLOWANCE[level] ?? DIFFICULTY_ORDER;
@@ -238,16 +259,31 @@ function buildClipPool(
   const difficultyOk = (c: VideoClip) =>
     !c.difficulty_level || allowedDifficulties.includes(c.difficulty_level);
 
-  const strict = clips.filter((c) => difficultyOk(c) && clipEquipmentCompatible(c, answers));
+  const strict = clips.filter((c) =>
+    difficultyOk(c) && clipEquipmentCompatible(c, answers)
+  );
   // Never let equipment filtering starve the pool.
   let pool = strict.length >= 20 ? strict : clips.filter(difficultyOk);
+  // Core warm-up/progression drills are structural requirements, so retain
+  // them even when their catalog difficulty differs from the athlete's tier.
+  pool = dedupeClips([
+    ...pool,
+    ...clips.filter((clip) =>
+      isRequiredWorkoutCoreClip(clip, Boolean(answers.has_court_access))
+    ),
+  ]);
 
   // Court access must always include hoop work, even when skill tier filters
   // would otherwise remove every shooting clip (e.g. elite users vs beginner drills).
-  if (answers.has_court_access && !pool.some((clip) => clip.category === "shooting")) {
+  if (
+    answers.has_court_access &&
+    !pool.some((clip) => clip.category === "shooting")
+  ) {
     pool = dedupeClips([
       ...pool,
-      ...clips.filter((clip) => clip.category === "shooting" && difficultyOk(clip)),
+      ...clips.filter((clip) =>
+        clip.category === "shooting" && difficultyOk(clip)
+      ),
     ]);
   }
 
@@ -256,15 +292,18 @@ function buildClipPool(
     if (!pool.some((clip) => clip.category === category)) {
       pool = dedupeClips([
         ...pool,
-        ...clips.filter((clip) => clip.category === category && difficultyOk(clip)),
+        ...clips.filter((clip) =>
+          clip.category === category && difficultyOk(clip)
+        ),
       ]);
     }
   }
 
   return [...pool].sort(
     (a, b) =>
-      scoreClip(b, answers, adaptiveProfile) - scoreClip(a, answers, adaptiveProfile) ||
-      a.id.localeCompare(b.id)
+      scoreClip(b, answers, adaptiveProfile) -
+        scoreClip(a, answers, adaptiveProfile) ||
+      a.id.localeCompare(b.id),
   );
 }
 
@@ -282,17 +321,21 @@ interface UserNoteEntry {
 function collectRecentUserNotes(
   samples: PerformanceSample[],
   startDayNumber: number,
-  clipNameById: Map<string, string>
+  clipNameById: Map<string, string>,
 ): UserNoteEntry[] {
   const previousBlockStart = Math.max(1, startDayNumber - 5);
   return samples.flatMap((sample) => {
-    if (sample.dayNumber < previousBlockStart || sample.dayNumber >= startDayNumber) return [];
+    if (
+      sample.dayNumber < previousBlockStart ||
+      sample.dayNumber >= startDayNumber
+    ) return [];
     const note = extractUserNotes(sample.notes);
     if (!note) return [];
     return [{
       dayNumber: sample.dayNumber,
       exerciseName:
-        (sample.videoClipId ? clipNameById.get(sample.videoClipId) : null) ?? sample.category,
+        (sample.videoClipId ? clipNameById.get(sample.videoClipId) : null) ??
+          sample.category,
       category: sample.category,
       note,
     }];
@@ -336,17 +379,21 @@ function buildTweakUserPrompt(
   plan: SmartPlan,
   notes: UserNoteEntry[],
   alternatives: VideoClip[],
-  clipById: Map<string, VideoClip>
+  clipById: Map<string, VideoClip>,
 ): string {
   const hasVideoDemo = (clip: VideoClip | undefined) =>
-    Boolean(clip?.youtube_video_id && !isCatalogOnlyVideoId(clip.youtube_video_id));
+    Boolean(
+      clip?.youtube_video_id && !isCatalogOnlyVideoId(clip.youtube_video_id),
+    );
 
   return JSON.stringify({
     user_notes: notes,
     plan_block: plan.days.map((day) => ({
       day_number: day.day_number,
       exercises: day.exercises.map((exercise) => {
-        const clip = exercise.video_clip_id ? clipById.get(exercise.video_clip_id) : undefined;
+        const clip = exercise.video_clip_id
+          ? clipById.get(exercise.video_clip_id)
+          : undefined;
         return {
           order_index: exercise.order_index,
           name: exercise.name,
@@ -371,8 +418,13 @@ function buildTweakUserPrompt(
   });
 }
 
-async function callOpenAI(systemPrompt: string, userPrompt: string): Promise<unknown> {
-  if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY secret is not configured.");
+async function callOpenAI(
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<unknown> {
+  if (!OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY secret is not configured.");
+  }
 
   const timeoutMs = 90_000;
   const controller = new AbortController();
@@ -380,7 +432,9 @@ async function callOpenAI(systemPrompt: string, userPrompt: string): Promise<unk
 
   let res: Response;
   try {
-    console.log(`[generate-plan] Calling OpenAI model=${OPENAI_MODEL}, prompt length=${userPrompt.length}`);
+    console.log(
+      `[generate-plan] Calling OpenAI model=${OPENAI_MODEL}, prompt length=${userPrompt.length}`,
+    );
     res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -401,9 +455,17 @@ async function callOpenAI(systemPrompt: string, userPrompt: string): Promise<unk
     });
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      throw new Error(`OpenAI request timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+      throw new Error(
+        `OpenAI request timed out after ${
+          Math.round(timeoutMs / 1000)
+        } seconds.`,
+      );
     }
-    throw new Error(`OpenAI request failed to send: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(
+      `OpenAI request failed to send: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
   } finally {
     clearTimeout(timeout);
   }
@@ -412,7 +474,9 @@ async function callOpenAI(systemPrompt: string, userPrompt: string): Promise<unk
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`OpenAI request failed (${res.status}): ${text.slice(0, 500)}`);
+    throw new Error(
+      `OpenAI request failed (${res.status}): ${text.slice(0, 500)}`,
+    );
   }
 
   const data = await res.json();
@@ -435,29 +499,36 @@ async function callOpenAI(systemPrompt: string, userPrompt: string): Promise<unk
 function applyTweaks(
   plan: SmartPlan,
   rawTweaks: unknown,
-  clipById: Map<string, VideoClip>
+  clipById: Map<string, VideoClip>,
 ): { plan: SmartPlan; applied: number } {
   const tweaks = Array.isArray((rawTweaks as Record<string, unknown>)?.tweaks)
     ? ((rawTweaks as Record<string, unknown>).tweaks as PlanTweak[])
     : [];
   let applied = 0;
 
-  const days = plan.days.map((day) => ({ ...day, exercises: [...day.exercises] }));
+  const days = plan.days.map((day) => ({
+    ...day,
+    exercises: [...day.exercises],
+  }));
 
   for (const tweak of tweaks.slice(0, 5)) {
     const day = days.find((d) => d.day_number === tweak.day_number);
     if (!day) continue;
     const exerciseIndex = day.exercises.findIndex(
-      (exercise) => exercise.order_index === tweak.order_index
+      (exercise) => exercise.order_index === tweak.order_index,
     );
     if (exerciseIndex < 0) continue;
     const exercise = day.exercises[exerciseIndex];
 
     if (tweak.action === "swap_drill") {
-      const clip = tweak.video_clip_id ? clipById.get(tweak.video_clip_id) : null;
+      const clip = tweak.video_clip_id
+        ? clipById.get(tweak.video_clip_id)
+        : null;
       if (!clip) continue;
       if (clip.category !== exercise.category) continue;
-      if (day.exercises.some((item) => item.video_clip_id === clip.id)) continue;
+      if (day.exercises.some((item) => item.video_clip_id === clip.id)) {
+        continue;
+      }
       let setCount = Math.max(1, Number.parseInt(exercise.sets, 10) || 1);
       if (clip.category === "ball_handling") setCount = Math.max(2, setCount);
       if (clip.requires_both_sides) setCount = setCount <= 2 ? 2 : 4;
@@ -465,12 +536,14 @@ function applyTweaks(
         ...exercise,
         video_clip_id: clip.id,
         name: clip.exercise_name,
-        instructions: clip.description ?? clip.coaching_notes ?? exercise.instructions,
+        instructions: clip.description ?? clip.coaching_notes ??
+          exercise.instructions,
         sets: String(setCount),
         set_side_labels: clip.requires_both_sides
-          ? Array.from({ length: setCount }, (_, index) =>
-              index % 2 === 0 ? "Right side" : "Left side"
-            )
+          ? Array.from(
+            { length: setCount },
+            (_, index) => index % 2 === 0 ? "Right side" : "Left side",
+          )
           : null,
       };
       applied++;
@@ -488,9 +561,10 @@ function applyTweaks(
         ...exercise,
         sets: String(sets),
         set_side_labels: clip.requires_both_sides
-          ? Array.from({ length: sets }, (_, index) =>
-              index % 2 === 0 ? "Right side" : "Left side"
-            )
+          ? Array.from(
+            { length: sets },
+            (_, index) => index % 2 === 0 ? "Right side" : "Left side",
+          )
           : null,
       };
       applied++;
@@ -500,11 +574,21 @@ function applyTweaks(
     if (tweak.action === "adjust_targets") {
       if (exercise.log_type !== "makes_attempts") continue;
       const proposedMakes = Number(tweak.target_makes);
-      const proposedAttempts = Number(tweak.target_attempts ?? exercise.target_attempts);
+      const proposedAttempts = Number(
+        tweak.target_attempts ?? exercise.target_attempts,
+      );
       const minimumAttempts = exercise.category === "shooting" ? 20 : 15;
-      const attempts = Math.min(60, Math.max(minimumAttempts, Math.round(proposedAttempts)));
-      const makes = Math.max(Math.round(proposedMakes), Math.ceil(attempts * 0.5));
-      if (!Number.isFinite(proposedMakes) || !Number.isFinite(proposedAttempts)) continue;
+      const attempts = Math.min(
+        60,
+        Math.max(minimumAttempts, Math.round(proposedAttempts)),
+      );
+      const makes = Math.max(
+        Math.round(proposedMakes),
+        Math.ceil(attempts * 0.5),
+      );
+      if (
+        !Number.isFinite(proposedMakes) || !Number.isFinite(proposedAttempts)
+      ) continue;
       if (makes < 1 || attempts < makes) continue;
       day.exercises[exerciseIndex] = {
         ...exercise,
@@ -522,37 +606,52 @@ async function maybeApplyGptTweaks(
   plan: SmartPlan,
   context: GenerationContext,
   pool: VideoClip[],
-  clipById: Map<string, VideoClip>
+  clipById: Map<string, VideoClip>,
 ): Promise<SmartPlan> {
   if (context.generationType !== "extend" || !OPENAI_API_KEY) return plan;
 
-  const clipNameById = new Map([...clipById].map(([id, clip]) => [id, clip.exercise_name]));
-  const notes = collectRecentUserNotes(context.samples, context.startDayNumber, clipNameById);
+  const clipNameById = new Map(
+    [...clipById].map(([id, clip]) => [id, clip.exercise_name]),
+  );
+  const notes = collectRecentUserNotes(
+    context.samples,
+    context.startDayNumber,
+    clipNameById,
+  );
   if (!notes.length) {
-    console.log("[generate-plan] No user notes in previous block; skipping GPT tweak pass.");
+    console.log(
+      "[generate-plan] No user notes in previous block; skipping GPT tweak pass.",
+    );
     return plan;
   }
 
   // Offer same-category alternatives for every noted category (small list).
   const notedCategories = new Set(notes.map((note) => note.category));
   const usedIds = new Set(
-    plan.days.flatMap((day) => day.exercises.map((exercise) => exercise.video_clip_id))
+    plan.days.flatMap((day) =>
+      day.exercises.map((exercise) => exercise.video_clip_id)
+    ),
   );
   const alternatives = pool
-    .filter((clip) => notedCategories.has(clip.category) && !usedIds.has(clip.id))
+    .filter((clip) =>
+      notedCategories.has(clip.category) && !usedIds.has(clip.id)
+    )
     .slice(0, 40);
 
   try {
     const raw = await callOpenAI(
       buildTweakSystemPrompt(),
-      buildTweakUserPrompt(plan, notes, alternatives, clipById)
+      buildTweakUserPrompt(plan, notes, alternatives, clipById),
     );
     const { plan: tweaked, applied } = applyTweaks(plan, raw, clipById);
     console.log(`[generate-plan] GPT tweak pass applied ${applied} tweak(s).`);
     return tweaked;
   } catch (err) {
     // Tweaks are best-effort; the algorithm plan is already valid.
-    console.error("[generate-plan] GPT tweak pass failed, using algorithm plan:", err);
+    console.error(
+      "[generate-plan] GPT tweak pass failed, using algorithm plan:",
+      err,
+    );
     return plan;
   }
 }
@@ -564,11 +663,12 @@ async function maybeApplyGptTweaks(
 function computeScheduledDate(
   dayIndexZeroBased: number,
   daysPerWeek: number,
-  planStartDate?: string
+  planStartDate?: string,
 ): string {
   const week = Math.floor(dayIndexZeroBased / daysPerWeek);
   const dayInWeek = dayIndexZeroBased % daysPerWeek;
-  const offsetDays = week * 7 + Math.round((dayInWeek * 7) / Math.max(daysPerWeek, 1));
+  const offsetDays = week * 7 +
+    Math.round((dayInWeek * 7) / Math.max(daysPerWeek, 1));
   const date = planStartDate
     ? new Date(`${planStartDate.slice(0, 10)}T12:00:00Z`)
     : new Date();
@@ -578,7 +678,7 @@ function computeScheduledDate(
 
 async function loadPerformanceSamples(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
 ): Promise<PerformanceSample[]> {
   const { data: completedDays, error: daysError } = await supabase
     .from("workout_days")
@@ -587,19 +687,25 @@ async function loadPerformanceSamples(
     .eq("completed", true)
     .order("day_number", { ascending: false })
     .limit(50);
-  if (daysError) throw new Error(`Failed to load completed workouts: ${daysError.message}`);
+  if (daysError) {
+    throw new Error(`Failed to load completed workouts: ${daysError.message}`);
+  }
   if (!completedDays?.length) return [];
 
   const dayNumberById = new Map(
-    completedDays.map((day) => [day.id as string, Number(day.day_number ?? 0)])
+    completedDays.map((day) => [day.id as string, Number(day.day_number ?? 0)]),
   );
   const { data: exercises, error: exercisesError } = await supabase
     .from("workout_exercises")
     .select(
-      "id, day_id, category, video_clip_id, sets, duration, target_makes, target_attempts, log_type, exercise_video_clips(difficulty_level), exercise_logs(completed, makes, attempts, minutes_completed, difficulty, notes)"
+      "id, day_id, category, video_clip_id, sets, duration, target_makes, target_attempts, log_type, exercise_video_clips(difficulty_level), exercise_logs(completed, makes, attempts, minutes_completed, difficulty, notes)",
     )
     .in("day_id", [...dayNumberById.keys()]);
-  if (exercisesError) throw new Error(`Failed to load workout performance: ${exercisesError.message}`);
+  if (exercisesError) {
+    throw new Error(
+      `Failed to load workout performance: ${exercisesError.message}`,
+    );
+  }
 
   return (exercises ?? []).flatMap((exercise: Record<string, unknown>) => {
     const rawLogs = exercise.exercise_logs;
@@ -608,28 +714,38 @@ async function loadPerformanceSamples(
     const clip = Array.isArray(rawClip) ? rawClip[0] : rawClip;
     // Keep exercises without logs as skipped entries so the algorithm can
     // carry their skill work into the next block.
-    const entry = (log && typeof log === "object" ? log : {}) as Record<string, unknown>;
+    const entry = (log && typeof log === "object" ? log : {}) as Record<
+      string,
+      unknown
+    >;
     return [{
       dayNumber: dayNumberById.get(String(exercise.day_id)) ?? 0,
       category: String(exercise.category ?? ""),
-      videoClipId: exercise.video_clip_id ? String(exercise.video_clip_id) : null,
+      videoClipId: exercise.video_clip_id
+        ? String(exercise.video_clip_id)
+        : null,
       sets: exercise.sets ? String(exercise.sets) : null,
       duration: exercise.duration ? String(exercise.duration) : null,
-      targetMakes: typeof exercise.target_makes === "number" ? exercise.target_makes : null,
-      targetAttempts:
-        typeof exercise.target_attempts === "number" ? exercise.target_attempts : null,
+      targetMakes: typeof exercise.target_makes === "number"
+        ? exercise.target_makes
+        : null,
+      targetAttempts: typeof exercise.target_attempts === "number"
+        ? exercise.target_attempts
+        : null,
       logType: exercise.log_type ? String(exercise.log_type) : null,
       completed: entry.completed === true,
       makes: typeof entry.makes === "number" ? entry.makes : null,
       attempts: typeof entry.attempts === "number" ? entry.attempts : null,
-      minutesCompleted:
-        typeof entry.minutes_completed === "number" ? entry.minutes_completed : null,
-      difficulty: typeof entry.difficulty === "number" ? entry.difficulty : null,
-      prescribedDifficulty:
-        clip && typeof clip === "object" &&
-        typeof (clip as Record<string, unknown>).difficulty_level === "string"
-          ? String((clip as Record<string, unknown>).difficulty_level)
-          : null,
+      minutesCompleted: typeof entry.minutes_completed === "number"
+        ? entry.minutes_completed
+        : null,
+      difficulty: typeof entry.difficulty === "number"
+        ? entry.difficulty
+        : null,
+      prescribedDifficulty: clip && typeof clip === "object" &&
+          typeof (clip as Record<string, unknown>).difficulty_level === "string"
+        ? String((clip as Record<string, unknown>).difficulty_level)
+        : null,
       notes: typeof entry.notes === "string" ? entry.notes : null,
     }];
   });
@@ -641,7 +757,7 @@ async function buildGenerationContext(
   answers: OnboardingAnswers,
   generationType: "initial" | "extend",
   targetPlanId: string | null,
-  requestedBlockIndex: number
+  requestedBlockIndex: number,
 ): Promise<GenerationContext> {
   const samples = await loadPerformanceSamples(supabase, userId);
   const adaptiveProfile = buildAdaptiveProfile(answers, samples);
@@ -679,7 +795,9 @@ async function buildGenerationContext(
   const maxDayNumber = Number(latestDay?.day_number ?? 0);
   const expectedBlockIndex = Number(latestDay?.block_index ?? 0) + 1;
   if (requestedBlockIndex !== expectedBlockIndex) {
-    throw new Error(`Expected block ${expectedBlockIndex}, received ${requestedBlockIndex}.`);
+    throw new Error(
+      `Expected block ${expectedBlockIndex}, received ${requestedBlockIndex}.`,
+    );
   }
 
   return {
@@ -693,7 +811,11 @@ async function buildGenerationContext(
   };
 }
 
-async function markRequestFailed(supabase: SupabaseClient, requestId: string, message: string) {
+async function markRequestFailed(
+  supabase: SupabaseClient,
+  requestId: string,
+  message: string,
+) {
   const { data: request } = await supabase
     .from("plan_generation_requests")
     .select("generation_type, target_plan_id, block_index")
@@ -721,7 +843,7 @@ function sanityCheckPlan(
   plan: SmartPlan,
   clipById: Map<string, VideoClip>,
   context: GenerationContext,
-  answers: OnboardingAnswers
+  answers: OnboardingAnswers,
 ): string | null {
   if (plan.days.length !== 5) return "Plan must contain exactly five days.";
   const level = (answers.overall_skill_level ?? "beginner").toLowerCase();
@@ -757,11 +879,14 @@ function sanityCheckPlan(
       }
       if (
         exercise.set_side_labels &&
-        (setCount !== exercise.set_side_labels.length || ![2, 4].includes(setCount))
+        (setCount !== exercise.set_side_labels.length ||
+          ![2, 4].includes(setCount))
       ) {
         return `"${exercise.name}" must use two or four balanced side sets.`;
       }
-      if (exercise.category === "shooting" || exercise.category === "finishing") {
+      if (
+        exercise.category === "shooting" || exercise.category === "finishing"
+      ) {
         const minimumAttempts = exercise.category === "shooting" ? 20 : 15;
         if (
           exercise.target_attempts == null ||
@@ -774,14 +899,17 @@ function sanityCheckPlan(
       }
     }
     if (answers.has_court_access) {
-      const shootingCount = day.exercises.filter((exercise) => exercise.category === "shooting").length;
+      const shootingCount = day.exercises.filter((exercise) =>
+        exercise.category === "shooting"
+      ).length;
       if (shootingCount < 2) {
         return `Day ${day.day_number} must include at least two shooting drills when court access is available.`;
       }
     }
     for (const exercise of day.exercises) {
       if (
-        (exercise.category === "shooting" || exercise.category === "finishing") &&
+        (exercise.category === "shooting" ||
+          exercise.category === "finishing") &&
         (exercise.target_attempts == null || exercise.target_attempts > 60)
       ) {
         return `"${exercise.name}" must have 60 or fewer attempts per set.`;
@@ -793,7 +921,9 @@ function sanityCheckPlan(
 
 // Supabase-specific global available in the Edge Function (Deno Deploy)
 // runtime. Declared here since it isn't part of the standard Deno types.
-declare const EdgeRuntime: { waitUntil: (promise: Promise<unknown>) => void } | undefined;
+declare const EdgeRuntime:
+  | { waitUntil: (promise: Promise<unknown>) => void }
+  | undefined;
 
 /**
  * Does the slow work: builds the block with the deterministic algorithm,
@@ -806,7 +936,7 @@ async function runGeneration(
   requestId: string,
   userId: string,
   answers: OnboardingAnswers,
-  context: GenerationContext
+  context: GenerationContext,
 ): Promise<void> {
   try {
     // Onboarding always assumes a standard court and one basketball.
@@ -818,20 +948,28 @@ async function runGeneration(
     const { data: allClips, error: clipsError } = await supabase
       .from("exercise_video_clips")
       .select(
-        "id, exercise_name, category, difficulty_level, description, coaching_notes, requires_both_sides, source_section, equipment, weaknesses, positions, skill_levels, youtube_video_id"
+        "id, exercise_name, category, difficulty_level, description, coaching_notes, requires_both_sides, source_section, equipment, weaknesses, positions, skill_levels, youtube_video_id",
       )
       .eq("active", true);
 
     if (clipsError || !allClips || allClips.length === 0) {
-      await markRequestFailed(supabase, requestId, "No active exercise video clips available.");
+      await markRequestFailed(
+        supabase,
+        requestId,
+        "No active exercise video clips available.",
+      );
       return;
     }
 
-    const pool = buildClipPool(allClips as VideoClip[], trainingAnswers, context.adaptiveProfile).map(
+    const pool = buildClipPool(
+      allClips as VideoClip[],
+      trainingAnswers,
+      context.adaptiveProfile,
+    ).map(
       (clip) => ({
         ...clip,
         requires_both_sides: clip.requires_both_sides ?? false,
-      })
+      }),
     );
     const allClipPool = (allClips as VideoClip[]).map((clip) => ({
       ...clip,
@@ -875,9 +1013,18 @@ async function runGeneration(
     // pool. The full catalog remains available above solely for validation.
     plan = repairSmartPlan(plan, pool, planInput);
 
-    const sanityError = sanityCheckPlan(plan, clipById, context, trainingAnswers);
+    const sanityError = sanityCheckPlan(
+      plan,
+      clipById,
+      context,
+      trainingAnswers,
+    );
     if (sanityError) {
-      await markRequestFailed(supabase, requestId, `Plan generation failed: ${sanityError}`);
+      await markRequestFailed(
+        supabase,
+        requestId,
+        `Plan generation failed: ${sanityError}`,
+      );
       return;
     }
 
@@ -892,7 +1039,11 @@ async function runGeneration(
         .eq("active", true)
         .single();
       if (error || !data) {
-        await markRequestFailed(supabase, requestId, "The active plan could not be extended.");
+        await markRequestFailed(
+          supabase,
+          requestId,
+          "The active plan could not be extended.",
+        );
         return;
       }
       planRow = data;
@@ -916,18 +1067,28 @@ async function runGeneration(
         .select()
         .single();
       if (error || !data) {
-        await markRequestFailed(supabase, requestId, `Failed to insert workout plan: ${error?.message}`);
+        await markRequestFailed(
+          supabase,
+          requestId,
+          `Failed to insert workout plan: ${error?.message}`,
+        );
         return;
       }
       planRow = data;
     }
 
     if (!planRow) {
-      await markRequestFailed(supabase, requestId, "Failed to resolve workout plan.");
+      await markRequestFailed(
+        supabase,
+        requestId,
+        "Failed to resolve workout plan.",
+      );
       return;
     }
     const planId = String(planRow.id);
-    const sortedDays = [...plan.days].sort((a, b) => a.day_number - b.day_number);
+    const sortedDays = [...plan.days].sort((a, b) =>
+      a.day_number - b.day_number
+    );
     const daysPerWeek = answers.days_per_week || plan.days_per_week || 3;
 
     for (const day of sortedDays) {
@@ -955,7 +1116,11 @@ async function runGeneration(
         .single();
 
       if (dayInsertError || !dayRow) {
-        await markRequestFailed(supabase, requestId, `Failed to insert workout day: ${dayInsertError?.message}`);
+        await markRequestFailed(
+          supabase,
+          requestId,
+          `Failed to insert workout day: ${dayInsertError?.message}`,
+        );
         return;
       }
 
@@ -976,9 +1141,15 @@ async function runGeneration(
         set_side_labels: ex.set_side_labels ?? null,
       }));
 
-      const { error: exercisesInsertError } = await supabase.from("workout_exercises").insert(exerciseRows);
+      const { error: exercisesInsertError } = await supabase.from(
+        "workout_exercises",
+      ).insert(exerciseRows);
       if (exercisesInsertError) {
-        await markRequestFailed(supabase, requestId, `Failed to insert workout exercises: ${exercisesInsertError.message}`);
+        await markRequestFailed(
+          supabase,
+          requestId,
+          `Failed to insert workout exercises: ${exercisesInsertError.message}`,
+        );
         return;
       }
     }
@@ -989,7 +1160,10 @@ async function runGeneration(
       .update({
         title: plan.title,
         summary: plan.summary,
-        duration_weeks: Math.max(1, Math.ceil(totalDays / Math.max(daysPerWeek, 1))),
+        duration_weeks: Math.max(
+          1,
+          Math.ceil(totalDays / Math.max(daysPerWeek, 1)),
+        ),
         days_per_week: daysPerWeek,
       })
       .eq("id", planId);
@@ -1001,7 +1175,10 @@ async function runGeneration(
         .eq("user_id", userId)
         .eq("active", true)
         .neq("id", planId);
-      await supabase.from("workout_plans").update({ active: true }).eq("id", planId);
+      await supabase.from("workout_plans").update({ active: true }).eq(
+        "id",
+        planId,
+      );
     }
 
     await supabase
@@ -1010,11 +1187,15 @@ async function runGeneration(
       .eq("id", requestId);
 
     console.log(
-      `[generate-plan] Completed request ${requestId} -> plan ${planId}, block ${context.blockIndex}`
+      `[generate-plan] Completed request ${requestId} -> plan ${planId}, block ${context.blockIndex}`,
     );
   } catch (err) {
     console.error("generate-plan background task error:", err);
-    await markRequestFailed(supabase, requestId, err instanceof Error ? err.message : String(err));
+    await markRequestFailed(
+      supabase,
+      requestId,
+      err instanceof Error ? err.message : String(err),
+    );
   }
 }
 
@@ -1032,10 +1213,14 @@ Deno.serve(async (req: Request) => {
   try {
     // 1. Verify the authenticated user from the request.
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) return jsonResponse({ error: "Missing Authorization header" }, 401);
+    if (!authHeader) {
+      return jsonResponse({ error: "Missing Authorization header" }, 401);
+    }
 
     const jwt = authHeader.replace(/^Bearer\s+/i, "");
-    const { data: userData, error: userError } = await supabase.auth.getUser(jwt);
+    const { data: userData, error: userError } = await supabase.auth.getUser(
+      jwt,
+    );
     if (userError || !userData?.user) {
       return jsonResponse({ error: "Invalid or expired session" }, 401);
     }
@@ -1044,7 +1229,9 @@ Deno.serve(async (req: Request) => {
     // 2. Accept a request_id.
     const body = await req.json().catch(() => ({}));
     const requestId: string | undefined = body.request_id;
-    if (!requestId) return jsonResponse({ error: "request_id is required" }, 400);
+    if (!requestId) {
+      return jsonResponse({ error: "request_id is required" }, 400);
+    }
     if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(requestId)) {
       return jsonResponse({ error: "Invalid request_id" }, 400);
     }
@@ -1060,7 +1247,9 @@ Deno.serve(async (req: Request) => {
     if (genRequestError || !genRequest) {
       return jsonResponse({ error: "Generation request not found" }, 404);
     }
-    if (genRequest.status === "completed" || genRequest.status === "generating") {
+    if (
+      genRequest.status === "completed" || genRequest.status === "generating"
+    ) {
       return jsonResponse({ success: true, status: genRequest.status });
     }
     if (genRequest.status !== "pending") {
@@ -1076,13 +1265,18 @@ Deno.serve(async (req: Request) => {
       .limit(1);
 
     if (answersError || !answersRows || answersRows.length === 0) {
-      await markRequestFailed(supabase, requestId, "No onboarding answers found for user.");
+      await markRequestFailed(
+        supabase,
+        requestId,
+        "No onboarding answers found for user.",
+      );
       return jsonResponse({ error: "No onboarding answers found" }, 400);
     }
     const answers = answersRows[0] as OnboardingAnswers;
 
-    const generationType =
-      genRequest.generation_type === "extend" ? "extend" as const : "initial" as const;
+    const generationType = genRequest.generation_type === "extend"
+      ? "extend" as const
+      : "initial" as const;
     if (generationType === "extend" && genRequest.target_plan_id) {
       const { data: failedAttempt } = await supabase
         .from("plan_generation_requests")
@@ -1108,7 +1302,7 @@ Deno.serve(async (req: Request) => {
         answers,
         generationType,
         genRequest.target_plan_id ?? null,
-        Number(genRequest.block_index ?? 1)
+        Number(genRequest.block_index ?? 1),
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1127,7 +1321,13 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: true, status: "generating" });
     }
 
-    const backgroundTask = runGeneration(supabase, requestId, userId, answers, context);
+    const backgroundTask = runGeneration(
+      supabase,
+      requestId,
+      userId,
+      answers,
+      context,
+    );
 
     if (typeof EdgeRuntime !== "undefined") {
       EdgeRuntime.waitUntil(backgroundTask);

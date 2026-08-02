@@ -5,6 +5,7 @@ export const SET_LOG_META_PREFIX = "__hoop_set_logs__:";
 export interface SetLogEntry {
   set_number: number;
   completed: boolean;
+  force_incomplete?: boolean;
   makes: number | null;
   attempts: number | null;
   minutes: number | null;
@@ -167,6 +168,7 @@ export function hydrateSetLogs(
 }
 
 function isSetComplete(entry: SetLogEntry, plan: ExerciseSetPlan): boolean {
+  if (entry.force_incomplete) return false;
   if (entry.completed) return true;
   if (plan.logType === "makes_attempts") {
     const attempts = entry.attempts ?? 0;
@@ -233,6 +235,7 @@ export function markAllSetsComplete(setLogs: SetLogEntry[], plan: ExerciseSetPla
   return setLogs.map((entry) => ({
     ...entry,
     completed: true,
+    force_incomplete: false,
     makes: entry.makes ?? plan.perSetMakes,
     attempts: entry.attempts ?? plan.perSetAttempts,
     minutes: entry.minutes ?? plan.perSetMinutes,

@@ -17,7 +17,7 @@ import {
   type CoachSpeechIntent,
   type NavigationTarget,
 } from "@/lib/coachSpeech";
-import { parseSpokenShotCount } from "@/lib/shotSpeech";
+import { mergeShotProgress, parseSpokenShotCount } from "@/lib/shotSpeech";
 import {
   inferVoiceAudioProfile,
   startVoiceCallAudio,
@@ -97,7 +97,7 @@ interface FunctionCallItem {
 }
 
 interface QueuedCoachResponse {
-  instructions: string;
+  instructions: string | null;
   outOfBand: boolean;
   itemId: string | null;
   sourceTranscript: string | null;
@@ -906,14 +906,21 @@ export class RealtimeCoachSession {
     if (!Number.isInteger(reportedAttempts) || reportedAttempts <= 0) {
       return { kind: "read_only", output: "Attempts must be a positive whole number." };
     }
-    const updateMode = args.update_mode === "increment" ? "increment" : "replace";
-    const nextMakes =
-      updateMode === "increment" ? baseMakes + reportedMakes : reportedMakes;
-    const attemptValue = reportedAttempts;
-    const nextAttempts = Math.max(
-      nextMakes,
-      updateMode === "increment" ? baseAttempts + attemptValue : attemptValue
+    // Parsed local commands use `mode`; Realtime tool calls use `update_mode`.
+    // Treat either increment marker identically so repeated speech adds to the
+    // pending set instead of replacing it with the latest phrase.
+    const updateMode =
+      args.update_mode === "increment" || args.mode === "increment" ? "increment" : "replace";
+    const merged = mergeShotProgress(
+      { makes: baseMakes, attempts: baseAttempts },
+      {
+        makes: reportedMakes,
+        attempts: reportedAttempts,
+        mode: updateMode,
+      }
     );
+    const nextMakes = merged.makes;
+    const nextAttempts = merged.attempts;
     const targetAttempts = drill.target.attempts;
     const completed =
       args.completed === true ||
@@ -1137,9 +1144,16 @@ export class RealtimeCoachSession {
     }
     if (attempts === 0) return `${label} doesn't have any logged shots yet.`;
     const pct = Math.round((makes / attempts) * 100);
-    return metric === "percentage"
-      ? `${label} shooting is ${pct} percent, ${makes} for ${attempts}.`
-      : `${label}: ${makes} for ${attempts}, ${Math.max(0, attempts - makes)} misses.`;
+    if (metric === "percentage") {
+      const scopeLabel =
+        scope === "exercise"
+          ? "this exercise"
+          : scope === "workout"
+            ? "this workout"
+            : `set ${currentSet?.set_number ?? 1}`;
+      return `For ${scopeLabel}, you're ${makes} for ${attempts}. That's ${pct} percent.`;
+    }
+    return `${label}: ${makes} for ${attempts}, ${Math.max(0, attempts - makes)} misses/p`;
   }
 
   private timerStatusReply(): string {
@@ -1180,16 +1194,17 @@ export class RealtimeCoachSession {
 
     if (command.kind === "timer") {
       const current = this.currentSetState();
+      const currentDrill = this.currentDrill();
       const action = command.args.action;
       if (action === "status") return this.timerStatusReply();
       if (action === "pause") {
         const wasRunning = this.timer.running;
-        this.callbacks?.onTimerAction({ type: "pause_timer" });
+        if (wasRunning) this.callbacks?.onTimerAction({ type: "pause_timer" });
         return wasRunning ? "Timer paused." : "The timer is already paused.";
       }
       if (action === "resume") {
         const canResume = !this.timer.running && this.timer.elapsed_seconds > 0;
-        this.callbacks?.onTimerAction({ type: "resume_timer" });
+        if (canResume) this.callbacks?.onTimerAction({ type: "resume_timer" });
         return canResume ? "Timer resumed." : "There isn't a paused timer.";
       }
       if (action === "stop" || action === "reset") {
@@ -1197,13 +1212,19 @@ export class RealtimeCoachSession {
         return action === "reset" ? "Timer reset." : "Timer stopped.";
       }
       if (action === "restart") {
-        if (!this.timer.duration_seconds) return null;
+        if (
+          !this.timer.running &&
+          this.timer.elapsed_seconds <= 0 &&
+          this.timer.duration_seconds == null
+        ) {
+          return "There isn't a timer to restart.";
+        }
         this.callbacks?.onTimerAction({ type: "stop_timer" });
         this.callbacks?.onTimerAction({
           type: "start_timer",
           duration_seconds: this.timer.duration_seconds,
-          timer_exercise_id: current?.exercise_id ?? null,
-          timer_set_number: current?.set_number ?? null,
+          timer_exercise_id: null,
+          timer_set_number: null,
         });
         return "Timer restarted.";
       }
@@ -1211,16 +1232,29 @@ export class RealtimeCoachSession {
         this.callbacks?.onTimerAction({
           type: "start_timer",
           duration_seconds: command.args.durationSeconds,
-          timer_exercise_id: current?.exercise_id ?? null,
-          timer_set_number: current?.set_number ?? null,
+          timer_exercise_id: null,
+          timer_set_number: null,
         });
         const seconds = command.args.durationSeconds;
         return seconds % 60 === 0
           ? `Timer started for ${seconds / 60} minute${seconds === 60 ? "" : "s"}.`
           : `Timer started for ${seconds} seconds.`;
       }
-      const result = await this.invokeCoachTool("start_timer", requestArgs);
-      return result.result;
+      const setDurationSeconds =
+        currentDrill?.target.minutes && currentDrill.target.minutes > 0
+          ? Math.round(currentDrill.target.minutes * 60)
+          : null;
+      this.callbacks?.onTimerAction({
+        type: "start_timer",
+        duration_seconds: setDurationSeconds,
+        timer_exercise_id: setDurationSeconds ? current?.exercise_id ?? null : null,
+        timer_set_number: setDurationSeconds ? current?.set_number ?? null : null,
+      });
+      return setDurationSeconds
+        ? `Timer started for ${Math.round(setDurationSeconds / 60)} minute${
+            setDurationSeconds === 60 ? "" : "s"
+          }.`
+        : "Timer started.";
     }
 
     if (command.kind === "navigation") {
@@ -1366,42 +1400,6 @@ export class RealtimeCoachSession {
     return null;
   }
 
-  private fallbackTurnInstructions(transcript: string, prefix: string): string {
-    const drills = this.orderedDrills().map((drill) => ({
-      position: drill.drill_position,
-      id: drill.exercise_id,
-      name: drill.name,
-      category: drill.category,
-      status: drill.status,
-      sets: drill.sets,
-      target: drill.target,
-      results: drill.set_results.map((set) => ({
-        set: set.set_number,
-        side: set.side_label ?? null,
-        complete: set.completed,
-        makes: set.makes,
-        attempts: set.attempts,
-      })),
-    }));
-    const state = {
-      current_set: this.currentSetState(),
-      next_exercise: this.workoutState?.navigation?.next_exercise_after_current
-        ? {
-            id: this.workoutState.navigation.next_exercise_after_current.exercise_id,
-            name: this.workoutState.navigation.next_exercise_after_current.name,
-            position:
-              this.workoutState.navigation.next_exercise_after_current.drill_position,
-          }
-        : null,
-      drills,
-      timer: this.timer,
-      summary: this.conversationSummary.slice(-800) || null,
-    };
-    return `${prefix}\nUser transcript: ${JSON.stringify(
-      transcript
-    )}\nLatest authoritative client state: ${JSON.stringify(state)}`;
-  }
-
   private async routeTranscribedTurn(
     transcript: string,
     itemId: string | null,
@@ -1428,11 +1426,13 @@ export class RealtimeCoachSession {
       this.fallbackTurnCount += 1;
       this.logVoiceMetric(turn, "route_decision");
       this.latestUserTranscript = transcript;
+      this.callbacks?.onCommandHeard?.({
+        turnId,
+        label: `Heard: ${transcript}`.slice(0, 90),
+        state: "recognized",
+      });
       this.requestResponse(
-        this.fallbackTurnInstructions(
-          transcript,
-          "Respond normally to this turn using the full coach instructions and latest state."
-        ),
+        null,
         false,
         null,
         transcript
@@ -1451,11 +1451,13 @@ export class RealtimeCoachSession {
         turn.backendCompletedAt = turn.routeDecidedAt;
         this.fallbackTurnCount += 1;
         this.logVoiceMetric(turn, "route_decision");
+        this.callbacks?.onCommandHeard?.({
+          turnId,
+          label: command.heardLabel,
+          state: "recognized",
+        });
         this.requestResponse(
-          this.fallbackTurnInstructions(
-            transcript,
-            "The deterministic router declined this command. Resolve it using the full coach instructions and tools."
-          ),
+          null,
           false,
           null,
           transcript
@@ -1752,11 +1754,11 @@ export class RealtimeCoachSession {
   ): Promise<void> {
     if (speechEpoch !== this.speechEpoch || !this.active) return;
     this.lastDeterministicReply = text;
-    this.requestResponse(`Say this: ${text}`, true);
+    this.requestResponse(`Say exactly: ${JSON.stringify(text)}`, true);
   }
 
   private requestResponse(
-    instructions: string,
+    instructions: string | null,
     outOfBand = false,
     itemId: string | null = null,
     sourceTranscript: string | null = null
@@ -1785,17 +1787,18 @@ export class RealtimeCoachSession {
     const queued = this.responseQueue.shift();
     if (!queued) return;
     const { instructions, outOfBand, itemId } = queued;
+    const responseInstructions = instructions ? { instructions } : {};
     const sent = this.sendEvent(
       {
         type: "response.create",
         response: outOfBand || itemId
           ? {
-              instructions,
+              ...responseInstructions,
               conversation: "none",
               input: itemId ? [{ type: "item_reference", id: itemId }] : [],
               ...(outOfBand ? { tool_choice: "none", tools: [] } : {}),
             }
-          : { instructions },
+          : responseInstructions,
       },
       false
     );
@@ -1861,9 +1864,7 @@ export class RealtimeCoachSession {
 
       case "conversation.item.input_audio_transcription.failed":
         this.latestUserTranscript = null;
-        this.requestResponse(
-          "Transcription was unavailable; respond normally to the latest user audio using the full coach instructions."
-        );
+        this.requestResponse(null);
         break;
 
       case "response.created": {
@@ -2118,7 +2119,7 @@ export class RealtimeCoachSession {
               : "Say the set was saved and direct the athlete to the authoritative next work item."
             : strongestResult === "mutation"
               ? "State only the completed result in one short sentence. No acknowledgment, praise, preamble, action narration, offer, or closing sentence. Never mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless genuinely ambiguous."
-              : "Answer the athlete's latest request directly and briefly using the lookup result. Do not mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless the lookup result is genuinely ambiguous.",
+              : "Continue the athlete's request from the lookup result. If an already approved action needs another tool, call it silently without another status sentence; otherwise give only the brief answer. Never mention tools, internal state, context, JSON, or refreshes.",
         strongestResult === "buffered_shot" || strongestResult === "completed_shot"
       );
       this.exactBufferedShotReply = null;

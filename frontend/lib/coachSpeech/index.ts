@@ -151,10 +151,14 @@ export function normalizeCoachSpeech(transcript: string | null | undefined): str
     .replace(/[’']/g, "")
     .replace(/\bi m\b/g, "im")
     .replace(/\bwhat s\b/g, "whats")
+    .replace(/\bwork[\s-]+out\b/g, "workout")
+    .replace(/\bcount[\s-]+down\b/g, "countdown")
+    .replace(/\bstop[\s-]+watch\b/g, "stopwatch")
     .replace(/\bair[\s-]?ball(?:ed)?\b/g, (value) =>
       /ed$/.test(value) ? "airballed" : "airball"
     )
     .replace(/[^a-z0-9/: -]+/g, " ")
+    .replace(/-/g, " ")
     .replace(/\s*\/\s*/g, "/")
     .replace(/\s+/g, " ")
     .trim();
@@ -258,7 +262,7 @@ export const parseShotIntent: Parser = (text) => {
 
   const verbCount = text.match(
     new RegExp(
-      `^(?:i\\s+)?(?:just\\s+)?(made|make|hit|swished|missed|miss|bricked|brick|airballed|airball)\\s+(${NUMBER})(?:\\s+(?:shots?|buckets?|makes?|misses?|bricks?|airballs?))?(?:\\s+(?:in a row|straight))?$`
+      `^(?:i\\s+)?(?:just\\s+)?(made|make|hit|swished|missed|miss|bricked|brick|airballed|airball)\\s+(${NUMBER})(?:\\s+more)?(?:\\s+(?:shots?|buckets?|makes?|misses?|bricks?|airballs?))?(?:\\s+(?:in a row|straight))?(?:\\s+again)?$`
     )
   );
   if (verbCount) {
@@ -289,7 +293,7 @@ export const parseShotIntent: Parser = (text) => {
   }
 
   if (
-    /^(?:(?:i\s+)?(?:just\s+)?)?(?:make|made|hit(?: it)?|swish(?:ed)?|bucket|another make)(?:\s+(?:one|another)(?:\s+shot)?)?$/.test(
+    /^(?:(?:i\s+)?(?:just\s+)?)?(?:make|made|hit(?: it)?|swish(?:ed)?|bucket|another make)(?:\s+(?:one|another)(?:\s+shot)?|\s+again)?$/.test(
       text
     )
   ) {
@@ -300,7 +304,7 @@ export const parseShotIntent: Parser = (text) => {
     );
   }
   if (
-    /^(?:(?:i\s+)?(?:just\s+)?)?(?:miss(?:ed)?|brick(?:ed)?|airball(?:ed)?|another miss)(?:\s+(?:one|another)(?:\s+shot)?)?$/.test(
+    /^(?:(?:i\s+)?(?:just\s+)?)?(?:miss(?:ed)?|brick(?:ed)?|airball(?:ed)?|another miss)(?:\s+(?:one|another)(?:\s+shot)?|\s+again)?$/.test(
       text
     )
   ) {
@@ -334,15 +338,30 @@ function formatDurationLabel(seconds: number): string {
 }
 
 export const parseTimerIntent: Parser = (text) => {
-  const explicit = text.match(
+  const explicitPatterns: RegExp[] = [
     new RegExp(
-      `^(?:(?:start|set)\\s+)?(?:a\\s+|the\\s+)?timer\\s+for\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)$|^(?:start|set)\\s+(?:a\\s+)?(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\\s+timer$`
-    )
-  );
-  if (explicit) {
-    const amount = explicit[1] ?? explicit[3];
-    const unit = explicit[2] ?? explicit[4];
-    const durationSeconds = parseDuration(amount, unit);
+      `^(?:start|begin|run|set)(?:\\s+(?:a|the))?\\s+(?:timer|time|countdown|stopwatch)(?:\\s+for)?\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)$`
+    ),
+    new RegExp(
+      `^(?:start|begin|run|set)(?:\\s+me)?(?:\\s+a)?\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\\s+(?:timer|time|countdown|stopwatch)$`
+    ),
+    new RegExp(
+      `^(?:give me|i need|make)(?:\\s+a)?\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\\s+(?:timer|time|countdown)$`
+    ),
+    new RegExp(
+      `^(?:timer|countdown)(?:\\s+for)?\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)$`
+    ),
+    new RegExp(
+      `^(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\\s+(?:timer|time|countdown)$`
+    ),
+    new RegExp(
+      `^(?:start|begin|run|set)(?:\\s+a)?\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)$`
+    ),
+  ];
+  for (const pattern of explicitPatterns) {
+    const explicit = text.match(pattern);
+    if (!explicit) continue;
+    const durationSeconds = parseDuration(explicit[1], explicit[2]);
     if (durationSeconds == null) return null;
     return intent(
       "timer",
@@ -350,8 +369,45 @@ export const parseTimerIntent: Parser = (text) => {
       `Start ${formatDurationLabel(durationSeconds)} timer heard`
     );
   }
+
+  const controls: [RegExp, TimerIntentArgs["action"], string][] = [
+    [
+      /^(?:pause|hold|freeze)(?:\s+the)?\s+(?:timer|countdown|stopwatch)$/,
+      "pause",
+      "Pause timer heard",
+    ],
+    [
+      /^(?:resume|continue|unpause)(?:\s+the)?\s+(?:timer|countdown|stopwatch)$/,
+      "resume",
+      "Resume timer heard",
+    ],
+    [
+      /^(?:stop|end|cancel|clear)(?:\s+the)?\s+(?:timer|countdown|stopwatch)$/,
+      "stop",
+      "Stop timer heard",
+    ],
+    [
+      /^(?:reset)(?:\s+the)?\s+(?:timer|countdown|stopwatch)$/,
+      "reset",
+      "Reset timer heard",
+    ],
+    [
+      /^(?:restart|start over)(?:\s+the)?\s+(?:timer|countdown|stopwatch)$|^(?:restart|start)(?:\s+the)?\s+(?:timer|countdown|stopwatch)\s+over$/,
+      "restart",
+      "Restart timer heard",
+    ],
+    [
+      /^(?:timer status|(?:whats|what is|how much|how long) (?:(?:time|it)\s+is|time|is)?\s*(?:left|remaining)(?:\s+on(?:\s+the)?\s+(?:timer|countdown))?|how is (?:the )?(?:timer|countdown)|(?:time|timer) remaining)$/,
+      "status",
+      "Timer status heard",
+    ],
+  ];
+  for (const [pattern, action, label] of controls) {
+    if (pattern.test(text)) return intent("timer", { action }, label);
+  }
+
   if (
-    /^(?:start|begin)(?:\s+(?:a|the))?\s+(?:timer|stopwatch)(?:\s+for\s+(?:this|the current)\s+set)?$/.test(
+    /^(?:start|begin|run)(?:\s+(?:a|the))?\s+(?:timer|time|countdown|stopwatch)(?:\s+for\s+(?:this|the current)\s+set)?$|^(?:start|begin|run)(?:\s+the)?\s+set\s+(?:timer|countdown)$/.test(
       text
     )
   ) {
@@ -360,22 +416,6 @@ export const parseTimerIntent: Parser = (text) => {
       { action: "start", useSetDefault: true },
       "Start set timer heard"
     );
-  }
-
-  const controls: [RegExp, TimerIntentArgs["action"], string][] = [
-    [/^(?:pause|hold)(?:\s+the)?\s+timer$/, "pause", "Pause timer heard"],
-    [/^(?:resume|continue)(?:\s+the)?\s+timer$/, "resume", "Resume timer heard"],
-    [/^(?:stop|end|cancel)(?:\s+the)?\s+timer$/, "stop", "Stop timer heard"],
-    [/^reset(?:\s+the)?\s+timer$/, "reset", "Reset timer heard"],
-    [/^restart(?:\s+the)?\s+timer$/, "restart", "Restart timer heard"],
-    [
-      /^(?:timer status|(?:whats|what is|how much) (?:time|time is) left(?:\s+on(?:\s+the)?\s+timer)?|how is the timer)$/,
-      "status",
-      "Timer status heard",
-    ],
-  ];
-  for (const [pattern, action, label] of controls) {
-    if (pattern.test(text)) return intent("timer", { action }, label);
   }
   return null;
 };
@@ -550,7 +590,7 @@ export const parseCompletionIntent: Parser = (text) => {
 
 export const parseProgressIntent: Parser = (text) => {
   if (
-    /^(?:(?:whats|what is) my |show me my )?(?:total|overall) shooting (?:percentage|percent)(?:\s+(?:for|in)\s+(?:this|my|the)\s+workout)?$/.test(
+    /^(?:(?:whats|what is) my |show me my )?(?:total|overall|workout) shooting (?:percentage|percent)(?:\s+(?:for|in)\s+(?:this|my|the)\s+workout)?$/.test(
       text
     )
   ) {
@@ -560,11 +600,22 @@ export const parseProgressIntent: Parser = (text) => {
       "workout shooting percentage heard"
     );
   }
+  if (
+    /^(?:just\s+)?(?:(?:whats|what is|tell me|show me) (?:my|the) |my )?(?:current )?(?:shooting )?(?:percentage|percent)(?:\s+(?:so far|right now))?$|^(?:what am i|how am i) shooting(?:\s+(?:so far|right now))?$/.test(
+      text
+    )
+  ) {
+    return intent(
+      "progress",
+      { metric: "percentage", scope: "exercise" },
+      "exercise shooting percentage heard"
+    );
+  }
   const remaining = text.match(
-    /^how many (shots?|makes?|sets?|drills?|exercises?|things?)(?: do i have)? (?:are )?left$/
+    /^(?:how many\s+)?(?:more\s+)?(shots?|makes?|sets?|drills?|exercises?|things?)(?:\s+do i have)?\s+(?:are\s+)?(?:left|remaining|to go)$|^how many\s+(shots?|makes?|sets?|drills?|exercises?|things?)\s+(?:do i have\s+)?left$/
   );
   if (remaining) {
-    const noun = remaining[1];
+    const noun = remaining[1] ?? remaining[2];
     const scope: CoachSpeechScope = /^sets?/.test(noun)
       ? "exercise"
       : /^(?:drills?|exercises?|things?)/.test(noun)
@@ -572,8 +623,20 @@ export const parseProgressIntent: Parser = (text) => {
         : "set";
     return intent("progress", { metric: "remaining", scope }, `${scope} remaining heard`);
   }
+  const scopedRemaining = text.match(
+    /^(?:(?:whats|what is|show me) (?:left|remaining)|how much (?:is )?(?:left|remaining))(?:\s+(?:for|in|on))?\s+(?:this|the current|my)\s+(set|drill|exercise|workout)$/
+  );
+  if (scopedRemaining) {
+    const scope: CoachSpeechScope =
+      scopedRemaining[1] === "set"
+        ? "set"
+        : scopedRemaining[1] === "workout"
+          ? "workout"
+          : "exercise";
+    return intent("progress", { metric: "remaining", scope }, `${scope} remaining heard`);
+  }
   const target = text.match(
-    /^(?:(?:whats|what is) (?:my|the) target|how many (?:shots|makes) (?:do i need|is the target))(?:\s+for|\s+on|\s+in)?\s*(?:this|the current|my)?\s*(set|drill|exercise|workout)?$/
+    /^(?:(?:whats|what is) (?:my|the) (?:target|goal)|what (?:do i need|am i aiming for|am i trying to get)|how many (?:shots|makes) (?:do i need|is the target))(?:\s+for|\s+on|\s+in)?\s*(?:this|the current|my)?\s*(set|drill|exercise|workout)?$/
   );
   if (target) {
     const namedScope = target[1];
@@ -581,9 +644,13 @@ export const parseProgressIntent: Parser = (text) => {
       namedScope === "workout" ? "workout" : /^(?:drill|exercise)$/.test(namedScope ?? "") ? "exercise" : "set";
     return intent("progress", { metric: "target", scope }, `${scope} target heard`);
   }
-  const totals = text.match(
-    /^how many (makes?|misses?|attempts?|shots?)(?: do i have| have i (?:made|missed|taken))?(?:\s+for|\s+on|\s+in)?\s*(?:this|the current|my)?\s*(set|drill|exercise|workout)?$/
-  );
+  const totals =
+    text.match(
+      /^how many\s+(makes?|misses?|attempts?|shots?)(?:\s+do i have|\s+have i (?:made|missed|taken))?(?:\s+for|\s+on|\s+in)?\s*(?:this|the current|my)?\s*(set|drill|exercise|workout)?$/
+    ) ??
+    text.match(
+      /^(makes|misses|attempts|shots)(?:\s+do i have|\s+so far)(?:\s+for|\s+on|\s+in)?\s*(?:this|the current|my)?\s*(set|drill|exercise|workout)?$/
+    );
   if (totals) {
     const namedScope = totals[2];
     const scope: CoachSpeechScope =
@@ -591,7 +658,7 @@ export const parseProgressIntent: Parser = (text) => {
     return intent("progress", { metric: "totals", scope }, `${scope} shot totals heard`);
   }
   const percentage = text.match(
-    /^(?:(?:whats|what is) my |show me my )?(?:shooting )?(?:percentage|percent)(?:\s+for|\s+on|\s+in)?\s+(?:this|the current|my)?\s*(set|drill|exercise|workout)$/
+    /^(?:(?:whats|what is)(?: my| the)? |show me my )?(?:shooting )?(?:percentage|percent)(?:\s+for|\s+on|\s+in)?\s+(?:this|the current|my|the whole|whole|todays|the)?\s*(set|drill|exercise|workout)(?:\s+so far)?$/
   );
   if (percentage) {
     const scope: CoachSpeechScope =
@@ -599,11 +666,12 @@ export const parseProgressIntent: Parser = (text) => {
     return intent("progress", { metric: "percentage", scope }, `${scope} shooting percentage heard`);
   }
   const progress = text.match(
-    /^(?:(?:whats|what is) my |show me my |how is my )(?:progress)(?:\s+for|\s+on|\s+in)?\s+(?:this|the current|the|my)?\s*(set|drill|exercise|workout)$/
+    /^(?:(?:whats|what is) my |show me my |how is my )progress(?:(?:\s+for|\s+on|\s+in)?\s+(?:this|the current|the|my)?\s*(set|drill|exercise|workout))?$|^how far (?:am i|are we) (?:through|into)(?:\s+(?:this|the|my))?\s+(set|drill|exercise|workout)$/
   );
   if (progress) {
+    const namedScope = progress[1] ?? progress[2];
     const scope: CoachSpeechScope =
-      progress[1] === "set" ? "set" : progress[1] === "workout" ? "workout" : "exercise";
+      namedScope === "set" ? "set" : namedScope === "workout" ? "workout" : "exercise";
     return intent("progress", { metric: "progress", scope }, `${scope} progress heard`);
   }
   return null;

@@ -52,6 +52,46 @@ for (const category of categories) {
     }
   }
 }
+clips.push(
+  {
+    id: "required-form",
+    exercise_name: "Form Shooting",
+    category: "shooting",
+    difficulty_level: "beginner",
+    description: "Form warm-up with a basketball.",
+    coaching_notes: null,
+    requires_both_sides: false,
+  },
+  ...["Elbow Mid-Range", "Wing Mid-Range", "Baseline Mid-Range"].map((name, index) => ({
+    id: `required-mid-${index}`,
+    exercise_name: name,
+    category: "shooting",
+    difficulty_level: difficulties[index],
+    description: "Mid-range shooting.",
+    coaching_notes: null,
+    requires_both_sides: index > 0,
+  })),
+  ...["Basic Corner 3 Spot-Up", "Wing 3 Point", "Top Three Point"].map((name, index) => ({
+    id: `required-three-${index}`,
+    exercise_name: name,
+    category: "shooting",
+    difficulty_level: difficulties[index],
+    description: "Three-point shooting.",
+    coaching_notes: null,
+    requires_both_sides: index > 0,
+  })),
+  ...["Pound dribble", "Low pound dribble", "Right and Left Pounds", "V dribble"].map(
+    (name, index) => ({
+      id: `required-handle-${index}`,
+      exercise_name: name,
+      category: "ball_handling",
+      difficulty_level: index < 2 ? "beginner" : "intermediate",
+      description: "Easy ball-handling warm-up.",
+      coaching_notes: null,
+      requires_both_sides: false,
+    })
+  )
+);
 
 const answers = {
   strengths: "finishing at the rim",
@@ -102,6 +142,31 @@ for (const day of initial.days) {
     day.exercises.filter((e) => e.category === "shooting").length >= 2,
     `day ${day.day_number} includes two shooting drills (hoop available)`
   );
+  const firstHandling = day.exercises.find((exercise) => exercise.category === "ball_handling");
+  assert(
+    Boolean(firstHandling && /pound|v dribble/i.test(firstHandling.name)),
+    `day ${day.day_number} starts ball handling with an easy warm-up`
+  );
+  const shooting = day.exercises.filter((exercise) => exercise.category === "shooting");
+  assert(
+    shooting[0]?.name === "Form Shooting",
+    `day ${day.day_number} starts shooting with Form Shooting`
+  );
+  assert(
+    shooting.some((exercise) => /mid.?range|\b3\b|three point/i.test(exercise.name)),
+    `day ${day.day_number} includes mid-range or three-point shooting after form work`
+  );
+  const categoryRanks = day.exercises
+    .map((exercise) =>
+      ["ball_handling", "shooting", "finishing", "defense", "conditioning"].indexOf(
+        exercise.category
+      )
+    )
+    .filter((rank) => rank >= 0);
+  assert(
+    categoryRanks.every((rank, index) => index === 0 || categoryRanks[index - 1] <= rank),
+    `day ${day.day_number} follows the required skill-group order`
+  );
   assert(
     day.estimated_minutes <= composition.minutes,
     `day ${day.day_number} fits the ${composition.minutes}-minute budget`
@@ -145,8 +210,13 @@ assert(
 );
 for (let i = 1; i < initial.days.length; i++) {
   const prev = new Set(initial.days[i - 1].exercises.map((e) => e.video_clip_id));
-  const overlap = initial.days[i].exercises.filter((e) => prev.has(e.video_clip_id));
-  assert(overlap.length === 0, `days ${i} and ${i + 1} share no consecutive drills`);
+  const overlap = initial.days[i].exercises.filter(
+    (exercise) => exercise.name !== "Form Shooting" && prev.has(exercise.video_clip_id)
+  );
+  assert(
+    overlap.length === 0,
+    `days ${i} and ${i + 1} only repeat the required Form Shooting drill`
+  );
 }
 
 // Deficient days receive one-to-three stable random eligible drills, capped at
@@ -328,8 +398,10 @@ assert(baselineInBenchmark.length > 0, "benchmark day repeats baseline drills");
 
 // First extension day must not repeat the last session of block 1.
 const lastBlock1 = new Set(initial.days[4].exercises.map((e) => e.video_clip_id));
-const firstExtend = extend.days[0].exercises.filter((e) => lastBlock1.has(e.video_clip_id));
-assert(firstExtend.length === 0, "day 6 does not repeat day 5 drills");
+const firstExtend = extend.days[0].exercises.filter(
+  (exercise) => exercise.name !== "Form Shooting" && lastBlock1.has(exercise.video_clip_id)
+);
+assert(firstExtend.length === 0, "day 6 only repeats the required Form Shooting drill");
 
 // Pain exclusion respected in flexible slots (finishing may still appear as core).
 for (const day of extend.days) {

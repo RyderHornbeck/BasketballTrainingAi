@@ -71,7 +71,15 @@ function contextWithPartialShootingSet(): WorkoutContext {
       },
     ] as any,
     logs: new Map([
-      ["warmup", { exercise_id: "warmup", completed: true, makes: null, attempts: null, minutes_completed: null, difficulty: null, notes: null }],
+      ["warmup", {
+        exercise_id: "warmup",
+        completed: true,
+        makes: null,
+        attempts: null,
+        minutes_completed: null,
+        difficulty: null,
+        notes: null,
+      }],
       [
         "shoot",
         {
@@ -81,7 +89,8 @@ function contextWithPartialShootingSet(): WorkoutContext {
           attempts: 12,
           minutes_completed: null,
           difficulty: null,
-          notes: '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":8,"attempts":12,"minutes":null,"completed":true},{"set_number":2,"makes":null,"attempts":null,"minutes":null,"completed":false}]}',
+          notes:
+            '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":8,"attempts":12,"minutes":null,"completed":true},{"set_number":2,"makes":null,"attempts":null,"minutes":null,"completed":false}]}',
         },
       ],
     ]) as any,
@@ -91,44 +100,65 @@ function contextWithPartialShootingSet(): WorkoutContext {
 Deno.test("coach navigation uses the grouped Workouts order and the next unfinished set", () => {
   const navigation = buildWorkoutNavigation(contextWithPartialShootingSet());
 
-  assert(navigation.drills[0].name === "Warmup", "warmup should be the first visible drill");
-  assert(navigation.drills[1].name === "Shooting", "shooting should follow warmup by category");
-  assert(navigation.next_work_item?.name === "Shooting", "current work should remain the shooting drill");
-  assert(navigation.next_work_item?.set_number === 2, "current work should be shooting set two");
+  assert(
+    navigation.drills[0].name === "Warmup",
+    "warmup should be the first visible drill",
+  );
+  assert(
+    navigation.drills[1].name === "Shooting",
+    "shooting should follow warmup by category",
+  );
+  assert(
+    navigation.next_work_item?.name === "Shooting",
+    "current work should remain the shooting drill",
+  );
+  assert(
+    navigation.next_work_item?.set_number === 2,
+    "current work should be shooting set two",
+  );
   assert(
     navigation.next_work_item?.set_side_label === "right side",
-    "the current set should expose its assigned side"
+    "the current set should expose its assigned side",
   );
   assert(
     navigation.drills[1].set_results[0].side_label === "left side" &&
       navigation.drills[1].set_results[1].side_label === "right side",
-    "every set should expose its exact side label"
+    "every set should expose its exact side label",
   );
   assert(
     navigation.current_set_state?.progress.makes === 0 &&
       navigation.current_set_state.progress.attempts === 0,
-    "an untouched set must expose zero actual progress, not its prescribed attempts"
+    "an untouched set must expose zero actual progress, not its prescribed attempts",
   );
   assert(
     navigation.current_set_state?.target.makes === 8 &&
       navigation.current_set_state.target.attempts === 12,
-    "the current set must expose its prescribed target separately"
+    "the current set must expose its prescribed target separately",
   );
   assert(
     navigation.current_set_state?.remaining.makes === 8 &&
       navigation.current_set_state.remaining.attempts === 12,
-    "the current set must expose precomputed remaining work"
+    "the current set must expose precomputed remaining work",
   );
   assert(
     navigation.next_exercise_after_current?.name === "Finishing",
-    "the following drill should be separate from the next work item"
+    "the following drill should be separate from the next work item",
   );
 });
 
 Deno.test("shooting drill lists exclude the separate finishing category", () => {
-  const summary = buildWorkoutDrillListSummary(contextWithPartialShootingSet(), "shooting");
-  assert(summary.includes("Shooting"), "shooting category drills should be listed");
-  assert(!summary.includes("Finishing"), "finishing must not be treated as a shooting drill");
+  const summary = buildWorkoutDrillListSummary(
+    contextWithPartialShootingSet(),
+    "shooting",
+  );
+  assert(
+    summary.includes("Shooting"),
+    "shooting category drills should be listed",
+  );
+  assert(
+    !summary.includes("Finishing"),
+    "finishing must not be treated as a shooting drill",
+  );
 });
 
 Deno.test("current shooting progress never replaces the prescribed set target", () => {
@@ -141,15 +171,15 @@ Deno.test("current shooting progress never replaces the prescribed set target", 
   const current = buildWorkoutNavigation(ctx).current_set_state;
   assert(
     current?.progress.makes === 2 && current.progress.attempts === 3,
-    "progress must describe only shots already taken"
+    "progress must describe only shots already taken",
   );
   assert(
     current?.target.makes === 8 && current.target.attempts === 12,
-    "the workout exercise target must remain authoritative over legacy progress metadata"
+    "the workout exercise target must remain authoritative over legacy progress metadata",
   );
   assert(
     current?.remaining.makes === 6 && current.remaining.attempts === 9,
-    "remaining work must be calculated from target minus progress"
+    "remaining work must be calculated from target minus progress",
   );
 });
 
@@ -158,22 +188,44 @@ Deno.test("coach navigation honors an explicitly selected unfinished drill", () 
   ctx.day.active_exercise_id = "finish";
   const navigation = buildWorkoutNavigation(ctx);
 
-  assert(navigation.next_work_item?.name === "Finishing", "selected drill should become current");
+  assert(
+    navigation.next_work_item?.name === "Finishing",
+    "selected drill should become current",
+  );
   assert(
     navigation.next_work_item?.set_number === 1,
-    "selected drill should start on its first unfinished set"
+    "selected drill should start on its first unfinished set",
   );
   assert(
-    navigation.drills.find((drill) => drill.name === "Shooting")?.status === "in_progress",
-    "switching drills must not complete or skip the earlier drill"
+    navigation.drills.find((drill) => drill.name === "Shooting")?.status ===
+      "in_progress",
+    "switching drills must not complete or skip the earlier drill",
   );
   const shooting = navigation.drills.find((drill) => drill.name === "Shooting");
-  assert(shooting?.set_results[0].makes === 8, "non-current drills expose exact set makes");
-  assert(shooting?.set_results[0].attempts === 12, "non-current drills expose exact set attempts");
-  assert(shooting?.set_results[0].misses === 4, "non-current drills expose exact set misses");
-  assert(shooting?.set_results[0].completed === true, "non-current drills expose set completion");
-  assert(shooting?.set_results[1].completed === false, "unfinished set state remains visible");
-  assert(shooting?.target.makes === 8, "non-current drills expose their per-set target");
+  assert(
+    shooting?.set_results[0].makes === 8,
+    "non-current drills expose exact set makes",
+  );
+  assert(
+    shooting?.set_results[0].attempts === 12,
+    "non-current drills expose exact set attempts",
+  );
+  assert(
+    shooting?.set_results[0].misses === 4,
+    "non-current drills expose exact set misses",
+  );
+  assert(
+    shooting?.set_results[0].completed === true,
+    "non-current drills expose set completion",
+  );
+  assert(
+    shooting?.set_results[1].completed === false,
+    "unfinished set state remains visible",
+  );
+  assert(
+    shooting?.target.makes === 8,
+    "non-current drills expose their per-set target",
+  );
 });
 
 Deno.test("coach navigation exposes earlier unfinished drills after the final drill", () => {
@@ -191,11 +243,17 @@ Deno.test("coach navigation exposes earlier unfinished drills after the final dr
   });
 
   const navigation = buildWorkoutNavigation(ctx);
-  assert(navigation.workout_complete === false, "unfinished earlier drills keep workout open");
-  assert(navigation.remaining_drills.length === 1, "only shooting should remain");
+  assert(
+    navigation.workout_complete === false,
+    "unfinished earlier drills keep workout open",
+  );
+  assert(
+    navigation.remaining_drills.length === 1,
+    "only shooting should remain",
+  );
   assert(
     navigation.next_work_item?.name === "Shooting",
-    "current work should wrap to the remaining earlier drill"
+    "current work should wrap to the remaining earlier drill",
   );
 });
 
@@ -206,7 +264,7 @@ function successfulSupabaseMock() {
   query.eq = () => query;
   query.then = (
     resolve: (value: { error: null; data: null }) => unknown,
-    reject?: (reason: unknown) => unknown
+    reject?: (reason: unknown) => unknown,
   ) => Promise.resolve({ error: null, data: null }).then(resolve, reject);
   return {
     from: () => query,
@@ -223,7 +281,7 @@ function capturingSupabaseMock(rows: Record<string, unknown>[]) {
   query.eq = () => query;
   query.then = (
     resolve: (value: { error: null; data: null }) => unknown,
-    reject?: (reason: unknown) => unknown
+    reject?: (reason: unknown) => unknown,
   ) => Promise.resolve({ error: null, data: null }).then(resolve, reject);
   return {
     from: () => query,
@@ -238,11 +296,14 @@ Deno.test("relative last drill overrides a conflicting guessed exercise ID", asy
     "day",
     ctx,
     "set_current_drill",
-    { exercise_id: "shoot", drill_name: "last drill" }
+    { exercise_id: "shoot", drill_name: "last drill" },
   );
 
   assert(outcome.dbChanged, "switch should succeed");
-  assert(ctx.day.active_exercise_id === "finish", "spoken last drill must override guessed ID");
+  assert(
+    ctx.day.active_exercise_id === "finish",
+    "spoken last drill must override guessed ID",
+  );
 });
 
 Deno.test("go back wraps to the nearest earlier unfinished drill", async () => {
@@ -254,11 +315,14 @@ Deno.test("go back wraps to the nearest earlier unfinished drill", async () => {
     "day",
     ctx,
     "set_current_drill",
-    { drill_name: "go back" }
+    { drill_name: "go back" },
   );
 
   assert(outcome.dbChanged, "go back should switch drills");
-  assert(ctx.day.active_exercise_id === "shoot", "go back should select earlier unfinished shooting");
+  assert(
+    ctx.day.active_exercise_id === "shoot",
+    "go back should select earlier unfinished shooting",
+  );
 });
 
 Deno.test("skipping a drill only changes the active position", async () => {
@@ -273,15 +337,58 @@ Deno.test("skipping a drill only changes the active position", async () => {
     "day",
     ctx,
     "skip_drill",
-    { drill_name: "this drill" }
+    { drill_name: "this drill" },
   );
 
   assert(outcome.dbChanged, "skip should move to another unfinished drill");
-  assert(ctx.day.active_exercise_id === "finish", "skip should activate the next unfinished drill");
-  assert(writtenExerciseLogs.length === 0, "skip must not write or complete an exercise log");
-  assert(ctx.logs.get("shoot") === shootingLogBefore, "skip must preserve every existing set result");
-  assert(shootingLogBefore?.makes === 8, "skip must not replace makes with the target");
-  assert(shootingLogBefore?.completed === false, "skip must leave the drill incomplete");
+  assert(
+    ctx.day.active_exercise_id === "finish",
+    "skip should activate the next unfinished drill",
+  );
+  assert(
+    writtenExerciseLogs.length === 0,
+    "skip must not write or complete an exercise log",
+  );
+  assert(
+    ctx.logs.get("shoot") === shootingLogBefore,
+    "skip must preserve every existing set result",
+  );
+  assert(
+    shootingLogBefore?.makes === 8,
+    "skip must not replace makes with the target",
+  );
+  assert(
+    shootingLogBefore?.completed === false,
+    "skip must leave the drill incomplete",
+  );
+});
+
+Deno.test("reopening a completed set preserves its recorded numbers", async () => {
+  const ctx = contextWithPartialShootingSet();
+  const rows: Record<string, unknown>[] = [];
+  const outcome = await executeCoachTool(
+    capturingSupabaseMock(rows),
+    "user",
+    "day",
+    ctx,
+    "set_set_completion",
+    {
+      exercise_id: "shoot",
+      drill_name: "Shooting",
+      set_number: 1,
+      completed: false,
+    },
+  );
+
+  const meta = decodeExerciseLogMeta(String(rows[0]?.notes ?? ""));
+  const reopened = meta.set_logs?.find((set) => set.set_number === 1);
+  assert(outcome.dbChanged, "reopening should save the set");
+  assert(reopened?.completed === false, "the selected set should be incomplete");
+  assert(reopened?.force_incomplete === true, "reopening should override automatic completion");
+  assert(
+    reopened?.makes === 8 && reopened.attempts === 12,
+    "reopening must preserve the saved makes and attempts",
+  );
 });
 
 Deno.test("reverse ordinal drill references use the full ordered workout", async () => {
@@ -293,7 +400,7 @@ Deno.test("reverse ordinal drill references use the full ordered workout", async
       id: `shoot-${number}`,
       name: `Shooting ${number}`,
       order_index: 5 + number,
-    }))
+    })),
   );
 
   const outcome = await executeCoachTool(
@@ -302,13 +409,13 @@ Deno.test("reverse ordinal drill references use the full ordered workout", async
     "day",
     ctx,
     "set_current_drill",
-    { drill_name: "move me to the 5th to last drill of the workout" }
+    { drill_name: "move me to the 5th to last drill of the workout" },
   );
 
   assert(outcome.dbChanged, "fifth-to-last drill should resolve");
   assert(
     ctx.day.active_exercise_id === "shoot-2",
-    "the resolver must count backward through the complete visible drill order"
+    "the resolver must count backward through the complete visible drill order",
   );
 });
 
@@ -320,16 +427,21 @@ Deno.test("written reverse ordinals resolve like numeric reverse ordinals", asyn
     "day",
     ctx,
     "set_current_drill",
-    { drill_name: "second from the end" }
+    { drill_name: "second from the end" },
   );
 
   assert(outcome.dbChanged, "written reverse ordinal should resolve");
-  assert(ctx.day.active_exercise_id === "shoot", "second from end should select shooting");
+  assert(
+    ctx.day.active_exercise_id === "shoot",
+    "second from end should select shooting",
+  );
 });
 
 Deno.test("timer without minutes uses the active timed set duration", async () => {
   const ctx = contextWithPartialShootingSet();
-  const timedExercise = ctx.exercises.find((exercise) => exercise.id === "finish")!;
+  const timedExercise = ctx.exercises.find((exercise) =>
+    exercise.id === "finish"
+  )!;
   timedExercise.category = "defense";
   timedExercise.log_type = "minutes";
   timedExercise.duration = "3 min";
@@ -341,16 +453,25 @@ Deno.test("timer without minutes uses the active timed set duration", async () =
     "day",
     ctx,
     "start_timer",
-    {}
+    {},
   );
 
-  assert(outcome.clientAction?.type === "start_timer", "timer should start for defense drills");
+  assert(
+    outcome.clientAction?.type === "start_timer",
+    "timer should start for defense drills",
+  );
   assert(
     outcome.clientAction?.duration_seconds === 180,
-    "timer must use the active set's three-minute duration, not workout estimate"
+    "timer must use the active set's three-minute duration, not workout estimate",
   );
-  assert(outcome.clientAction?.timer_exercise_id === "finish", "timer must stay attached to active drill");
-  assert(outcome.clientAction?.timer_set_number === 1, "timer must start on the active set");
+  assert(
+    outcome.clientAction?.timer_exercise_id === "finish",
+    "timer must stay attached to active drill",
+  );
+  assert(
+    outcome.clientAction?.timer_set_number === 1,
+    "timer must start on the active set",
+  );
 });
 
 Deno.test("timer without minutes never falls back to the workout duration", async () => {
@@ -363,13 +484,16 @@ Deno.test("timer without minutes never falls back to the workout duration", asyn
     "day",
     ctx,
     "start_timer",
-    {}
+    {},
   );
 
-  assert(outcome.clientAction == null, "shooting drills must not start a workout-length timer");
+  assert(
+    outcome.clientAction == null,
+    "shooting drills must not start a workout-length timer",
+  );
   assert(
     outcome.result.includes("does not have a timed duration"),
-    "coach should request a duration for untimed drills"
+    "coach should request a duration for untimed drills",
   );
 });
 
@@ -381,22 +505,45 @@ Deno.test("sequential zero-make sets inherit the newly selected last drill", asy
   await executeCoachTool(supabase, "user", "day", ctx, "set_current_drill", {
     drill_name: "last drill",
   });
-  await executeCoachTool(supabase, "user", "day", ctx, "save_shooting_results", {
-    set_number: 1,
-    makes: 0,
-  });
+  await executeCoachTool(
+    supabase,
+    "user",
+    "day",
+    ctx,
+    "save_shooting_results",
+    {
+      set_number: 1,
+      makes: 0,
+    },
+  );
   const firstSet = rows[0];
   ctx.logs.set("finish", firstSet as any);
-  await executeCoachTool(supabase, "user", "day", ctx, "save_shooting_results", {
-    set_number: 2,
-    makes: 0,
-  });
+  await executeCoachTool(
+    supabase,
+    "user",
+    "day",
+    ctx,
+    "save_shooting_results",
+    {
+      set_number: 2,
+      makes: 0,
+    },
+  );
 
   const final = rows[1];
-  assert(final.exercise_id === "finish", "result calls must stay on the selected last drill");
+  assert(
+    final.exercise_id === "finish",
+    "result calls must stay on the selected last drill",
+  );
   assert(final.makes === 0, "both zero-make sets should total zero makes");
-  assert(final.attempts === 24, "omitted attempts should use the saved 12-attempt targets");
-  assert(final.completed === true, "both reported sets should complete the drill");
+  assert(
+    final.attempts === 24,
+    "omitted attempts should use the saved 12-attempt targets",
+  );
+  assert(
+    final.completed === true,
+    "both reported sets should complete the drill",
+  );
 });
 
 Deno.test("shooting context labels results far below the makes target", () => {
@@ -409,50 +556,93 @@ Deno.test("shooting context labels results far below the makes target", () => {
     '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":1,"attempts":10,"minutes":null,"completed":true},{"set_number":2,"makes":0,"attempts":10,"minutes":null,"completed":true}]}';
 
   const summary = JSON.parse(buildCompactContextSummary(ctx, null, undefined));
-  const shooting = summary.sequence.drills.find((drill: { exercise_id: string }) =>
-    drill.exercise_id === "shoot"
-  );
+  const shooting = summary.sequence.drills.find((
+    drill: { exercise_id: string },
+  ) => drill.exercise_id === "shoot");
 
   assert(
-    shooting.set_results[0].target_comparison.status === "significantly_below_target",
-    "one make against an eight-make target must be identified as significantly below target"
+    shooting.set_results[0].target_comparison.status ===
+      "significantly_below_target",
+    "one make against an eight-make target must be identified as significantly below target",
   );
   assert(
     shooting.set_results[0].target_comparison.makes_below_target ===
       shooting.target.makes - shooting.set_results[0].makes,
-    "context should expose the exact target gap"
+    "context should expose the exact target gap",
   );
   assert(
-    COACH_SYSTEM_PROMPT.includes("never agree that a below-target result is good"),
-    "the coach must not validate a below-target result as good"
+    COACH_SYSTEM_PROMPT.includes(
+      "never agree that a below-target result is good",
+    ),
+    "the coach must not validate a below-target result as good",
   );
 });
 
 Deno.test("normalized realtime context preserves coach knowledge with less duplication", () => {
   const ctx = contextWithPartialShootingSet();
-  const legacy = buildCompactContextSummary(ctx, { main_goal: "Improve shooting" }, undefined);
-  const compact = buildRealtimeModelContext(ctx, { main_goal: "Improve shooting" }, undefined);
+  const legacy = buildCompactContextSummary(ctx, {
+    main_goal: "Improve shooting",
+  }, undefined);
+  const compact = buildRealtimeModelContext(ctx, {
+    main_goal: "Improve shooting",
+  }, undefined);
   const parsed = JSON.parse(compact);
   const shooting = parsed.drills.find(
-    (drill: { exercise_id: string }) => drill.exercise_id === "shoot"
+    (drill: { exercise_id: string }) => drill.exercise_id === "shoot",
   );
 
-  assert(shooting.name === "Shooting", "compact state must preserve drill identity");
+  assert(
+    shooting.name === "Shooting",
+    "compact state must preserve drill identity",
+  );
   assert(shooting.sets.total === 2, "compact state must preserve set count");
-  assert(shooting.set_results[0].makes === 8, "compact state must preserve actual makes");
-  assert(shooting.set_results[0].attempts === 12, "compact state must preserve actual attempts");
-  assert(shooting.set_results[0].side_label === "left side", "set sides must be preserved");
-  assert(shooting.target_per_set.makes === 8, "per-set makes target must be preserved");
-  assert(shooting.target_per_set.attempts === 12, "per-set attempts target must be preserved");
-  assert(parsed.current_set.set_number === 2, "authoritative current set must be preserved");
-  assert(parsed.next_exercise.name === "Finishing", "next exercise must be preserved");
-  assert(parsed.totals.makes === 8 && parsed.totals.attempts === 12, "totals must be preserved");
-  assert(compact.length < legacy.length * 0.72, "model state should be at least 28% smaller");
+  assert(
+    shooting.set_results[0].makes === 8,
+    "compact state must preserve actual makes",
+  );
+  assert(
+    shooting.set_results[0].attempts === 12,
+    "compact state must preserve actual attempts",
+  );
+  assert(
+    shooting.set_results[0].side_label === "left side",
+    "set sides must be preserved",
+  );
+  assert(
+    shooting.target_per_set.makes === 8,
+    "per-set makes target must be preserved",
+  );
+  assert(
+    shooting.target_per_set.attempts === 12,
+    "per-set attempts target must be preserved",
+  );
+  assert(
+    parsed.current_set.set_number === 2,
+    "authoritative current set must be preserved",
+  );
+  assert(
+    parsed.next_exercise.name === "Finishing",
+    "next exercise must be preserved",
+  );
+  assert(
+    parsed.totals.makes === 8 && parsed.totals.attempts === 12,
+    "totals must be preserved",
+  );
+  assert(
+    compact.length < legacy.length * 0.72,
+    "model state should be at least 28% smaller",
+  );
 
   const update = JSON.parse(buildRealtimeNavigationUpdate(ctx));
-  assert(update.current_set.set_number === 2, "state deltas must preserve the current set");
+  assert(
+    update.current_set.set_number === 2,
+    "state deltas must preserve the current set",
+  );
   assert(update.drills.length === 3, "state deltas must preserve every drill");
-  assert(!("sequence" in update), "state deltas must not repeat the legacy expanded sequence");
+  assert(
+    !("sequence" in update),
+    "state deltas must not repeat the legacy expanded sequence",
+  );
 
   const changed = contextWithPartialShootingSet();
   changed.logs.set("shoot", {
@@ -463,35 +653,56 @@ Deno.test("normalized realtime context preserves coach knowledge with less dupli
       '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":8,"attempts":12,"minutes":null,"completed":true},{"set_number":2,"makes":2,"attempts":3,"minutes":null,"completed":false}]}',
   });
   const delta = JSON.parse(buildRealtimeNavigationUpdate(changed, ctx));
-  assert(delta.state_scope === "delta", "mutation updates must identify themselves as deltas");
+  assert(
+    delta.state_scope === "delta",
+    "mutation updates must identify themselves as deltas",
+  );
   assert(
     delta.drills.length === 1 && delta.drills[0].exercise_id === "shoot",
-    "mutation updates should repeat only changed drill state"
+    "mutation updates should repeat only changed drill state",
   );
-  assert(delta.current_set.progress.attempts === 3, "delta navigation must contain fresh progress");
+  assert(
+    delta.current_set.progress.attempts === 3,
+    "delta navigation must contain fresh progress",
+  );
 });
 
-Deno.test("saved shooting results report target status and add requires permission", async () => {
+Deno.test("saved shooting results report target status and add requires confirmation", async () => {
   const outcome = await executeCoachTool(
     successfulSupabaseMock(),
     "user",
     "day",
     contextWithPartialShootingSet(),
     "save_shooting_results",
-    { drill_name: "Shooting", set_number: 2, makes: 1, attempts: 10 }
+    { drill_name: "Shooting", set_number: 2, makes: 1, attempts: 10 },
   );
-  const addTool = getRealtimeTools().find((tool) => tool.name === "add_workout_exercise");
+  const addTool = getRealtimeTools().find((tool) =>
+    tool.name === "add_workout_exercise"
+  );
 
-  assert(outcome.result.includes("below target and needs work"), "low results must be explicit");
-  assert(outcome.result.includes("Target:"), "saved result should include the authoritative target");
-  assert(outcome.result.includes("1 for 10"), "shooting results must always use the word for");
+  assert(
+    outcome.result.includes("below target and needs work"),
+    "low results must be explicit",
+  );
+  assert(
+    outcome.result.includes("Target:"),
+    "saved result should include the authoritative target",
+  );
+  assert(
+    outcome.result.includes("1 for 10"),
+    "shooting results must always use the word for",
+  );
   assert(
     COACH_SYSTEM_PROMPT.includes('Never say "X slash Y," "X over Y,"'),
-    "the realtime coach must never pronounce shooting results as slash or over"
+    "the realtime coach must never pronounce shooting results as slash or over",
   );
   assert(
-    addTool?.description.includes("only after the athlete explicitly requested"),
-    "adding a weakness drill must require explicit permission"
+    addTool?.description.includes("only after the athlete confirms"),
+    "adding a drill must require confirmation",
+  );
+  assert(
+    COACH_SYSTEM_PROMPT.includes("requires confirmation before mutation"),
+    "an absent requested drill or change must be confirmed before editing",
   );
 });
 
@@ -510,12 +721,18 @@ Deno.test("saving a set keeps guidance on the same drill while another set remai
     "day",
     ctx,
     "save_shooting_results",
-    { drill_name: "Shooting", set_number: 1, makes: 8, attempts: 12, completed: true }
+    {
+      drill_name: "Shooting",
+      set_number: 1,
+      makes: 8,
+      attempts: 12,
+      completed: true,
+    },
   );
 
   assert(
     outcome.result.includes("Next up: set 2 (right side) of Shooting."),
-    "the next unfinished set of the same drill must take priority over the next exercise"
+    "the next unfinished set of the same drill must take priority over the next exercise",
   );
 });
 
@@ -559,13 +776,16 @@ Deno.test("catalog search prioritizes drills matching the workout's shooting wea
         coaching_notes: null,
       },
     ],
-    ctx
+    ctx,
   );
 
-  assert(results[0]?.id === "relevant", "the closest drill to the weak shot type should rank first");
+  assert(
+    results[0]?.id === "relevant",
+    "the closest drill to the weak shot type should rank first",
+  );
   assert(
     results.every((clip) => clip.id !== "unrelated"),
-    "matching words must never allow a weakness search to leave the weak category"
+    "matching words must never allow a weakness search to leave the weak category",
   );
 });
 
@@ -611,16 +831,16 @@ Deno.test("recommendations use a drill as soon as one set is complete", () => {
         coaching_notes: null,
       },
     ],
-    ctx
+    ctx,
   );
 
   assert(
     results[0]?.id === "shooting",
-    "one completed poor shooting set should drive a same-category recommendation"
+    "one completed poor shooting set should drive a same-category recommendation",
   );
   assert(
     results.every((clip) => clip.category === "shooting"),
-    "an incomplete drill's completed set must still preserve strict category matching"
+    "an incomplete drill's completed set must still preserve strict category matching",
   );
 });
 
@@ -674,12 +894,12 @@ Deno.test("another recommendation balances weakness severity against existing fo
         coaching_notes: null,
       },
     ],
-    ctx
+    ctx,
   );
 
   assert(
     results[0]?.id === "finishing-focus",
-    "existing focused coverage should allow another measured weakness to take priority"
+    "existing focused coverage should allow another measured weakness to take priority",
   );
 });
 
@@ -697,14 +917,26 @@ Deno.test("buffer flush preserves partial shooting without completing the set", 
       makes: 4,
       attempts: 5,
       completed: false,
-    }
+    },
   );
   const meta = decodeExerciseLogMeta(String(rows[0].notes ?? ""));
   assert(outcome.dbChanged, "flushing buffered progress should persist");
-  assert(rows[0].completed === false, "partial buffered shots must not complete the drill");
-  assert(meta.set_logs?.[1].makes === 4, "partial makes should remain in set metadata");
-  assert(meta.set_logs?.[1].attempts === 5, "partial attempts should remain in set metadata");
-  assert(meta.set_logs?.[1].completed === false, "the partial set must remain current");
+  assert(
+    rows[0].completed === false,
+    "partial buffered shots must not complete the drill",
+  );
+  assert(
+    meta.set_logs?.[1].makes === 4,
+    "partial makes should remain in set metadata",
+  );
+  assert(
+    meta.set_logs?.[1].attempts === 5,
+    "partial attempts should remain in set metadata",
+  );
+  assert(
+    meta.set_logs?.[1].completed === false,
+    "the partial set must remain current",
+  );
 });
 
 Deno.test("buffer flush completes shooting exactly at the attempt target", async () => {
@@ -721,11 +953,17 @@ Deno.test("buffer flush completes shooting exactly at the attempt target", async
       makes: 7,
       attempts: 12,
       completed: true,
-    }
+    },
   );
   const meta = decodeExerciseLogMeta(String(rows[0].notes ?? ""));
-  assert(rows[0].completed === true, "the final target attempt should complete the drill");
-  assert(meta.set_logs?.[1].completed === true, "the target-complete set should be saved complete");
+  assert(
+    rows[0].completed === true,
+    "the final target attempt should complete the drill",
+  );
+  assert(
+    meta.set_logs?.[1].completed === true,
+    "the target-complete set should be saved complete",
+  );
 });
 
 Deno.test("realtime shooting tools make single shots deterministic", () => {
@@ -737,31 +975,35 @@ Deno.test("realtime shooting tools make single shots deterministic", () => {
   const addTool = tools.find((tool) => tool.name === "add_shooting_result");
   const totalTool = tools.find((tool) => tool.name === "set_shooting_total");
   assert(
-    Boolean(makeTool && missTool && makesTool && missesTool && addTool && totalTool),
-    "all deterministic shot tools must exist"
+    Boolean(
+      makeTool && missTool && makesTool && missesTool && addTool && totalTool,
+    ),
+    "all deterministic shot tools must exist",
   );
   assert(
     totalTool?.description.includes("attempts=makes+misses") &&
       totalTool.description.includes("including completed") &&
       totalTool.description.includes("no navigation") &&
       COACH_SYSTEM_PROMPT.includes(
-        "correct any completed set directly with set_shooting_total and keep it completed"
+        "correct any completed set directly with set_shooting_total and keep it completed",
       ),
-    "completed-set corrections must replace the named set without navigation"
+    "completed-set corrections must replace the named set without navigation",
   );
   assert(
-    !("attempts" in ((makeTool?.parameters?.properties ?? {}) as Record<string, unknown>)) &&
-      !("makes" in ((missTool?.parameters?.properties ?? {}) as Record<string, unknown>)),
-    "single make/miss tools must not accept model-provided shot counts"
+    !("attempts" in
+      ((makeTool?.parameters?.properties ?? {}) as Record<string, unknown>)) &&
+      !("makes" in
+        ((missTool?.parameters?.properties ?? {}) as Record<string, unknown>)),
+    "single make/miss tools must not accept model-provided shot counts",
   );
   assert(
     COACH_SYSTEM_PROMPT.includes("hard-code one attempt"),
-    "Realtime instructions should require deterministic single-shot accounting"
+    "Realtime instructions should require deterministic single-shot accounting",
   );
   assert(
     COACH_SYSTEM_PROMPT.includes('"Made another,"') &&
       COACH_SYSTEM_PROMPT.includes("Never invent a denominator"),
-    "single-shot phrasing must never be converted into a guessed multi-shot result"
+    "single-shot phrasing must never be converted into a guessed multi-shot result",
   );
   assert(
     makesTool?.parameters?.required?.includes("count") &&
@@ -771,30 +1013,43 @@ Deno.test("realtime shooting tools make single shots deterministic", () => {
       COACH_SYSTEM_PROMPT.includes("NUMBER PRECEDENCE") &&
       makeTool?.description.includes("never use when N>1") &&
       missTool?.description.includes("never use when N>1"),
-    "consecutive makes and misses must map to deterministic counted tools"
-  );
-  assert(
-    COACH_SYSTEM_PROMPT.includes('respond with exactly: "You\'re X for Y, N shots left."') &&
-      COACH_SYSTEM_PROMPT.includes("Say nothing before or after it") &&
-      COACH_SYSTEM_PROMPT.includes("record_makes adds exactly N makes and N attempts") &&
-      COACH_SYSTEM_PROMPT.includes("record_misses adds zero makes and exactly N attempts") &&
-      COACH_SYSTEM_PROMPT.includes("never call a singular tool"),
-    "ordinary shot updates must contain only the exact progress sentence"
+    "consecutive makes and misses must map to deterministic counted tools",
   );
   assert(
     COACH_SYSTEM_PROMPT.includes(
-      "save only the athlete's actual cumulative makes and actual cumulative attempts"
+      'respond with exactly: "You\'re X for Y, N shots left."',
+    ) &&
+      COACH_SYSTEM_PROMPT.includes("Say nothing before or after it") &&
+      COACH_SYSTEM_PROMPT.includes(
+        "record_makes adds exactly N makes and N attempts",
+      ) &&
+      COACH_SYSTEM_PROMPT.includes(
+        "record_misses adds zero makes and exactly N attempts",
+      ) &&
+      COACH_SYSTEM_PROMPT.includes("never call a singular tool"),
+    "ordinary shot updates must contain only the exact progress sentence",
+  );
+  assert(
+    COACH_SYSTEM_PROMPT.includes(
+      "save only the athlete's actual cumulative makes and actual cumulative attempts",
     ) && COACH_SYSTEM_PROMPT.includes("Never save the prescribed target makes"),
-    "saved shooting results must never substitute target or remaining numbers"
+    "saved shooting results must never substitute target or remaining numbers",
   );
 });
 
 Deno.test("realtime sessions transcribe audio and retain stable tool contracts", () => {
-  const config = buildRealtimeSessionConfig("instructions", "model", "voice") as {
+  const config = buildRealtimeSessionConfig(
+    "instructions",
+    "model",
+    "voice",
+  ) as {
     audio: {
       input: {
         transcription?: { model?: string; language?: string };
-        turn_detection?: { create_response?: boolean; interrupt_response?: boolean };
+        turn_detection?: {
+          create_response?: boolean;
+          interrupt_response?: boolean;
+        };
       };
     };
     tools: Array<{ name: string }>;
@@ -802,22 +1057,32 @@ Deno.test("realtime sessions transcribe audio and retain stable tool contracts",
   };
   assert(
     config.audio.input.transcription?.model === "gpt-4o-mini-transcribe",
-    "input transcription should allow older audio tokens to be discarded"
+    "input transcription should allow older audio tokens to be discarded",
   );
-  assert(config.audio.input.transcription?.language === "en", "coach transcription is English");
+  assert(
+    config.audio.input.transcription?.language === "en",
+    "coach transcription is English",
+  );
   assert(
     config.audio.input.turn_detection?.create_response === false &&
       config.audio.input.turn_detection?.interrupt_response === false,
-    "the client must route transcripts and interruption explicitly"
+    "the client must route transcripts and interruption explicitly",
   );
-  assert(config.tools.length === getRealtimeTools().length, "all realtime tools must remain enabled");
   assert(
-    config.truncation.type === "retention_ratio" && config.truncation.retention_ratio === 0.8,
-    "prompt-cache-friendly truncation must remain enabled"
+    config.tools.length === getRealtimeTools().length,
+    "all realtime tools must remain enabled",
   );
-  assert(COACH_SYSTEM_PROMPT.length < 7_000, "static realtime rules exceeded their safe budget");
+  assert(
+    config.truncation.type === "retention_ratio" &&
+      config.truncation.retention_ratio === 0.8,
+    "prompt-cache-friendly truncation must remain enabled",
+  );
+  assert(
+    COACH_SYSTEM_PROMPT.length < 7_000,
+    "static realtime rules exceeded their safe budget",
+  );
   assert(
     JSON.stringify(getRealtimeTools()).length < 9_000,
-    "realtime tool schemas exceeded their safe budget"
+    "realtime tool schemas exceeded their safe budget",
   );
 });
