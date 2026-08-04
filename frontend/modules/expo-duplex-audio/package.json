@@ -1,0 +1,14 @@
+{
+  "name": "expo-duplex-audio",
+  "version": "1.0.0",
+  "description": "Local Expo module for low-latency duplex mono PCM audio.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "sideEffects": false,
+  "license": "UNLICENSED",
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}

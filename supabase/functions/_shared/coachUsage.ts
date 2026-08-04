@@ -9,6 +9,45 @@ export const COACH_LIMITS = {
 
 export const COACH_DAILY_BUDGET_USD = COACH_LIMITS.maxDailyCostUsd;
 
+export const CARTESIA_RATES = {
+  /** Public direct-API billing units; override the USD conversion for the account plan. */
+  ink2CreditsPerAudioSecond: 3,
+  sonic35CreditsPerCharacter: 1,
+  usdPerMillionCredits: 50,
+} as const;
+
+export const RESPONSES_RATES = {
+  "gpt-5.6-luna": { input: 1 / 1_000_000, output: 6 / 1_000_000 },
+  "gpt-5.6-terra": { input: 2.5 / 1_000_000, output: 15 / 1_000_000 },
+} as const;
+
+export function estimateCartesiaCostUsd(input: {
+  sttAudioSeconds?: number;
+  ttsCharacters?: number;
+  usdPerMillionCredits?: number;
+}): number {
+  const credits =
+    Math.max(0, input.sttAudioSeconds ?? 0) * CARTESIA_RATES.ink2CreditsPerAudioSecond +
+    Math.max(0, input.ttsCharacters ?? 0) * CARTESIA_RATES.sonic35CreditsPerCharacter;
+  return (
+    credits *
+    Math.max(0, input.usdPerMillionCredits ?? CARTESIA_RATES.usdPerMillionCredits) /
+    1_000_000
+  );
+}
+
+export function estimateResponsesCostUsd(input: {
+  model: keyof typeof RESPONSES_RATES;
+  inputTokens?: number;
+  outputTokens?: number;
+}): number {
+  const rate = RESPONSES_RATES[input.model];
+  return (
+    Math.max(0, input.inputTokens ?? 0) * rate.input +
+    Math.max(0, input.outputTokens ?? 0) * rate.output
+  );
+}
+
 export const TTS_MODEL = "gpt-4o-mini-tts";
 export const TTS_MAX_TEXT_LENGTH = 300;
 export const TTS_MAX_REQUESTS_PER_MINUTE = 30;

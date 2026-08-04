@@ -65,6 +65,7 @@ interface IntentBase<K extends string, A> {
 
 export type CoachSpeechIntent =
   | IntentBase<"shot", ShotIntentArgs>
+  | IntentBase<"undo_shot", Record<string, never>>
   | IntentBase<"timer", TimerIntentArgs>
   | IntentBase<"timer_duration_confirmation", TimerDurationConfirmationArgs>
   | IntentBase<"navigation", NavigationIntentArgs>
@@ -699,15 +700,8 @@ export const parseProgressIntent: Parser = (text) => {
           : "exercise";
     return intent("progress", { metric: "remaining", scope }, `${scope} remaining heard`);
   }
-  if (
-    /^(?:how many attempts (?:are there )?(?:for|in) (?:this|the current) set|what are (?:the )?(?:attempts for (?:this|the current) set|(?:this|the current) sets attempts))$/.test(
-      text
-    )
-  ) {
-    return intent("progress", { metric: "target", scope: "set" }, "set target heard");
-  }
   const target = text.match(
-    /^(?:(?:whats|what is) (?:my|the) (?:target|goal)(?: and attempts?)?|what are (?:my|the) target(?: makes)? and attempts?|what (?:do i need|am i aiming for|am i trying to get)|how many (?:shots|makes) (?:do i need|is the target))(?:\s+for|\s+on|\s+in)?\s*(?:this|the current|my)?\s*(set|drill|exercise|workout)?$/
+    /^(?:(?:whats|what is) (?:my|the) (?:target|goal)(?: and attempts?)?|what are (?:my|the) target(?: makes)? and attempts?|what are this sets (?:target )?attempts?|how many attempts (?:are|is) (?:in|for) this set|what (?:do i need|am i aiming for|am i trying to get)|how many (?:shots|makes) (?:do i need|is the target))(?:\s+for|\s+on|\s+in)?\s*(?:this|the current|my)?\s*(set|drill|exercise|workout)?$/
   );
   if (target) {
     const namedScope = target[1];
@@ -806,8 +800,20 @@ export const parseAdjustWorkoutIntent: Parser = (text) => {
   );
 };
 
+export const parseUndoShotIntent: Parser = (text) => {
+  if (
+    !/^(?:(?:please\s+)?(?:undo|revert|take back|remove|delete)(?:\s+(?:that|it|the|my))?(?:\s+(?:last|latest|previous))?(?:\s+(?:shot|make|miss|result))?|scratch that)$/.test(
+      text
+    )
+  ) {
+    return null;
+  }
+  return intent("undo_shot", {}, "Undo last shot heard", 0.99);
+};
+
 const PARSERS: readonly Parser[] = [
   parseSaveNoteIntent,
+  parseUndoShotIntent,
   parseShotIntent,
   parseTimerIntent,
   parseNavigationIntent,

@@ -12,7 +12,7 @@ const GUIDE_SECTIONS = [
     icon: "headset-outline" as const,
     title: "Best voice experience",
     description:
-      "Realtime coaching needs a decent-to-good, stable internet connection. Bluetooth headphones are needed for the best voice experience; connect them before opening Coach and speak clearly.",
+      "Streamed voice coaching needs a decent-to-good, stable internet connection. Bluetooth headphones give the best experience; connect them before opening Coach and speak clearly.",
     examples: [
       "Use a decent-to-good Wi-Fi or cellular connection.",
       "Connect Bluetooth headphones so the coach audio does not feed back into your microphone.",
@@ -29,6 +29,7 @@ const GUIDE_SECTIONS = [
     examples: [
       '"I made 10 shots."',
       '"I made 8 out of 10 on set two."',
+      '"Undo that last shot."',
       '"Mark set two complete."',
       '"Reopen set one."',
     ],

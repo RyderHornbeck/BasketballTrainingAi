@@ -30,9 +30,19 @@ export const COACH_PROFILES = [
 ] as const;
 
 export type CoachVoice = (typeof COACH_PROFILES)[number]["voice"];
+export type CoachPersonaId = (typeof COACH_PROFILES)[number]["id"];
 
 export const DEFAULT_COACH_VOICE: CoachVoice = "ash";
 
 export function getCoachProfile(voice: string | null | undefined) {
-  return COACH_PROFILES.find((coach) => coach.voice === voice) ?? COACH_PROFILES[0];
+  return (
+    COACH_PROFILES.find((coach) => coach.voice === voice || coach.id === voice) ??
+    COACH_PROFILES.find((coach) => coach.voice === DEFAULT_COACH_VOICE)!
+  );
+}
+
+export function getCoachPersonaId(
+  voice: string | null | undefined
+): CoachPersonaId {
+  return getCoachProfile(voice).id;
 }

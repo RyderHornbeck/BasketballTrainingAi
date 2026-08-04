@@ -89,6 +89,17 @@ test("parses make and miss vocabulary", () => {
   for (const [phrase, args] of cases) expectIntent(phrase, { kind: "shot", args });
 });
 
+test("parses natural requests to undo the latest shot", () => {
+  for (const phrase of [
+    "undo that",
+    "take back the last shot",
+    "remove my previous miss",
+    "scratch that",
+  ]) {
+    expectIntent(phrase, { kind: "undo_shot", args: {} });
+  }
+});
+
 test("removes conversational padding before every command family", () => {
   expectIntent("Bruh, can you start a thirty second timer?", {
     kind: "timer",
@@ -330,8 +341,8 @@ test("parses targets, totals, and remaining-work queries", () => {
     ["what's my target for this set", { metric: "target", scope: "set" }],
     ["what's my target and attempts for this set", { metric: "target", scope: "set" }],
     ["what are my target makes and attempts", { metric: "target", scope: "set" }],
-    ["how many attempts are there for this set", { metric: "target", scope: "set" }],
     ["what are this set's attempts", { metric: "target", scope: "set" }],
+    ["how many attempts are in this set", { metric: "target", scope: "set" }],
     ["what's the goal", { metric: "target", scope: "set" }],
     ["what am I aiming for", { metric: "target", scope: "set" }],
     ["how many makes do I have in this set", { metric: "totals", scope: "set" }],
@@ -435,4 +446,3 @@ test("preserves the shotSpeech compatibility exports", () => {
     { makes: 2, attempts: 4 }
   );
 });
-

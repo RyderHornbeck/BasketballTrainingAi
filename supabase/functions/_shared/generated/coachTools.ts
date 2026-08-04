@@ -1178,8 +1178,13 @@ export interface RealtimeFunctionTool {
 export const COACH_TOOL_NAMES = new Set<string>(
   GENERATED_COACH_TOOL_REGISTRY.map((tool) => tool.name)
 );
+export const COACH_SERVER_TOOL_NAMES = new Set<string>(
+  GENERATED_COACH_TOOL_REGISTRY.filter((tool) => tool.execution === "server").map((tool) => tool.name)
+);
 export const COACH_READ_ONLY_TOOLS = new Set<string>(
-  GENERATED_COACH_TOOL_REGISTRY.filter((tool) => tool.kind === "read_only").map((tool) => tool.name)
+  GENERATED_COACH_TOOL_REGISTRY
+    .filter((tool) => tool.execution === "server" && tool.kind === "read_only")
+    .map((tool) => tool.name)
 );
 export const COACH_IDEMPOTENT_TOOLS = new Set<string>(
   GENERATED_COACH_TOOL_REGISTRY.filter((tool) => tool.kind === "mutation" && tool.execution === "server")
@@ -1283,4 +1288,26 @@ export function generatedRealtimeTools(
       description: tool.description,
       parameters: tool.parameters,
     })) as RealtimeFunctionTool[];
+}
+
+export function generatedResponseTools(
+  capabilities?: readonly CoachCapability[]
+): Array<RealtimeFunctionTool & { strict: false }> {
+  const allowed = capabilities ? new Set(capabilities) : null;
+  return GENERATED_COACH_TOOL_REGISTRY
+    .filter((tool) =>
+      tool.execution === "server"
+      && tool.realtime
+      && (!allowed || allowed.has(tool.capability))
+    )
+    .map((tool) => ({
+      type: "function" as const,
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      // Optional drill references are intentional, so OpenAI strict mode cannot
+      // be used without changing the domain contract. Runtime validation below
+      // remains authoritative.
+      strict: false as const,
+    })) as Array<RealtimeFunctionTool & { strict: false }>;
 }

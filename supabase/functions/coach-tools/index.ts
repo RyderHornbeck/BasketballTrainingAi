@@ -13,7 +13,7 @@ import {
 import {
   COACH_IDEMPOTENT_TOOLS,
   COACH_READ_ONLY_TOOLS,
-  GENERATED_COACH_TOOL_REGISTRY,
+  COACH_SERVER_TOOL_NAMES,
   validateCoachToolArguments,
 } from "../_shared/generated/coachTools.ts";
 
@@ -87,27 +87,21 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "Invalid tool request" }, 400);
     }
 
-    const args = { ...(body.arguments ?? {}) };
+    if (!COACH_SERVER_TOOL_NAMES.has(body.tool_name)) {
+      return jsonResponse({ error: "Unsupported tool" }, 400);
+    }
+    const validated = validateCoachToolArguments(body.tool_name, body.arguments ?? {});
+    if (!validated.ok) {
+      return jsonResponse(
+        { error: validated.error, code: "invalid_tool_arguments" },
+        400
+      );
+    }
+    const args = { ...validated.value };
     let clientRequestId =
       typeof args.client_request_id === "string" ? args.client_request_id : null;
 
-    const idempotentTools = COACH_IDEMPOTENT_TOOLS;
-    const readOnlyTools = COACH_READ_ONLY_TOOLS;
-    const allowedTools = new Set(
-      GENERATED_COACH_TOOL_REGISTRY
-        .filter((tool) => tool.execution === "server")
-        .map((tool) => tool.name)
-    );
-    if (!allowedTools.has(body.tool_name)) {
-      return jsonResponse({ error: "Unsupported tool" }, 400);
-    }
-
-    const validation = validateCoachToolArguments(body.tool_name, body.arguments ?? {});
-    if (!validation.ok) {
-      return jsonResponse({ error: validation.error, code: "invalid_tool_arguments" }, 400);
-    }
-
-    if (!clientRequestId && idempotentTools.has(body.tool_name)) {
+    if (!clientRequestId && COACH_IDEMPOTENT_TOOLS.has(body.tool_name)) {
       clientRequestId = `${body.tool_name}-${userId}-${crypto.randomUUID()}`;
       args.client_request_id = clientRequestId;
     }
@@ -171,7 +165,7 @@ Deno.serve(async (req: Request) => {
           say: cached.local_confirmation ?? cached.result,
           continuation: cached.skip_model_response
             ? "none"
-            : readOnlyTools.has(body.tool_name)
+            : COACH_READ_ONLY_TOOLS.has(body.tool_name)
               ? "model"
               : "speak_exact",
           client_action: cached.client_action,
@@ -196,7 +190,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: activeSession } = await supabase
       .from("coach_sessions")
-      .select("id, day_id, expires_at, ended_at")
+      .select("id, day_id, expires_at, ended_at, state_version")
       .eq("session_key", body.session_key)
       .eq("user_id", userId)
       .maybeSingle();
@@ -237,6 +231,19 @@ Deno.serve(async (req: Request) => {
       throw toolError;
     }
 
+    let stateVersion = Number(activeSession.state_version ?? 0);
+    if (outcome.dbChanged) {
+      const { data: advancedVersion, error: stateError } = await supabase.rpc(
+        "advance_coach_session_state",
+        {
+          p_session_id: activeSession.id,
+          p_user_id: userId,
+        }
+      );
+      if (stateError) throw stateError;
+      stateVersion = Number(advancedVersion ?? stateVersion + 1);
+    }
+
     if (claimedRequestId) {
       const { error: completionError } = await supabase
         .from("coach_tool_requests")
@@ -262,11 +269,11 @@ Deno.serve(async (req: Request) => {
     const refreshedContext = outcome.dbChanged
       ? await loadWorkoutContext(supabase, userId, body.day_id)
       : ctx;
-    const toolKind = readOnlyTools.has(body.tool_name) ? "read_only" : "mutation";
-
+    const toolKind = COACH_READ_ONLY_TOOLS.has(body.tool_name) ? "read_only" : "mutation";
     const contextJson = refreshedContext
       ? buildCompactContextSummary(refreshedContext, answers ?? null, undefined)
       : null;
+
     return jsonResponse({
       ok: true,
       status: "succeeded",
@@ -297,6 +304,7 @@ Deno.serve(async (req: Request) => {
         : null,
       tool_kind: toolKind,
       requires_spoken_confirmation: toolKind === "mutation" && !outcome.skipModelResponse,
+      state_version: stateVersion,
     });
   } catch (err) {
     console.error("coach-tools error:", err);

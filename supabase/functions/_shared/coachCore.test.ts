@@ -498,21 +498,11 @@ Deno.test("second-based timer requests stay in seconds", async () => {
   );
 
   assert(
-    outcome.clientAction == null &&
-      outcome.result.includes("change it to 30 seconds"),
-    "a different duration must require confirmation",
-  );
-  const confirmed = await executeCoachTool(
-    successfulSupabaseMock(),
-    "user",
-    "day",
-    ctx,
-    "start_timer",
-    { seconds: 30, duration_confirmation_token: "confirmed" },
+    outcome.clientAction?.duration_seconds === 30,
+    "30 seconds must not become 30 minutes",
   );
   assert(
-    confirmed.clientAction?.duration_seconds === 30 &&
-      confirmed.result === "A 30-second timer has been started.",
+    outcome.result === "A 30-second timer has been started.",
     "the timer announcement must preserve seconds",
   );
 });
@@ -709,7 +699,9 @@ Deno.test("shooting context labels results far below the makes target", () => {
     "context should expose the exact target gap",
   );
   assert(
-    COACH_SYSTEM_PROMPT.includes("below a makes target needs work"),
+    COACH_SYSTEM_PROMPT.includes(
+      "never agree that a below-target result is good",
+    ),
     "the coach must not validate a below-target result as good",
   );
 });
@@ -789,11 +781,13 @@ Deno.test("normalized realtime context preserves coach knowledge with less dupli
       '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":8,"attempts":12,"minutes":null,"completed":true},{"set_number":2,"makes":2,"attempts":3,"minutes":null,"completed":false}]}',
   });
   const delta = JSON.parse(buildRealtimeNavigationUpdate(changed, ctx));
-  assert(delta.state_scope === "full", "every update must be a full replacement");
   assert(
-    delta.drills.length === 3 &&
-      delta.drills.some((drill: { exercise_id: string }) => drill.exercise_id === "shoot"),
-    "full replacements must preserve every drill",
+    delta.state_scope === "delta",
+    "mutation updates must identify themselves as deltas",
+  );
+  assert(
+    delta.drills.length === 1 && delta.drills[0].exercise_id === "shoot",
+    "mutation updates should repeat only changed drill state",
   );
   assert(
     delta.current_set.progress.attempts === 3,
@@ -811,7 +805,7 @@ Deno.test("saved shooting results report target status and add requires confirma
     { drill_name: "Shooting", set_number: 2, makes: 1, attempts: 10 },
   );
   const addTool = getRealtimeTools().find((tool) =>
-    tool.name === "add_exercise"
+    tool.name === "add_workout_exercise"
   );
 
   assert(
@@ -827,15 +821,15 @@ Deno.test("saved shooting results report target status and add requires confirma
     "shooting results must always use the word for",
   );
   assert(
-    COACH_SYSTEM_PROMPT.includes('Say shot counts only as "X for Y."'),
+    COACH_SYSTEM_PROMPT.includes('Never say "X slash Y," "X over Y,"'),
     "the realtime coach must never pronounce shooting results as slash or over",
   );
   assert(
-    addTool?.description.includes("explicitly confirms"),
+    addTool?.description.includes("only after the athlete confirms"),
     "adding a drill must require confirmation",
   );
   assert(
-    COACH_SYSTEM_PROMPT.includes("only after the required confirmation"),
+    COACH_SYSTEM_PROMPT.includes("requires confirmation before mutation"),
     "an absent requested drill or change must be confirmed before editing",
   );
 });
@@ -1100,39 +1094,100 @@ Deno.test("buffer flush completes shooting exactly at the attempt target", async
   );
 });
 
-Deno.test("realtime shooting tools make single shots deterministic", () => {
-  const tools = getRealtimeTools();
-  const shotsTool = tools.find((tool) => tool.name === "update_shots");
+Deno.test("shot undo can persist a set back to zero attempts", async () => {
+  const rows: Record<string, unknown>[] = [];
+  await executeCoachTool(
+    capturingSupabaseMock(rows),
+    "user",
+    "day",
+    contextWithPartialShootingSet(),
+    "save_shooting_results",
+    {
+      drill_name: "Shooting",
+      set_number: 2,
+      makes: 0,
+      attempts: 0,
+      completed: false,
+    },
+  );
+  const meta = decodeExerciseLogMeta(String(rows[0].notes ?? ""));
   assert(
-    Boolean(shotsTool),
-    "the consolidated realtime shot tool must exist",
+    rows[0].attempts === 12,
+    "zero attempts must not fall back to the prescribed attempt target",
   );
   assert(
-    shotsTool?.description.includes("cumulative correction") &&
-      shotsTool.parameters.required?.includes("set_number"),
+    meta.set_logs?.[1].attempts === 0 && meta.set_logs?.[1].completed === false,
+    "undoing the first shot should persist an empty, incomplete set",
+  );
+});
+
+Deno.test("realtime shooting tools make single shots deterministic", () => {
+  const tools = getRealtimeTools();
+  const makeTool = tools.find((tool) => tool.name === "record_make");
+  const missTool = tools.find((tool) => tool.name === "record_miss");
+  const makesTool = tools.find((tool) => tool.name === "record_makes");
+  const missesTool = tools.find((tool) => tool.name === "record_misses");
+  const addTool = tools.find((tool) => tool.name === "add_shooting_result");
+  const totalTool = tools.find((tool) => tool.name === "set_shooting_total");
+  assert(
+    Boolean(
+      makeTool && missTool && makesTool && missesTool && addTool && totalTool,
+    ),
+    "all deterministic shot tools must exist",
+  );
+  assert(
+    totalTool?.description.includes("attempts=makes+misses") &&
+      totalTool.description.includes("including completed") &&
+      totalTool.description.includes("no navigation") &&
+      COACH_SYSTEM_PROMPT.includes(
+        "correct any completed set directly with set_shooting_total and keep it completed",
+      ),
     "completed-set corrections must replace the named set without navigation",
   );
   assert(
-    shotsTool?.parameters.required?.includes("makes") &&
-      shotsTool.parameters.required?.includes("attempts") &&
-      JSON.stringify(shotsTool.parameters).includes('"add"') &&
-      JSON.stringify(shotsTool.parameters).includes('"replace"'),
-    "shot updates must make add-versus-replace explicit",
+    !("attempts" in
+      ((makeTool?.parameters?.properties ?? {}) as Record<string, unknown>)) &&
+      !("makes" in
+        ((missTool?.parameters?.properties ?? {}) as Record<string, unknown>)),
+    "single make/miss tools must not accept model-provided shot counts",
   );
   assert(
-    COACH_SYSTEM_PROMPT.includes('"Made N" is add N makes in N attempts') &&
-      COACH_SYSTEM_PROMPT.includes('"Missed N" is add 0 makes in N attempts'),
+    COACH_SYSTEM_PROMPT.includes("hard-code one attempt"),
+    "Realtime instructions should require deterministic single-shot accounting",
+  );
+  assert(
+    COACH_SYSTEM_PROMPT.includes('"Made another,"') &&
+      COACH_SYSTEM_PROMPT.includes("Never invent a denominator"),
+    "single-shot phrasing must never be converted into a guessed multi-shot result",
+  );
+  assert(
+    makesTool?.parameters?.required?.includes("count") &&
+      missesTool?.parameters?.required?.includes("count") &&
+      COACH_SYSTEM_PROMPT.includes("call record_makes once with count N") &&
+      COACH_SYSTEM_PROMPT.includes("call record_misses once with count N") &&
+      COACH_SYSTEM_PROMPT.includes("NUMBER PRECEDENCE") &&
+      makeTool?.description.includes("never use when N>1") &&
+      missTool?.description.includes("never use when N>1"),
     "consecutive makes and misses must map to deterministic counted tools",
   );
   assert(
     COACH_SYSTEM_PROMPT.includes(
-      'Ordinary partial result: "You\'re X for Y, N shots left."',
-    ),
+      'respond with exactly: "You\'re X for Y, N shots left."',
+    ) &&
+      COACH_SYSTEM_PROMPT.includes("Say nothing before or after it") &&
+      COACH_SYSTEM_PROMPT.includes(
+        "record_makes adds exactly N makes and N attempts",
+      ) &&
+      COACH_SYSTEM_PROMPT.includes(
+        "record_misses adds zero makes and exactly N attempts",
+      ) &&
+      COACH_SYSTEM_PROMPT.includes("never call a singular tool"),
     "ordinary shot updates must contain only the exact progress sentence",
   );
   assert(
-    COACH_SYSTEM_PROMPT.includes("Persist actual makes and attempts only") &&
-      COACH_SYSTEM_PROMPT.includes("Targets NEVER become results"),
+    COACH_SYSTEM_PROMPT.includes(
+      "save only the athlete's actual cumulative makes and actual cumulative attempts",
+    ) && COACH_SYSTEM_PROMPT.includes("Never save the prescribed target makes"),
     "saved shooting results must never substitute target or remaining numbers",
   );
 });
@@ -1152,6 +1207,7 @@ Deno.test("realtime sessions transcribe audio and retain stable tool contracts",
         };
       };
     };
+    reasoning: { effort?: string };
     tools: Array<{ name: string }>;
     truncation: { type?: string; retention_ratio?: number };
   };
@@ -1169,6 +1225,10 @@ Deno.test("realtime sessions transcribe audio and retain stable tool contracts",
     "the client must route transcripts and interruption explicitly",
   );
   assert(
+    config.reasoning.effort === "high",
+    "realtime reasoning effort should be high",
+  );
+  assert(
     config.tools.length === getRealtimeTools().length,
     "all realtime tools must remain enabled",
   );
@@ -1178,8 +1238,8 @@ Deno.test("realtime sessions transcribe audio and retain stable tool contracts",
     "prompt-cache-friendly truncation must remain enabled",
   );
   assert(
-    COACH_SYSTEM_PROMPT.length < 7_000,
-    "static realtime rules exceeded their safe budget",
+    COACH_SYSTEM_PROMPT.length < 9_000,
+    "shared coach rules exceeded their safe budget",
   );
   assert(
     JSON.stringify(getRealtimeTools()).length < 9_000,

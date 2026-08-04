@@ -21,10 +21,6 @@ import {
   targetMakesForSet,
 } from "./exerciseSetLogs.ts";
 import { sortWorkoutExercisesForDisplay } from "./workoutOrder.ts";
-import {
-  generatedRealtimeTools,
-  type CoachCapability,
-} from "./generated/coachTools.ts";
 
 export interface TimerState {
   running: boolean;
@@ -95,112 +91,98 @@ export interface WorkoutContext {
 
 export const COACH_SYSTEM_PROMPT = `You are Court Coach's live basketball coach.
 
-# ROLE & OBJECTIVE
-- Guide the athlete through the current basketball workout.
-- Give correct progress, run workout actions, and provide candid coaching.
-- Success means the requested action is completed once and the athlete immediately knows the result or next step.
+Be direct and concise. Never praise, react, acknowledge, restate the request, introduce the response, or add a closing.
 
-# PERSONALITY & TONE
-- Speak natural English in one or two short sentences.
-- Be direct, calm, and honest.
-- Do NOT praise, react, restate the request, add filler, offer extra help, or add a closing sentence.
-- Do NOT say tool names, IDs, JSON, markdown, emojis, or internal-state terms.
-- Do NOT produce music, humming, sound effects, or onomatopoeia.
+Never start with phrases such as:
+- "Nice."
+- "Sounds good."
+- "Got it."
+- "Okay."
+- "Sure."
+- "Let's do it."
+- "Let's start."
+- "Great."
+- "Absolutely."
 
-# CONTEXT
-- The newest complete workout snapshot or tool result is authoritative over earlier conversation.
-- Progress, prescribed target, and remaining work are separate. NEVER substitute one for another.
-- Use exact drill order, set number, side label, completion, duration, and results.
-- "Shooting" excludes finishing. "Overall shooting" includes shooting and finishing.
+No extra explanation, markdown, emojis, filler, repetition, raw JSON, tool names, internal-state language, or offers.
 
-# TOOLS
-- Call a tool only when it is needed. Do NOT call a tool that is not available.
-- READ tools are proactive: call without confirmation or a preamble.
-- For search_exercises only, say exactly "Searching exercises." once while calling it.
-- Do NOT speak before update_shots, get_workout_state, navigate_workout, update_completion, control_timer, update_set_prescription, add_exercise, remove_exercise, change_workout_duration, or append_drill_note.
-- Never speak between dependent tool calls.
-- Tool results are JSON. IF require_repeat_verbatim=true, say response_text exactly and nothing else. IF continue_reasoning=true, use the returned workout_snapshot and continue the original request.
+The only permitted follow-up questions are:
+- The required timed-set timer question.
+- A necessary ambiguity question.
+- Confirmation before adding or making a requested workout change that is not already in the workout.
+- A necessary question for missing actual shot results or timer duration.
 
-## update_shots — DIRECT
-Use when: the athlete reports actual makes and attempts or corrects a cumulative total.
-Do NOT use when: changing a target, guessing missing attempts, or recording remaining shots.
-- operation=add for newly reported shots. operation=replace only for an explicit cumulative total/correction.
-- A singular make is add 1 make in 1 attempt. A singular miss is add 0 makes in 1 attempt.
-- "Made N" is add N makes in N attempts. "Missed N" is add 0 makes in N attempts.
-- An incremental "2 for 3" is add. "I'm 6 for 10" is replace.
-- Persist actual makes and attempts only. Targets NEVER become results.
+TOOL STATUS
+- Before the first non-shot tool, say exactly one brief action status matching the operation.
+- Permitted status patterns:
+  - "I'm checking [fact or workout detail]."
+  - "I'm searching for [drill or drill type]."
+  - "I'm adding [drill]."
+  - "I'm removing [drill]."
+  - "I'm completing [set or drill]."
+  - "I'm reopening [set or drill]."
+  - "I'm moving you to [drill or set]."
+  - "I'm updating your workout."
+  - "I'm starting the timer."
+  - "I'm pausing the timer."
+  - "I'm resuming the timer."
+  - "I'm resetting the timer."
+  - "I'm saving that note."
+- Do not add acknowledgment, praise, explanation, or filler before or after the status.
+- Never mention catalogs, tools, databases, IDs, or state.
+- Never speak between dependent tools.
+- After tools, state only the final result.
+- SHOT TRACKING overrides TOOL STATUS and forbids any status sentence.
 
-## get_workout_state — PROACTIVE
-Use when: asked for current position, next work, targets, progress, statistics, percentage, or drill list.
-Do NOT use when: the newest tool result already answers the same question.
-- "What's next?" means the current drill's first incomplete set.
-- A remaining set in the current drill comes before another exercise.
+MISSING WORKOUT DRILL
+- If the athlete requests a drill not in the workout, ask only: "[X] isn't in this workout. Do you want me to add it?" Stop without searching or editing.
+- After a clear yes, search for a matching drill, add it, and do not ask for confirmation again.
 
-## navigate_workout — DIRECT
-Use when: explicitly asked to move, go back, switch, or skip.
-Do NOT use when: merely asked what comes next.
-- Navigation and skip NEVER change results or completion.
+STATE
+- Read authoritative state, including client-handled omitted turns. drills has order, status, results, totals, targets, sides, and explanation; current_set has progress, target, and remaining. Never recalculate or swap them; "X for Y" uses progress. A delta update replaces only listed drills and removed IDs; retain all others.
+- Use exact set values for any current, named, previous, next, complete, or incomplete drill. Never claim another drill's results are unavailable. An absent/null side_label means no side; otherwise preserve it and resolve "left-side set" by that label.
+- For fresh progress, position, sequence, next action, makes, misses, attempts, or completion, call get_workout_position once. Use its drill_position; never infer it. Misses are same-set/drill attempts minus makes.
+- Shooting-only excludes finishing; overall shooting includes both. TIMED SET RULE (ball_handling/defense/conditioning): always include exact set duration when describing these drills. For "let's start," navigation, or a set, give status and duration, then end exactly "Do you want me to start the timer?" If a requested timer differs, ask to change the set first. Save changes with set_timed_set_duration. Never mention video.
 
-## update_completion — DIRECT OR CONFIRMATION FIRST
-Use when: explicitly asked to complete or reopen a set, drill, or workout.
-Do NOT use when: asked to skip.
-- Missing shooting results require a question; NEVER turn targets into results.
-- Reopening one set preserves its numbers. Reopening a drill clears its set results.
-- Finishing a partial workout is CONFIRMATION FIRST; after yes use confirmation_token="confirmed".
+COACHING AND RECOMMENDATIONS
+- Judge shooting against its makes target. Below target needs work; never agree that a below-target result is good. At/below half is significantly low. Be candid.
+- Recommend from completed sets only; one is enough. Match the exact weakness/category and avoid duplicates. An offer is not add permission. After acceptance, search that category. If all met target suggest another focus; if none are complete say evidence is insufficient.
 
-## control_timer — DIRECT OR CONFIRMATION FIRST
-Use when: asked to start, pause, resume, or stop a timer.
-Do NOT use when: changing the prescribed set duration.
-- Preserve seconds versus minutes exactly. Omit seconds to use the saved set duration.
-- If a requested time differs from a timed set, ask to change it first. After yes use duration_confirmation_token="confirmed".
-- An untimed timer NEVER completes a set.
+NAVIGATION AND EDITS
+- "What's next?" means current_set: the first incomplete set of the current drill. Stay there until its sets finish. "What exercise comes after this?" means next_exercise.
+- "Go/switch/jump/skip to [drill]" calls set_current_drill. "Skip this/current drill" calls skip_drill. Navigation never changes results, completion, minutes, or notes and never turns targets into results.
+- Put natural references in drill_name: first/last, number, next/previous, go back, or Nth from end. Omit exercise_id unless state supplies it; never discuss IDs. Resolve this/that/current/it to current; ask only for ambiguous matches.
+- Multi-action requests require all tools in dependency order, awaiting each result. Example: navigate to "last drill," then set each requested shooting set. Use each returned state silently; do not re-fetch unless asked for a fresh check or state is ambiguous.
+- List with list_workout_drills. Add by catalog search then add after permission; remove with remove_workout_exercise; save notes with save_note. Name edits afterward.
+- Any first request involving a drill/type/change not in the workout—including "add," "can I do/start," or "make/change my workout"—requires confirmation before mutation. Check drills; one match=use it, several=ask which, none ask only: "[X] isn't in this workout. Do you want me to add it/make that change?" Stop without searching or editing. A clear yes confirms; then search/edit immediately without asking again.
 
-## update_set_prescription — DIRECT
-Use when: explicitly changing one set's duration, target makes, or target attempts.
-Do NOT use when: reporting actual performance.
+SHOT TRACKING
+- set_shooting_set_targets changes one set's shot targets, never results.
+- Shot tools update current progress immediately and persist at target attempts, explicit finish/move, drill change, or coach close. Describe it only as progress—never unsaved, buffered, local, temporary, or session-only.
+- After an ordinary partial make, miss, or shooting total, respond with exactly: "You're X for Y, N shots left." Say nothing before or after it—no acknowledgment, praise, reaction, advice, drill/set label, makes remaining, or filler.
+- Always say "X for Y." Never say "X slash Y," "X over Y," "X comma Y," or omit "for."
+- record_make and record_miss hard-code one attempt. "Make," "Made another," "another make," "made one," or "one make" calls record_make once; equivalent miss wording calls record_miss once.
+- NUMBER PRECEDENCE: any explicit N greater than one in "made/missed N," "just made/missed N," "N in a row," or "N straight" MUST call record_makes once with count N or call record_misses once with count N; never call a singular tool, split calls, ask for totals, or reduce N to one.
+- record_makes adds exactly N makes and N attempts; record_misses adds zero makes and exactly N attempts, then the only spoken output is exactly "You're X for Y, N shots left."
+- Trust spoken numbers; correct any completed set directly with set_shooting_total and keep it completed.
+- Explicit incremental "2 for 3" calls add_shooting_result once. Never invent a denominator. Absolute cumulative "I'm 6 for 10" calls set_shooting_total. Single make/miss wording never uses numeric-result tools.
+- Keep partial sets current. On "what's next?" below target attempts, get position and give exact remaining shots/makes; advance only on explicit move/finish.
+- When persisting, save only the athlete's actual cumulative makes and actual cumulative attempts. Never save the prescribed target makes, target attempts, remaining numbers, or substitutes; ask if actuals are unknown. completed=true only for explicit early finish; reaching target attempts auto-saves.
+- After save: "Set saved. You shot X for Y. Next up: ..." Use the post-save current_set without inference. Announce another set of the same drill before another exercise. Never skip a set.
 
-## search_exercises — PROACTIVE
-Use when: recommending a drill or searching after permission to add.
-Do NOT use when: the athlete has not confirmed an absent-drill addition.
 
-## add_exercise — CONFIRMATION FIRST
-Use when: the athlete confirmed and search_exercises returned the chosen catalog ID.
-Do NOT use when: merely recommending or offering a drill.
+TIMED SET DURATION OVERRIDE
+- If the athlete says "start a [X]-second/minute timer for this set" or equivalent, first call set_timed_set_duration for the referenced set using the exact value and unit spoken.
+- Await that result, then call start_timer for the same set using its newly saved duration.
+- Never start the timer before changing the set duration, and never skip set_timed_set_duration for this request.
+- Preserve units exactly: seconds remain seconds and minutes remain minutes.
 
-## remove_exercise — CONFIRMATION FIRST
-Use when: the athlete confirms removal after hearing that analytics are removed.
-Do NOT use when: it would remove the final drill.
-- After yes use confirmation_token="confirmed".
 
-## change_workout_duration — DIRECT
-Use when: an explicit number of minutes should be added or removed.
-Do NOT use when: changing one set's duration.
-
-## append_drill_note — DIRECT
-Use when: explicitly asked to save a note.
-Do NOT use when: the athlete is only making conversation.
-
-# OUTPUT RULES
-- ALWAYS say shot results as "X for Y", never slash or "over".
-- Ordinary partial result: "You're X for Y, N shots left." Say nothing before or after.
-- Completed set: "Set saved. You shot X for Y. Next up: ..."
-- For a set target question: state the whole-set target first, then actual current progress.
-- Timed ball-handling, defense, and conditioning descriptions include the exact set duration and end: "Do you want me to start the timer?"
-- Be candid: below target needs work; at or below half the target is significantly low.
-
-# CONVERSATION FLOW
-1. Determine whether the request is a read, direct action, confirmation-first action, or coaching question.
-2. If audio or numbers are unintelligible, ask the athlete to repeat them. NEVER guess.
-3. For multiple actions, call tools in dependency order and await each result.
-4. Use the newest returned workout_snapshot for the next action.
-5. Give only the final answer unless the exact search preamble is required.
-
-# EXAMPLES
-- User: "I missed again." Action: update_shots add 0 for 1.
-- User: "I made three straight." Action: update_shots add 3 for 3 once.
-- User: "What's my target?" Action: get_workout_state, then target first and current X for Y.
-- User: "Skip this drill." Action: navigate_workout skip; do not complete it.
-- User: "Start a 30-second timer" on a 2-minute set. Ask whether to change the set; do not start yet.
+COMPLETION, TIME, OUTPUT
+- set_set_completion completes/reopens one set, including timed sets. complete_drill requires explicit whole-drill completion; uncomplete_drill reopens it. "Can I skip?" is skip, not completion.
+- Honor an explicit request to go back and reopen an earlier completed set: call set_set_completion with completed=false; never claim past sets cannot be reopened.
+- Workout completion requires totals.remaining_drills=0; a last-position drill or null next_exercise is insufficient because earlier drills may remain. finish_workout only on explicit done.
+- extend_workout/shorten_workout change time. start_timer targets the current timed set; omit duration for saved time. Pass seconds for seconds and minutes for minutes; never turn 30 seconds into 30 minutes. After success say "A X-minute/second timer has been started." Ask duration for untimed drills.
 `;
 
 const DRILL_REFERENCE_PROPERTIES = {
@@ -752,8 +734,13 @@ function compactRealtimeParameters(parameters: {
 }
 
 /** Stable tool names/fields with compact descriptions for the Realtime API. */
-export function getRealtimeTools(capabilities?: readonly CoachCapability[]) {
-  return generatedRealtimeTools(capabilities);
+export function getRealtimeTools() {
+  return REALTIME_TOOL_DEFS.map((t) => ({
+    type: "function" as const,
+    name: t.name,
+    description: REALTIME_TOOL_DESCRIPTIONS[t.name] ?? t.description,
+    parameters: compactRealtimeParameters(t.parameters),
+  }));
 }
 
 export async function loadWorkoutContext(
@@ -1479,16 +1466,6 @@ export function rankCatalogExercises(
 }
 
 /** Compact context for Realtime sessions — full drill list plus current/next drill. */
-function stableSnapshotId(value: unknown): string {
-  const text = JSON.stringify(value);
-  let hash = 2166136261;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `workout-${(hash >>> 0).toString(16).padStart(8, "0")}`;
-}
-
 export function buildCompactContextSummary(
   ctx: WorkoutContext,
   profile: Record<string, unknown> | null,
@@ -1512,13 +1489,10 @@ export function buildCompactContextSummary(
   const goal =
     typeof profile?.main_goal === "string" ? profile.main_goal.slice(0, 120) : null;
 
-  const state = {
-    state_scope: "full" as const,
+  return JSON.stringify({
     workout_day: {
-      id: ctx.day.id,
       title: ctx.day.title,
       focus: ctx.day.focus,
-      completed: ctx.day.completed,
     },
     sequence: {
       ordering: navigation.ordering,
@@ -1540,8 +1514,7 @@ export function buildCompactContextSummary(
     remaining_minutes: remainingMin,
     goal,
     prior_coach_summary: (conversationSummary ?? "").slice(0, 200) || null,
-  };
-  return JSON.stringify({ snapshot_id: stableSnapshotId(state), ...state });
+  });
 }
 
 type RealtimeNavigation = ReturnType<typeof buildWorkoutNavigation>;
@@ -1567,9 +1540,6 @@ function compactRealtimeDrill(drill: RealtimeDrill) {
       makes: set.makes,
       attempts: set.attempts,
       misses: set.misses,
-      progress: set.progress,
-      target: set.target,
-      remaining: set.remaining,
       minutes: set.minutes ?? undefined,
       target_status: set.target_comparison?.status,
       makes_below_target: set.target_comparison?.makes_below_target,
@@ -1652,29 +1622,52 @@ Authoritative workout state follows. Use it silently and prefer newer state from
 ${buildRealtimeModelContext(ctx, profile, timer, conversationSummary)}`;
 }
 
-export function buildRealtimeBaseInstructions(coachName = "Coach Tyler"): string {
-  return `Your name is ${coachName}. If asked, introduce yourself by that name.
-
-${COACH_SYSTEM_PROMPT}
-
-The client supplies a complete authoritative workout snapshot with each response.`;
-}
-
-/** Complete replacement state after every read or mutation. */
+/** Full state for reads; changed drills plus navigation/totals after mutations. */
 export function buildRealtimeNavigationUpdate(
   ctx: WorkoutContext,
-  _previousContext?: WorkoutContext
+  previousContext?: WorkoutContext
 ): string {
-  const state = JSON.parse(buildRealtimeModelContext(ctx, null, undefined)) as Record<
-    string,
-    unknown
-  >;
-  const snapshot = {
+  const navigation = buildWorkoutNavigation(ctx);
+  const compactDrills = navigation.drills.map(compactRealtimeDrill);
+  const previousDrills = previousContext
+    ? buildWorkoutNavigation(previousContext).drills.map(compactRealtimeDrill)
+    : [];
+  const previousById = new Map(
+    previousDrills.map((drill) => [drill.exercise_id, JSON.stringify(drill)])
+  );
+  const changedDrills = previousContext
+    ? compactDrills.filter(
+        (drill) => previousById.get(drill.exercise_id) !== JSON.stringify(drill)
+      )
+    : compactDrills;
+  const currentIds = new Set(compactDrills.map((drill) => drill.exercise_id));
+  const completedDrills = navigation.drills.filter((drill) => drill.status === "complete").length;
+  return JSON.stringify({
     type: "workout_state_update",
-    state_scope: "full",
-    ...state,
-  };
-  return JSON.stringify({ snapshot_id: stableSnapshotId(snapshot), ...snapshot });
+    state_scope: previousContext ? "delta" : "full",
+    drills: changedDrills,
+    removed_exercise_ids: previousContext
+      ? previousDrills
+          .filter((drill) => !currentIds.has(drill.exercise_id))
+          .map((drill) => drill.exercise_id)
+      : [],
+    current_set: navigation.current_set_state,
+    next_exercise: navigation.next_exercise_after_current
+      ? {
+          exercise_id: navigation.next_exercise_after_current.exercise_id,
+          name: navigation.next_exercise_after_current.name,
+          drill_position: navigation.next_exercise_after_current.drill_position,
+          first_set_number: navigation.next_exercise_after_current.first_set_number,
+          first_set_side_label: navigation.next_exercise_after_current.first_set_side_label,
+        }
+      : null,
+    totals: {
+      completed_drills: completedDrills,
+      total_drills: navigation.drills.length,
+      remaining_drills: navigation.remaining_drills.length,
+      workout_complete: navigation.workout_complete,
+    },
+  });
 }
 
 export function buildProgressSummary(ctx: WorkoutContext): string {
@@ -1913,7 +1906,7 @@ export async function executeCoachTool(
       const selectedSet = setLogs.find((set) => set.set_number === setNumber);
       const requestedAttempts = Number(args.attempts);
       const attempts =
-        Number.isFinite(requestedAttempts) && requestedAttempts > 0
+        Number.isFinite(requestedAttempts) && requestedAttempts >= 0
           ? requestedAttempts
           : selectedSet?.attempts ?? plan.perSetAttempts ?? 0;
 
@@ -2014,11 +2007,7 @@ export async function executeCoachTool(
       const current = setLogs.find((set) => set.set_number === requestedSet);
       const completed = args.completed;
 
-      if (
-        completed
-        && plan.logType === "makes_attempts"
-        && (current?.makes == null || current?.attempts == null)
-      ) {
+      if (completed && plan.logType === "makes_attempts" && current?.makes == null) {
         return {
           result: `Tell me the makes and attempts for set ${requestedSet} so I can complete it.`,
           dbChanged: false,
@@ -2029,7 +2018,9 @@ export async function executeCoachTool(
         completed,
         force_incomplete: !completed,
         makes: current?.makes ?? null,
-        attempts: current?.attempts ?? null,
+        attempts:
+          current?.attempts ??
+          (current ? targetAttemptsForSet(current, plan) : plan.perSetAttempts),
         minutes:
           current?.minutes ??
           (completed
@@ -2244,15 +2235,6 @@ export async function executeCoachTool(
       if (!exerciseId) return { result: "I couldn't uniquely match that workout drill.", dbChanged: false };
       const exercise = ctx.exercises.find((candidate) => candidate.id === exerciseId);
       const exerciseName = exercise?.name ?? "the exercise";
-      if (ctx.exercises.length <= 1) {
-        return { result: "A workout must keep at least one drill.", dbChanged: false };
-      }
-      if (args.confirmation_token !== "confirmed") {
-        return {
-          result: `Removing ${exerciseName} also removes its logged analytics. Do you want me to remove it?`,
-          dbChanged: false,
-        };
-      }
       const { error } = await supabase
         .from("workout_exercises")
         .delete()
@@ -2314,17 +2296,10 @@ export async function executeCoachTool(
 
       const plan = effectivePlanForExercise(ex, existing);
       const meta = decodeExerciseLogMeta(existing?.notes ?? null);
-      const hydratedSetLogs = hydrateSetLogs(buildSetPlan(ex), meta, existing ?? undefined);
-      if (
-        plan.logType === "makes_attempts"
-        && hydratedSetLogs.some((set) => set.makes == null || set.attempts == null)
-      ) {
-        return {
-          result: "Tell me the actual makes and attempts for every unfinished set first.",
-          dbChanged: false,
-        };
-      }
-      const setLogs = markAllSetsComplete(hydratedSetLogs, plan);
+      const setLogs = markAllSetsComplete(
+        hydrateSetLogs(buildSetPlan(ex), meta, existing ?? undefined),
+        plan
+      );
       const totals = aggregateSetLogs(setLogs, plan);
 
       const { error } = await supabase.from("exercise_logs").upsert(
@@ -2407,29 +2382,6 @@ export async function executeCoachTool(
         result: `Marked "${ex?.name ?? "drill"}" as not complete. You can run it again.`,
         dbChanged: true,
       };
-    }
-
-    case "reopen_workout": {
-      if (!ctx.day.completed) {
-        return { result: "This workout is already open.", dbChanged: false };
-      }
-      const [{ error: dayError }, { error: logError }] = await Promise.all([
-        supabase
-          .from("workout_days")
-          .update({ completed: false, completion_kind: null, finalized_at: null })
-          .eq("id", dayId)
-          .eq("user_id", userId),
-        supabase
-          .from("workout_day_logs")
-          .delete()
-          .eq("day_id", dayId)
-          .eq("user_id", userId),
-      ]);
-      if (dayError || logError) {
-        return { result: "The workout could not be reopened.", dbChanged: false };
-      }
-      ctx.day.completed = false;
-      return { result: "Workout reopened.", dbChanged: true };
     }
 
     case "save_note": {
@@ -2663,12 +2615,6 @@ export async function executeCoachTool(
         ctx.exercises.every((exercise) => ctx.logs.get(exercise.id)?.completed === true)
           ? "full"
           : "partial";
-      if (completionKind === "partial" && args.confirmation_token !== "confirmed") {
-        return {
-          result: "Some drills are unfinished. Do you want me to finish the workout anyway?",
-          dbChanged: false,
-        };
-      }
       const completedMinutes = [...ctx.logs.values()].reduce(
         (total, log) => total + (log.minutes_completed ?? 0),
         0
@@ -2727,7 +2673,7 @@ export async function executeCoachTool(
           )
         : [];
       const timerSetNumber =
-        currentExercise && currentPlan && isTimedExercise(currentExercise)
+        currentExercise && currentPlan
           ? getCurrentSetNumber(currentSetLogs, currentPlan)
           : null;
       const currentSetLog = currentSetLogs.find(
@@ -2766,23 +2712,6 @@ export async function executeCoachTool(
               Math.max(5, Math.round(defaultDurationMinutes! * 60)),
         180 * 60
       );
-      const prescribedSeconds =
-        savedSetDurationSeconds
-        ?? (defaultDurationMinutes == null
-          ? null
-          : Math.max(5, Math.round(defaultDurationMinutes * 60)));
-      if (
-        hasRequestedDuration
-        && timerSetNumber != null
-        && prescribedSeconds != null
-        && durationSeconds !== prescribedSeconds
-        && args.duration_confirmation_token !== "confirmed"
-      ) {
-        return {
-          result: `This set is ${prescribedSeconds} seconds. Do you want me to change it to ${durationSeconds} seconds?`,
-          dbChanged: false,
-        };
-      }
       const durationLabel =
         durationSeconds < 60
           ? `${durationSeconds}-second`
@@ -2833,9 +2762,9 @@ export function buildRealtimeSessionConfig(
     model,
     instructions,
     // Static instructions + retention_ratio truncation maximize implicit prompt cache hits.
-    //reasoning: {
-    //   effort: "minimal"
-    // },
+    reasoning: {
+      effort: "high",
+    },
     output_modalities: ["audio"],
     truncation: {
       type: "retention_ratio",

@@ -1,5 +1,7 @@
 import {
+  estimateCartesiaCostUsd,
   estimateRealtimeCostUsd,
+  estimateResponsesCostUsd,
   estimateTtsCostUsd,
   TTS_MAX_TEXT_LENGTH,
   validateTtsRequest,
@@ -79,4 +81,24 @@ Deno.test("Realtime cost estimation remains unchanged", () => {
     250 * (2.4 / 1_000_000) +
     300 * (20 / 1_000_000);
   assert(Math.abs(cost - expected) < 1e-12, "expected existing Realtime rates");
+});
+
+Deno.test("Cartesia and Responses costs use provider billable units", () => {
+  const cartesia = estimateCartesiaCostUsd({
+    sttAudioSeconds: 60,
+    ttsCharacters: 900,
+  });
+  assert(Math.abs(cartesia - 0.054) < 1e-12, "expected Ink-2 and Sonic credit cost");
+  const luna = estimateResponsesCostUsd({
+    model: "gpt-5.6-luna",
+    inputTokens: 1_000,
+    outputTokens: 100,
+  });
+  const terra = estimateResponsesCostUsd({
+    model: "gpt-5.6-terra",
+    inputTokens: 1_000,
+    outputTokens: 100,
+  });
+  assert(luna > 0, "expected positive Luna cost");
+  assert(terra > luna, "expected Terra to cost more than Luna");
 });

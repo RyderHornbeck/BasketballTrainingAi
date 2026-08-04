@@ -1,4 +1,5 @@
-// Always-on OpenAI Realtime coach session while the overlay is open.
+// Provider-neutral always-on coach coordinator. Cartesia is the default voice
+// transport; OpenAI Realtime remains behind an explicit rollback flag.
 
 import { emitWorkoutUpdated } from "@/lib/coachEvents";
 import {
@@ -18,9 +19,17 @@ import {
   type NavigationTarget,
 } from "@/lib/coachSpeech";
 import { mergeShotProgress, parseSpokenShotCount } from "@/lib/shotSpeech";
+import { getCoachPersonaId } from "@/lib/coachProfiles";
 import {
-  COACH_REALTIME_TOOLS,
-} from "@/lib/generated/coachTools";
+  CartesiaInkClient,
+  CartesiaSonicClient,
+  shouldAcceptTurnEvent,
+  type CartesiaSonicContext,
+} from "@/lib/cartesia";
+import {
+  streamCoachTurn,
+  type CoachTurnStreamEvent,
+} from "@/lib/coachTurnStream";
 import {
   inferVoiceAudioProfile,
   startVoiceCallAudio,
@@ -116,8 +125,6 @@ interface RoutedCoachTurn {
   transcriptCompletedAt: number;
   routeDecidedAt: number | null;
   backendCompletedAt: number | null;
-  route: "deterministic" | "model_fallback" | null;
-  confidence: number | null;
 }
 
 interface PendingTimerDurationChange {
@@ -176,8 +183,6 @@ interface RealtimeCurrentSetState {
 }
 
 interface RealtimeWorkoutState {
-  snapshot_id?: string;
-  state_scope?: "full";
   workout_day?: { title?: string | null; focus?: string | null };
   sequence?: { drills?: RealtimeDrillState[] };
   navigation?: {
@@ -217,14 +222,18 @@ interface NextSetGuidance {
   sideLabel: string | null;
 }
 
+interface ShotUndoEntry {
+  exerciseId: string;
+  drillName: string;
+  setNumber: number;
+  makes: number;
+  attempts: number;
+}
+
 type ToolExecutionKind = "read_only" | "mutation" | "buffered_shot" | "completed_shot";
 
 interface CoachToolResponse {
-  ok?: boolean;
-  status?: "succeeded" | "rejected";
   result: string;
-  say?: string | null;
-  continuation?: "none" | "model" | "speak_exact";
   client_action: ClientTimerAction | null;
   db_changed: boolean;
   local_confirmation?: string | null;
@@ -235,7 +244,7 @@ interface CoachToolResponse {
   updated_instructions?: string | null;
   tool_kind?: "read_only" | "mutation";
   requires_spoken_confirmation?: boolean;
-  snapshot_id?: string | null;
+  state_version?: number;
   error?: string;
 }
 
@@ -289,6 +298,20 @@ async function loadWebRTC() {
 
 type WebRTCModule = Awaited<ReturnType<typeof loadWebRTC>>;
 type RnMediaStream = Awaited<ReturnType<WebRTCModule["mediaDevices"]["getUserMedia"]>>;
+type DuplexAudioModule = typeof import("expo-duplex-audio");
+type NativeEventSubscription = { remove(): void };
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const block = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += block) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + block));
+  }
+  if (typeof globalThis.btoa !== "function") {
+    throw new Error("Base64 encoding is unavailable.");
+  }
+  return globalThis.btoa(binary);
+}
 
 function waitForDataChannelOpen(dc: any): Promise<void> {
   if (dc.readyState === "open") return Promise.resolve();
@@ -367,10 +390,26 @@ export class RealtimeCoachSession {
   private shotFlushPromise: Promise<void> | null = null;
   private exactBufferedShotReply: string | null = null;
   private exactCompletedShotReply: string | null = null;
-  private exactMutationReply: string | null = null;
   private lastDeterministicReply: string | null = null;
-  private contextRequestSequence = 0;
-  private appliedContextSequence = 0;
+  private cartesiaActive = false;
+  private inkClient: CartesiaInkClient | null = null;
+  private sonicClient: CartesiaSonicClient | null = null;
+  private sonicContext: CartesiaSonicContext | null = null;
+  private duplexAudio: DuplexAudioModule | null = null;
+  private duplexSubscriptions: NativeEventSubscription[] = [];
+  private turnAbortController: AbortController | null = null;
+  private stateVersion = 0;
+  private stateFingerprint = "";
+  private cartesiaVoiceId = "";
+  private ttsInputBuffer = "";
+  private playbackEnqueue: Promise<void> = Promise.resolve();
+  private cartesiaSttSeconds = 0;
+  private cartesiaTtsCharacters = 0;
+  private reportedSttSeconds = 0;
+  private reportedTtsCharacters = 0;
+  private providerUsageSequence = 0;
+  private providerUsagePromise: Promise<void> | null = null;
+  private shotUndoStack: ShotUndoEntry[] = [];
 
   getSessionKey(): string | null {
     return this.sessionKey;
@@ -427,13 +466,26 @@ export class RealtimeCoachSession {
     this.contextRefreshPending = false;
     this.exactBufferedShotReply = null;
     this.exactCompletedShotReply = null;
-    this.exactMutationReply = null;
-    this.contextRequestSequence = 0;
-    this.appliedContextSequence = 0;
+    this.stateVersion = 0;
+    this.stateFingerprint = "";
+    this.cartesiaSttSeconds = 0;
+    this.cartesiaTtsCharacters = 0;
+    this.reportedSttSeconds = 0;
+    this.reportedTtsCharacters = 0;
+    this.providerUsageSequence = 0;
+    this.providerUsagePromise = null;
+    this.shotUndoStack = [];
     this.usageTracker = createUsageTracker(this.model);
     callbacks.onStatus("connecting");
 
     try {
+      if (process.env.EXPO_PUBLIC_COACH_VOICE_TRANSPORT !== "openai_realtime") {
+        await this.connectCartesia(generation);
+        if (generation === this.connectionGeneration && this.active) {
+          this.callbacks?.onStatus(this.muted ? "muted" : "listening");
+        }
+        return;
+      }
       let audioProfile = await startVoiceCallAudio();
       const webrtc = await loadWebRTC();
       const { mediaDevices, RTCPeerConnection, RTCSessionDescription } = webrtc;
@@ -566,7 +618,7 @@ export class RealtimeCoachSession {
 
       this.model = data.model ?? this.model;
       this.usageTracker = createUsageTracker(this.model);
-      this.updateWorkoutState(data.workout_context, 0);
+      this.updateWorkoutState(data.workout_context);
 
       await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: data.sdp }));
       await waitForDataChannelOpen(dc);
@@ -602,6 +654,170 @@ export class RealtimeCoachSession {
     }
   }
 
+  private async connectCartesia(generation: number): Promise<void> {
+    const dayId = this.dayId;
+    const sessionKey = this.sessionKey;
+    if (!dayId || !sessionKey) throw new Error("Coach session is not active.");
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("realtime_coach_voice")
+      .maybeSingle();
+    const voicePersona = getCoachPersonaId(profile?.realtime_coach_voice);
+    const { data, error } = await supabase.functions.invoke<{
+      error?: string;
+      code?: string;
+      provider?: { access_token: string; expires_at: string };
+      voice?: { provider_voice_id: string; model_id: string };
+      workout_context?: string | RealtimeWorkoutState;
+      state?: { version?: number };
+      daily_usage?: {
+        spent_usd: number;
+        budget_usd: number;
+        remaining_usd: number;
+      };
+    }>("coach-agent-session", {
+      body: {
+        day_id: dayId,
+        session_key: sessionKey,
+        voice_persona: voicePersona,
+        state_version: this.stateVersion,
+        timer: this.timer,
+        conversation_summary: this.conversationSummary,
+      },
+    });
+    if (error) throw new Error(await edgeFunctionErrorMessage(error));
+    if (!data?.provider?.access_token || !data.voice?.provider_voice_id) {
+      throw new Error(data?.error ?? "Voice provider session was not created.");
+    }
+    if (data.daily_usage) {
+      this.dailySpentBaseline = data.daily_usage.spent_usd;
+      this.dailyBudgetUsd = data.daily_usage.budget_usd;
+      this.callbacks?.onBudgetUpdate?.(this.dailySpentBaseline, this.dailyBudgetUsd);
+    }
+    this.stateVersion = Math.max(this.stateVersion, data.state?.version ?? 0);
+    this.cartesiaVoiceId = data.voice.provider_voice_id;
+    this.updateWorkoutState(
+      typeof data.workout_context === "string"
+        ? data.workout_context
+        : JSON.stringify(data.workout_context ?? null)
+    );
+
+    const duplexAudio = await import("expo-duplex-audio");
+    const permission = await duplexAudio.requestPermissionsAsync();
+    if (!permission.granted) throw new Error("Microphone permission is required for Coach.");
+    await duplexAudio.startSessionAsync({
+      sampleRate: 24000,
+      frameDurationMs: 20,
+      speaker: true,
+      muted: this.muted,
+    });
+    if (generation !== this.connectionGeneration || !this.active) {
+      await duplexAudio.stopSessionAsync();
+      return;
+    }
+    this.duplexAudio = duplexAudio;
+
+    const token = data.provider.access_token;
+    const sonic = new CartesiaSonicClient({
+      accessToken: token,
+      onError: (providerError) => {
+        if (generation !== this.connectionGeneration) return;
+        console.error("Cartesia Sonic error:", providerError);
+        this.callbacks?.onError(providerError.message);
+      },
+      onClose: () => {
+        if (generation === this.connectionGeneration && this.active) {
+          reportNetworkFailure("cartesia-sonic");
+          void this.disconnect("connection_lost");
+        }
+      },
+    });
+    const ink = new CartesiaInkClient({
+      accessToken: token,
+      encoding: "pcm_s16le",
+      sampleRate: 24000,
+      keyterms: [
+        "make",
+        "miss",
+        "brick",
+        "airball",
+        "swish",
+        "ball handling",
+        "Court Coach",
+      ],
+      turn: {
+        startThreshold: 0.75,
+        eagerEndThreshold: 0.4,
+        endThreshold: 0.2,
+        endTimeoutMs: 1_200,
+      },
+      onTurnStart: () => this.handleCartesiaSpeechStart(generation),
+      onTurnEnd: (event) => {
+        if (generation !== this.connectionGeneration || !event.transcript.trim()) return;
+        this.transcriptRouteQueue = this.transcriptRouteQueue
+          .then(() =>
+            this.routeTranscribedTurn(
+              event.transcript.trim(),
+              `${event.requestId}:${this.speechEpoch}`,
+              generation
+            )
+          )
+          .catch((routeError) => {
+            console.error("Failed to route Cartesia transcript:", routeError);
+          });
+      },
+      onError: (providerError) => {
+        if (generation !== this.connectionGeneration) return;
+        console.error("Cartesia Ink error:", providerError);
+        this.callbacks?.onError(providerError.message);
+      },
+      onClose: () => {
+        if (generation === this.connectionGeneration && this.active) {
+          reportNetworkFailure("cartesia-ink");
+          void this.disconnect("connection_lost");
+        }
+      },
+    });
+    this.inkClient = ink;
+    this.sonicClient = sonic;
+    await Promise.all([ink.connect(), sonic.connect()]);
+    if (generation !== this.connectionGeneration || !this.active) {
+      ink.close();
+      sonic.close();
+      await duplexAudio.stopSessionAsync();
+      return;
+    }
+    this.cartesiaActive = true;
+    this.usageTracker = null;
+    this.duplexSubscriptions = [
+      duplexAudio.addAudioInputListener((event) => {
+        if (
+          generation === this.connectionGeneration &&
+          this.active &&
+          !this.muted &&
+          this.inkClient?.isOpen
+        ) {
+          this.cartesiaSttSeconds += event.frames / event.sampleRate;
+          this.inkClient.sendAudio(event.data);
+        }
+      }),
+      duplexAudio.addPlaybackStateListener((event) => {
+        if (generation !== this.connectionGeneration) return;
+        this.playbackActive = event.state === "playing";
+        this.updateStatus();
+        if (!this.playbackActive) {
+          this.flushPendingContextRefresh();
+          this.flushQueuedResponse();
+        }
+      }),
+      duplexAudio.addErrorListener((audioError) => {
+        if (generation !== this.connectionGeneration) return;
+        console.error("Duplex audio error:", audioError);
+        this.callbacks?.onError(audioError.message);
+      }),
+    ];
+  }
+
   updateTimer(timer: TimerState): void {
     this.timer = timer;
   }
@@ -614,7 +830,6 @@ export class RealtimeCoachSession {
       return;
     }
     this.contextRefreshPromise = (async () => {
-      const contextSequence = ++this.contextRequestSequence;
       const { data, error } = await supabase.functions.invoke<{
         client_workout_context?: string | null;
         updated_instructions?: string | null;
@@ -630,7 +845,17 @@ export class RealtimeCoachSession {
       });
       if (error) throw new Error(await edgeFunctionErrorMessage(error));
       if (data?.error) throw new Error(data.error);
-      this.updateWorkoutState(data?.client_workout_context, contextSequence);
+      this.updateWorkoutState(data?.client_workout_context);
+      if (data?.client_workout_context) this.stateVersion += 1;
+      if (data?.updated_instructions && !this.cartesiaActive) {
+        this.sendEvent({
+          type: "session.update",
+          session: {
+            type: "realtime",
+            instructions: data.updated_instructions,
+          },
+        });
+      }
     })()
       .catch((err) => {
         console.warn("Failed to refresh coach workout context:", err);
@@ -648,21 +873,11 @@ export class RealtimeCoachSession {
     void this.refreshWorkoutContext();
   }
 
-  private updateWorkoutState(
-    serialized: string | null | undefined,
-    requestSequence = this.contextRequestSequence
-  ): void {
+  private updateWorkoutState(serialized: string | null | undefined): void {
     if (!serialized) return;
-    if (requestSequence < this.appliedContextSequence) return;
     try {
       const parsed = JSON.parse(serialized) as RealtimeWorkoutState;
-      if (parsed?.sequence?.drills) {
-        this.workoutState = parsed;
-        this.appliedContextSequence = requestSequence;
-        for (const pending of this.pendingShotSets.values()) {
-          this.updateBufferedSetInWorkoutState(pending);
-        }
-      }
+      if (parsed?.sequence?.drills) this.workoutState = parsed;
     } catch {
       console.warn("Could not parse realtime workout state.");
     }
@@ -811,14 +1026,12 @@ export class RealtimeCoachSession {
     const sessionKey = this.sessionKey;
     if (!dayId || !sessionKey) throw new Error("Coach session is not active.");
     const requestArgs = { ...args };
-    const contextSequence = ++this.contextRequestSequence;
     if (typeof requestArgs.client_request_id !== "string") {
       requestArgs.client_request_id = createClientRequestId(toolName);
     }
     if (toolName === "finish_workout") {
       requestArgs.timezone_offset_minutes = new Date().getTimezoneOffset();
     }
-    const startedAt = Date.now();
     const { data, error } = await supabase.functions.invoke<CoachToolResponse>("coach-tools", {
       body: {
         day_id: dayId,
@@ -830,17 +1043,6 @@ export class RealtimeCoachSession {
     if (error) throw new Error(await edgeFunctionErrorMessage(error));
     if (!data) throw new Error("Empty tool response.");
     if (data.error) throw new Error(data.error);
-    console.info(
-      "[coach_tool_metric]",
-      JSON.stringify({
-        tool_name: toolName,
-        request_id: requestArgs.client_request_id,
-        snapshot_id: data.snapshot_id ?? null,
-        db_changed: data.db_changed,
-        continuation: data.continuation ?? null,
-        latency_ms: Date.now() - startedAt,
-      })
-    );
     if (data.client_action) {
       let timerAction = data.client_action as ClientTimerAction;
       if (
@@ -870,7 +1072,24 @@ export class RealtimeCoachSession {
     if (data.db_changed && toolName !== "save_shooting_results") {
       emitWorkoutUpdated("coach");
     }
-    this.updateWorkoutState(data.client_workout_context, contextSequence);
+    if (typeof data.state_version === "number") {
+      this.stateVersion = Math.max(this.stateVersion, data.state_version);
+    } else if (data.db_changed) {
+      this.stateVersion += 1;
+    }
+    this.updateWorkoutState(data.client_workout_context);
+    if (data.db_changed && toolName === "set_shooting_set_targets") {
+      this.reconcileShootingTargetChange(requestArgs);
+    }
+    if (data.updated_instructions && !this.cartesiaActive) {
+      this.sendEvent({
+        type: "session.update",
+        session: {
+          type: "realtime",
+          instructions: data.updated_instructions,
+        },
+      });
+    }
     return data;
   }
 
@@ -1072,7 +1291,18 @@ export class RealtimeCoachSession {
           : existing?.requestId,
     };
     this.pendingShotSets.set(key, entry);
+    if (updateMode === "increment") {
+      this.shotUndoStack.push({
+        exerciseId: entry.exerciseId,
+        drillName: entry.drillName,
+        setNumber: entry.setNumber,
+        makes: reportedMakes,
+        attempts: reportedAttempts,
+      });
+      if (this.shotUndoStack.length > 50) this.shotUndoStack.shift();
+    }
     this.updateBufferedSetInWorkoutState(entry);
+    this.stateVersion += 1;
 
     const remainingShots =
       targetAttempts == null ? null : Math.max(0, targetAttempts - nextAttempts);
@@ -1096,6 +1326,49 @@ export class RealtimeCoachSession {
           : `, ${remainingShots} shot${remainingShots === 1 ? "" : "s"} left.`
       }`,
     };
+  }
+
+  private async undoLastShot(): Promise<string> {
+    const previous = this.shotUndoStack.pop();
+    if (!previous) return "There isn't a recent shot to undo.";
+    const drill = this.workoutState?.sequence?.drills?.find(
+      (candidate) => candidate.exercise_id === previous.exerciseId
+    );
+    const saved = drill?.set_results.find(
+      (set) => set.set_number === previous.setNumber
+    );
+    if (!drill || !saved) return "That shot can no longer be undone.";
+    const key = this.pendingShotKey(previous.exerciseId, previous.setNumber);
+    const existing = this.pendingShotSets.get(key);
+    const currentMakes = existing?.makes ?? saved.progress?.makes ?? saved.makes ?? 0;
+    const currentAttempts =
+      existing?.attempts ?? saved.progress?.attempts ?? saved.attempts ?? 0;
+    const entry: PendingShotSet = {
+      exerciseId: previous.exerciseId,
+      drillName: previous.drillName,
+      setNumber: previous.setNumber,
+      sideLabel: saved.side_label ?? null,
+      makes: Math.max(0, currentMakes - previous.makes),
+      attempts: Math.max(0, currentAttempts - previous.attempts),
+      targetMakes: saved.target?.makes ?? drill.target.makes,
+      targetAttempts: saved.target?.attempts ?? drill.target.attempts,
+      completed: false,
+      requestId: createClientRequestId("undo-shot"),
+    };
+    this.pendingShotSets.set(key, entry);
+    this.updateBufferedSetInWorkoutState(entry);
+    this.stateVersion += 1;
+    await this.persistPendingShotSet(key);
+    this.selectedSetByExercise.set(entry.exerciseId, entry.setNumber);
+    const remaining =
+      entry.targetAttempts == null
+        ? null
+        : Math.max(0, entry.targetAttempts - entry.attempts);
+    return `Undid the last shot. You're ${entry.makes} for ${entry.attempts}${
+      remaining == null
+        ? "."
+        : `, ${remaining} shot${remaining === 1 ? "" : "s"} left.`
+    }`;
   }
 
   private orderedDrills(): RealtimeDrillState[] {
@@ -1308,7 +1581,7 @@ export class RealtimeCoachSession {
         } per set.`;
       }
       if (targetAttempts == null) return "This drill doesn't have a shooting target.";
-      return `The whole-set target is ${targetMakes ?? 0} make${
+      return `This set's full target is ${targetMakes ?? 0} make${
         targetMakes === 1 ? "" : "s"
       } in ${targetAttempts} attempts. You're currently ${currentSet.progress.makes} for ${
         currentSet.progress.attempts
@@ -1345,7 +1618,7 @@ export class RealtimeCoachSession {
             : `set ${currentSet?.set_number ?? 1}`;
       return `For ${scopeLabel}, you're ${makes} for ${attempts}. That's ${pct} percent.`;
     }
-    return `${label}: ${makes} for ${attempts}, ${Math.max(0, attempts - makes)} misses.`;
+    return `${label}: ${makes} for ${attempts}, ${Math.max(0, attempts - makes)} misses/p`;
   }
 
   private timerStatusReply(): string {
@@ -1388,8 +1661,20 @@ export class RealtimeCoachSession {
   }
 
   private authoritativeTurnInstructions(): string {
-    return `Answer the latest request concisely. The following complete client snapshot is authoritative and replaces conflicting conversation state: ${JSON.stringify(
-      this.workoutState
+    const currentSet = this.currentSetState();
+    const currentDrill = this.currentDrill();
+    return `Answer the user's latest request concisely. This client state is authoritative and newer than any conflicting conversation state: ${JSON.stringify(
+      {
+        current_set: currentSet,
+        current_drill: currentDrill
+          ? {
+              exercise_id: currentDrill.exercise_id,
+              name: currentDrill.name,
+              category: currentDrill.category,
+              set_results: currentDrill.set_results,
+            }
+          : null,
+      }
     )}`;
   }
 
@@ -1425,6 +1710,10 @@ export class RealtimeCoachSession {
             durationSeconds
           )}. ${this.timerStartedReply(durationSeconds)}`
         : this.timerStartedReply(durationSeconds);
+    }
+
+    if (command.kind === "undo_shot") {
+      return this.undoLastShot();
     }
 
     if (command.kind === "shot") {
@@ -1564,6 +1853,7 @@ export class RealtimeCoachSession {
                       : null;
         if (!nextSet) return null;
         this.selectedSetByExercise.set(current.exercise_id, nextSet.set_number);
+        this.stateVersion += 1;
         const side = nextSet.side_label ? `, ${nextSet.side_label}` : "";
         return `Moved to set ${nextSet.set_number}${side} of ${
           current.name ?? "the current drill"
@@ -1594,13 +1884,9 @@ export class RealtimeCoachSession {
       const current = this.currentDrill();
       const set = this.currentSetState();
       if (command.args.scope === "workout") {
+        if (command.args.action === "reopen") return null;
         await this.flushPendingShotSets();
-        return (
-          await this.invokeCoachTool(
-            command.args.action === "reopen" ? "reopen_workout" : "finish_workout",
-            requestArgs
-          )
-        ).result;
+        return (await this.invokeCoachTool("finish_workout", requestArgs)).result;
       }
       if (!current) return null;
       await this.flushPendingShotSets();
@@ -1613,7 +1899,6 @@ export class RealtimeCoachSession {
           completed: command.args.action === "complete",
           ...requestArgs,
         });
-        if (!result.db_changed) return result.result;
         this.selectedSetByExercise.delete(current.exercise_id);
         return command.args.action === "complete"
           ? `Set ${set.set_number} complete. ${this.nextWorkReply("set", {
@@ -1698,8 +1983,6 @@ export class RealtimeCoachSession {
       transcriptCompletedAt: Date.now(),
       routeDecidedAt: null,
       backendCompletedAt: null,
-      route: null,
-      confidence: null,
     };
     this.speechStoppedAtByItem.delete(turnId);
     this.routedTurns.set(turnId, turn);
@@ -1734,7 +2017,6 @@ export class RealtimeCoachSession {
       this.pendingTimerDurationChange = null;
     }
     if (!command) {
-      turn.route = "model_fallback";
       turn.routeDecidedAt = Date.now();
       this.fallbackTurnCount += 1;
       this.logVoiceMetric(turn, "route_decision");
@@ -1744,12 +2026,16 @@ export class RealtimeCoachSession {
         label: `Heard: ${transcript}`.slice(0, 90),
         state: "recognized",
       });
-      this.requestResponse(
-        this.authoritativeTurnInstructions(),
-        false,
-        null,
-        transcript
-      );
+      if (this.cartesiaActive) {
+        await this.requestCartesiaModelTurn(transcript, turn);
+      } else {
+        this.requestResponse(
+          this.authoritativeTurnInstructions(),
+          false,
+          null,
+          transcript
+        );
+      }
       return;
     }
 
@@ -1760,8 +2046,6 @@ export class RealtimeCoachSession {
       const output = await this.executeDeterministicIntent(command, turn);
       if (generation !== this.connectionGeneration) return;
       if (!output) {
-        turn.route = "model_fallback";
-        turn.confidence = command.confidence;
         turn.routeDecidedAt = Date.now();
         turn.backendCompletedAt = turn.routeDecidedAt;
         this.fallbackTurnCount += 1;
@@ -1771,18 +2055,20 @@ export class RealtimeCoachSession {
           label: command.heardLabel,
           state: "recognized",
         });
-        this.requestResponse(
-          this.authoritativeTurnInstructions(),
-          false,
-          null,
-          transcript
-        );
+        if (this.cartesiaActive) {
+          await this.requestCartesiaModelTurn(transcript, turn);
+        } else {
+          this.requestResponse(
+            this.authoritativeTurnInstructions(),
+            false,
+            null,
+            transcript
+          );
+        }
         return;
       }
       turn.routeDecidedAt = turn.routeDecidedAt ?? turn.transcriptCompletedAt;
       turn.backendCompletedAt = Date.now();
-      turn.route = "deterministic";
-      turn.confidence = command.confidence;
       this.deterministicTurnCount += 1;
       this.logVoiceMetric(turn, "backend_complete");
       this.callbacks?.onCommandHeard?.({
@@ -1828,6 +2114,11 @@ export class RealtimeCoachSession {
 
   mute(): void {
     this.muted = true;
+    if (this.cartesiaActive) {
+      void this.duplexAudio?.setMutedAsync(true).catch((error) => {
+        console.warn("Could not mute duplex audio:", error);
+      });
+    }
     if (this.localStream) {
       for (const track of this.localStream.getAudioTracks()) {
         track.enabled = false;
@@ -1838,6 +2129,11 @@ export class RealtimeCoachSession {
 
   unmute(): void {
     this.muted = false;
+    if (this.cartesiaActive) {
+      void this.duplexAudio?.setMutedAsync(false).catch((error) => {
+        console.warn("Could not unmute duplex audio:", error);
+      });
+    }
     if (this.localStream) {
       for (const track of this.localStream.getAudioTracks()) {
         track.enabled = true;
@@ -1891,6 +2187,33 @@ export class RealtimeCoachSession {
           );
         }
       }
+
+      if (this.cartesiaActive) {
+        await this.reportCartesiaUsage(true);
+      }
+      this.turnAbortController?.abort();
+      this.turnAbortController = null;
+      try {
+        this.sonicContext?.cancel();
+      } catch {
+        // Already completed.
+      }
+      this.sonicContext = null;
+      this.inkClient?.close();
+      this.sonicClient?.close();
+      this.inkClient = null;
+      this.sonicClient = null;
+      for (const subscription of this.duplexSubscriptions) subscription.remove();
+      this.duplexSubscriptions = [];
+      if (this.duplexAudio) {
+        await this.duplexAudio.clearPlaybackAsync().catch(() => undefined);
+        await this.duplexAudio.stopSessionAsync().catch(() => undefined);
+      }
+      this.duplexAudio = null;
+      this.cartesiaActive = false;
+      this.cartesiaVoiceId = "";
+      this.ttsInputBuffer = "";
+      this.playbackEnqueue = Promise.resolve();
 
       try {
         this.dc?.close();
@@ -2002,11 +2325,6 @@ export class RealtimeCoachSession {
       JSON.stringify({
         stage,
         turn_id: turn.itemId,
-        request_id: turn.requestId,
-        route: turn.route,
-        confidence: turn.confidence,
-        snapshot_id: this.workoutState?.snapshot_id ?? null,
-        interruption_epoch: turn.speechEpoch,
         speech_stop_to_transcript_ms:
           turn.speechStoppedAt == null
             ? null
@@ -2031,6 +2349,262 @@ export class RealtimeCoachSession {
     );
   }
 
+  private handleCartesiaSpeechStart(generation: number): void {
+    if (generation !== this.connectionGeneration || !this.active) return;
+    this.latestUserTranscript = null;
+    this.speechEpoch += 1;
+    this.responseQueue = [];
+    this.turnAbortController?.abort();
+    this.turnAbortController = null;
+    try {
+      this.sonicContext?.cancel();
+    } catch {
+      // The context may already have completed.
+    }
+    this.sonicContext = null;
+    this.ttsInputBuffer = "";
+    this.generationActive = false;
+    this.playbackActive = false;
+    void this.duplexAudio?.clearPlaybackAsync().catch(() => undefined);
+    this.callbacks?.onStatus(this.muted ? "muted" : "listening");
+  }
+
+  private createSonicContext(speechEpoch: number): CartesiaSonicContext {
+    const sonic = this.sonicClient;
+    if (!sonic?.isOpen || !this.cartesiaVoiceId) {
+      throw new Error("Coach speech is not connected.");
+    }
+    const context = sonic.createContext({
+      contextId: `${this.sessionKey ?? "session"}:${speechEpoch}:${Date.now()}`.slice(0, 120),
+      voiceId: this.cartesiaVoiceId,
+      encoding: "pcm_s16le",
+      sampleRate: 24000,
+      language: "en",
+      maxBufferDelayMs: 120,
+      generationConfig: { speed: 1 },
+      onChunk: (event) => {
+        if (
+          speechEpoch !== this.speechEpoch ||
+          !this.active ||
+          this.sonicContext?.id !== event.contextId
+        ) {
+          return;
+        }
+        const encoded = bytesToBase64(event.audio);
+        this.playbackEnqueue = this.playbackEnqueue
+          .then(() => this.duplexAudio?.enqueuePlaybackAsync(encoded))
+          .then(() => undefined)
+          .catch((error) => {
+            console.error("Could not enqueue Cartesia speech:", error);
+          });
+      },
+      onDone: () => {
+        if (speechEpoch !== this.speechEpoch) return;
+        this.generationActive = false;
+        this.updateStatus();
+      },
+      onError: (error) => {
+        if (speechEpoch !== this.speechEpoch) return;
+        this.generationActive = false;
+        this.callbacks?.onError(error.message);
+        this.updateStatus();
+      },
+    });
+    this.sonicContext = context;
+    return context;
+  }
+
+  private flushSonicText(force: boolean): void {
+    const context = this.sonicContext;
+    if (!context) return;
+    const text = this.ttsInputBuffer;
+    if (!text) {
+      if (force) context.finish();
+      return;
+    }
+    const boundary = /[.!?]\s$/.test(text) || text.length >= 72;
+    if (!force && !boundary) return;
+    this.ttsInputBuffer = "";
+    this.cartesiaTtsCharacters += text.length;
+    if (force) context.finish(text);
+    else context.push(text);
+  }
+
+  private applyCartesiaTurnEvent(
+    event: CoachTurnStreamEvent,
+    turnId: string,
+    speechEpoch: number
+  ): void {
+    if (
+      !this.active ||
+      !shouldAcceptTurnEvent(
+        {
+          turnId,
+          speechEpoch: this.speechEpoch,
+          stateVersion: this.stateVersion,
+        },
+        {
+          turnId: event.turn_id,
+          speechEpoch,
+          stateVersion: "state_version" in event ? event.state_version : undefined,
+        }
+      )
+    ) {
+      return;
+    }
+    if ("state_version" in event) this.stateVersion = event.state_version;
+    if (event.type === "turn_started") {
+      this.model = event.model;
+      this.stateFingerprint = event.state_fingerprint;
+      return;
+    }
+    if (event.type === "text_delta") {
+      this.ttsInputBuffer += event.delta;
+      this.flushSonicText(false);
+      return;
+    }
+    if (event.type === "tool_result") {
+      if (event.client_action && typeof event.client_action === "object") {
+        const action = event.client_action as ClientTimerAction;
+        if (
+          ["start_timer", "pause_timer", "resume_timer", "stop_timer"].includes(action.type)
+        ) {
+          this.callbacks?.onTimerAction(action);
+        }
+      }
+      this.updateWorkoutState(event.workout_context);
+      if (event.db_changed) emitWorkoutUpdated("coach");
+      return;
+    }
+    if (event.type === "turn_completed") {
+      this.stateFingerprint = event.state_fingerprint;
+      this.updateWorkoutState(event.workout_context);
+      this.flushSonicText(true);
+      return;
+    }
+    if (event.type === "error") throw new Error(event.error);
+  }
+
+  private async requestCartesiaModelTurn(
+    transcript: string,
+    turn: RoutedCoachTurn
+  ): Promise<void> {
+    const dayId = this.dayId;
+    const sessionKey = this.sessionKey;
+    if (!dayId || !sessionKey) throw new Error("Coach session is not active.");
+    const speechEpoch = turn.speechEpoch;
+    await this.flushPendingShotSets();
+    if (speechEpoch !== this.speechEpoch) return;
+    const controller = new AbortController();
+    this.turnAbortController?.abort();
+    this.turnAbortController = controller;
+    this.ttsInputBuffer = "";
+    const context = this.createSonicContext(speechEpoch);
+    let responseText = "";
+    this.generationActive = true;
+    this.updateStatus();
+    try {
+      await streamCoachTurn({
+        dayId,
+        sessionKey,
+        turnId: turn.requestId,
+        transcript,
+        stateVersion: this.stateVersion,
+        conversationSummary: this.conversationSummary,
+        signal: controller.signal,
+        onEvent: (event) => {
+          if (event.type === "text_delta") responseText += event.delta;
+          this.applyCartesiaTurnEvent(event, turn.requestId, speechEpoch);
+        },
+      });
+      if (speechEpoch !== this.speechEpoch) return;
+      if (responseText.trim()) {
+        this.conversationSummary = appendConversationSummary(
+          this.conversationSummary,
+          responseText.trim()
+        );
+        this.callbacks?.onConversationSummary?.(this.conversationSummary);
+      }
+      turn.backendCompletedAt = Date.now();
+      this.logVoiceMetric(turn, "backend_complete");
+    } catch (error) {
+      const aborted =
+        controller.signal.aborted ||
+        (error instanceof Error && error.name === "AbortError");
+      if (!aborted) throw error;
+      try {
+        context.cancel();
+      } catch {
+        // Already completed.
+      }
+    } finally {
+      if (this.turnAbortController === controller) this.turnAbortController = null;
+      if (speechEpoch === this.speechEpoch) {
+        this.generationActive = false;
+        this.updateStatus();
+      }
+      void this.reportCartesiaUsage(false);
+    }
+  }
+
+  private async reportCartesiaUsage(force: boolean): Promise<void> {
+    if (this.providerUsagePromise) {
+      if (force) await this.providerUsagePromise;
+      else return;
+    }
+    const dayId = this.dayId;
+    const sessionKey = this.sessionKey;
+    if (!this.cartesiaActive || !dayId || !sessionKey) return;
+    const sttDelta = Math.max(0, this.cartesiaSttSeconds - this.reportedSttSeconds);
+    const ttsDelta = Math.max(0, this.cartesiaTtsCharacters - this.reportedTtsCharacters);
+    if (!force && sttDelta < 15 && ttsDelta < 300) return;
+    if (sttDelta <= 0 && ttsDelta <= 0) return;
+    const sentStt = Math.round(sttDelta * 1000) / 1000;
+    const sentTts = Math.round(ttsDelta);
+    const requestId = `cartesia-usage-${++this.providerUsageSequence}-${Date.now()}`;
+    this.providerUsagePromise = (async () => {
+      const { data, error } = await supabase.functions.invoke<{
+        daily_usage?: {
+          spent_usd: number;
+          budget_usd: number;
+          remaining_usd: number;
+        };
+        error?: string;
+      }>("coach-provider-usage", {
+        body: {
+          day_id: dayId,
+          session_key: sessionKey,
+          request_id: requestId,
+          stt_audio_seconds: sentStt,
+          tts_characters: sentTts,
+        },
+      });
+      if (error) throw new Error(await edgeFunctionErrorMessage(error));
+      if (data?.error) throw new Error(data.error);
+      this.reportedSttSeconds += sentStt;
+      this.reportedTtsCharacters += sentTts;
+      if (data?.daily_usage) {
+        this.dailySpentBaseline = data.daily_usage.spent_usd;
+        this.dailyBudgetUsd = data.daily_usage.budget_usd;
+        this.callbacks?.onBudgetUpdate?.(
+          data.daily_usage.spent_usd,
+          data.daily_usage.budget_usd
+        );
+        if (data.daily_usage.remaining_usd <= 0 && this.active) {
+          this.callbacks?.onError(COACH_LIMIT_MESSAGES.dailyBudgetExhausted);
+          void this.disconnect("daily_budget");
+        }
+      }
+    })()
+      .catch((error) => {
+        console.warn("Failed to persist Cartesia usage:", error);
+      })
+      .finally(() => {
+        this.providerUsagePromise = null;
+      });
+    await this.providerUsagePromise;
+  }
+
   private async speakDeterministic(
     text: string,
     _requestId: string,
@@ -2038,6 +2612,15 @@ export class RealtimeCoachSession {
   ): Promise<void> {
     if (speechEpoch !== this.speechEpoch || !this.active) return;
     this.lastDeterministicReply = text;
+    if (this.cartesiaActive) {
+      this.ttsInputBuffer = "";
+      this.generationActive = true;
+      this.updateStatus();
+      const context = this.createSonicContext(speechEpoch);
+      this.cartesiaTtsCharacters += text.length;
+      context.finish(text);
+      return;
+    }
     this.requestResponse(`Say exactly: ${JSON.stringify(text)}`, true);
   }
 
@@ -2072,7 +2655,6 @@ export class RealtimeCoachSession {
     if (!queued) return;
     const { instructions, outOfBand, itemId } = queued;
     const responseInstructions = instructions ? { instructions } : {};
-    const responseTools = [...COACH_REALTIME_TOOLS];
     const sent = this.sendEvent(
       {
         type: "response.create",
@@ -2083,11 +2665,7 @@ export class RealtimeCoachSession {
               input: itemId ? [{ type: "item_reference", id: itemId }] : [],
               ...(outOfBand ? { tool_choice: "none", tools: [] } : {}),
             }
-          : {
-              ...responseInstructions,
-              tools: responseTools,
-              tool_choice: "auto",
-            },
+          : responseInstructions,
       },
       false
     );
@@ -2323,7 +2901,7 @@ export class RealtimeCoachSession {
       let transcriptShotHandled = false;
       try {
         for (const call of functionCalls) {
-          let effectiveCall = this.translateModelToolCall(call);
+          let effectiveCall = call;
           if (transcriptShot && LOCAL_SHOT_TOOLS.has(call.name)) {
             if (transcriptShotHandled) {
               this.sendEvent({
@@ -2407,148 +2985,18 @@ export class RealtimeCoachSession {
                 )}`
               : "Say the set was saved and direct the athlete to the authoritative next work item."
             : strongestResult === "mutation"
-              ? this.exactMutationReply
-                ? `Say exactly: ${JSON.stringify(this.exactMutationReply)}`
-                : "State only the completed result in one short sentence."
+              ? "State only the completed result in one short sentence. No acknowledgment, praise, preamble, action narration, offer, or closing sentence. Never mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless genuinely ambiguous."
               : "Continue the athlete's request from the lookup result. If an already approved action needs another tool, call it silently without another status sentence; otherwise give only the brief answer. Never mention tools, internal state, context, JSON, or refreshes.",
-        strongestResult === "buffered_shot"
-          || strongestResult === "completed_shot"
-          || (strongestResult === "mutation" && this.exactMutationReply != null)
+        strongestResult === "buffered_shot" || strongestResult === "completed_shot"
       );
       this.exactBufferedShotReply = null;
       this.exactCompletedShotReply = null;
-      this.exactMutationReply = null;
       return;
     }
 
     this.updateStatus();
     this.flushPendingContextRefresh();
     this.flushQueuedResponse();
-  }
-
-  private translateModelToolCall(call: FunctionCallItem): FunctionCallItem {
-    let args: Record<string, unknown>;
-    try {
-      args = JSON.parse(call.arguments || "{}") as Record<string, unknown>;
-    } catch {
-      return call;
-    }
-    const translated = (name: string, nextArgs: Record<string, unknown>) => ({
-      ...call,
-      name,
-      arguments: JSON.stringify(nextArgs),
-    });
-    if (call.name === "update_shots") {
-      const makes = Number(args.makes);
-      const attempts = Number(args.attempts);
-      const common = {
-        exercise_id: args.exercise_id,
-        drill_name: args.drill_name,
-        set_number: args.set_number,
-      };
-      if (args.operation === "replace") {
-        return translated("set_shooting_total", {
-          ...common,
-          makes,
-          attempts,
-          completed: args.completed,
-        });
-      }
-      if (makes === 1 && attempts === 1) return translated("record_make", common);
-      if (makes === 0 && attempts === 1) return translated("record_miss", common);
-      if (makes === attempts && attempts > 1) {
-        return translated("record_makes", { ...common, count: attempts });
-      }
-      if (makes === 0 && attempts > 1) {
-        return translated("record_misses", { ...common, count: attempts });
-      }
-      return translated("add_shooting_result", { ...common, makes, attempts });
-    }
-    if (call.name === "get_workout_state") {
-      if (args.view === "list") {
-        return translated("list_workout_drills", { category: args.category });
-      }
-      return translated(
-        args.view === "progress" ? "get_progress" : "get_workout_position",
-        {}
-      );
-    }
-    if (call.name === "navigate_workout") {
-      return translated(args.action === "skip" ? "skip_drill" : "set_current_drill", {
-        exercise_id: args.exercise_id,
-        drill_name: args.drill_name,
-      });
-    }
-    if (call.name === "update_completion") {
-      if (args.scope === "set") {
-        const currentSet = this.currentSetState();
-        return translated("set_set_completion", {
-          exercise_id: args.exercise_id,
-          drill_name: args.drill_name,
-          set_number: args.set_number ?? currentSet?.set_number,
-          completed: args.completed,
-        });
-      }
-      if (args.scope === "workout") {
-        return translated(args.completed ? "finish_workout" : "reopen_workout", {
-          confirmation_token: args.confirmation_token,
-        });
-      }
-      return translated(args.completed ? "complete_drill" : "uncomplete_drill", {
-        exercise_id: args.exercise_id,
-        drill_name: args.drill_name,
-      });
-    }
-    if (call.name === "control_timer") {
-      const timerTools: Record<string, string> = {
-        start: "start_timer",
-        pause: "pause_timer",
-        resume: "resume_timer",
-        stop: "stop_timer",
-      };
-      return translated(timerTools[String(args.action)] ?? "start_timer", {
-        seconds: args.seconds,
-        duration_confirmation_token: args.duration_confirmation_token,
-      });
-    }
-    if (call.name === "update_set_prescription") {
-      const common = {
-        exercise_id: args.exercise_id,
-        drill_name: args.drill_name,
-        set_number: args.set_number,
-      };
-      return args.duration_seconds != null
-        ? translated("set_timed_set_duration", {
-            ...common,
-            duration_seconds: args.duration_seconds,
-          })
-        : translated("set_shooting_set_targets", {
-            ...common,
-            target_makes: args.target_makes,
-            target_attempts: args.target_attempts,
-          });
-    }
-    if (call.name === "search_exercises") {
-      return translated("search_exercise_catalog", { query: args.query });
-    }
-    if (call.name === "add_exercise") {
-      return translated("add_workout_exercise", {
-        catalog_exercise_id: args.catalog_exercise_id,
-      });
-    }
-    if (call.name === "remove_exercise") {
-      return translated("remove_workout_exercise", args);
-    }
-    if (call.name === "change_workout_duration") {
-      return translated(
-        args.action === "shorten" ? "shorten_workout" : "extend_workout",
-        { minutes: args.minutes }
-      );
-    }
-    if (call.name === "append_drill_note") {
-      return translated("save_note", args);
-    }
-    return call;
   }
 
   private async executeToolCall(
@@ -2598,21 +3046,10 @@ export class RealtimeCoachSession {
             await this.flushPendingShotSets();
           }
           const data = await this.invokeCoachTool(call.name, args);
-          kind = data.continuation === "speak_exact" ? "mutation" : "read_only";
-          if (data.continuation === "speak_exact") {
-            this.exactMutationReply = data.say ?? data.result;
-          }
-          output = JSON.stringify({
-            ok: data.ok ?? true,
-            status: data.status ?? "succeeded",
-            response_text: data.say ?? data.result,
-            require_repeat_verbatim: data.continuation === "speak_exact",
-            continue_reasoning: data.continuation === "model",
-            snapshot_id: data.snapshot_id ?? null,
-            workout_snapshot: data.updated_context
-              ? JSON.parse(data.updated_context)
-              : null,
-          });
+          kind = data.tool_kind === "read_only" ? "read_only" : "mutation";
+          output = data.updated_context
+            ? `${data.result}\n\nAuthoritative workout state after this call: ${data.updated_context}`
+            : data.result;
           summary = data.result;
         }
       }
@@ -2648,7 +3085,7 @@ export class RealtimeCoachSession {
           output: `Error: ${err instanceof Error ? err.message : "tool failed"}`,
         },
       });
-      return "read_only";
+      return "mutation";
     }
   }
 }
