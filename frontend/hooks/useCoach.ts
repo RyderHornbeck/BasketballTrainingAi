@@ -17,6 +17,7 @@ import {
   type TimerState,
 } from "@/lib/realtimeCoach";
 import { useTimerAudioCues } from "@/hooks/useTimerAudioCues";
+import { completeTimedExerciseSet } from "@/lib/timedSetCompletion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 
@@ -144,8 +145,15 @@ export function useCoach(dayId: string | null): UseCoachResult {
         t.running = false;
         t.accumulated = t.durationSeconds ?? elapsed;
         setTimerRunning(false);
-        if (t.exerciseId && t.setNumber) {
-          sessionRef.current?.markTimerSetComplete(t.exerciseId, t.setNumber);
+        if (dayId && t.exerciseId && t.setNumber && t.durationSeconds) {
+          void completeTimedExerciseSet(
+            dayId,
+            t.exerciseId,
+            t.setNumber,
+            t.durationSeconds
+          ).catch((error) => {
+            console.error("Failed to complete timed set:", error);
+          });
         }
       }
 
@@ -153,7 +161,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
       sessionRef.current?.updateTimer(getTimerState());
     }, 1000);
     return () => clearInterval(interval);
-  }, [timerRunning, currentElapsed, getTimerState, timerAudio]);
+  }, [dayId, timerRunning, currentElapsed, getTimerState, timerAudio]);
 
   const applyTimerAction = useCallback((action: ClientTimerAction) => {
     const t = timerRef.current;
@@ -183,8 +191,12 @@ export function useCoach(dayId: string | null): UseCoachResult {
       t.startedAt = Date.now();
       t.running = true;
       t.durationSeconds = action.duration_seconds ?? null;
-      t.exerciseId = action.timer_exercise_id ?? null;
-      t.setNumber = action.timer_set_number ?? null;
+      if (action.timer_exercise_id !== undefined) {
+        t.exerciseId = action.timer_exercise_id;
+      }
+      if (action.timer_set_number !== undefined) {
+        t.setNumber = action.timer_set_number;
+      }
       if (t.durationSeconds) {
         timerAudio.beginRun(timerRunIdRef.current, t.durationSeconds);
       }

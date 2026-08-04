@@ -14,6 +14,10 @@ export interface TimerIntentArgs {
   useSetDefault?: boolean;
 }
 
+export interface TimerDurationConfirmationArgs {
+  accepted: boolean;
+}
+
 export type NavigationTarget =
   | { type: "current" | "next" | "previous" | "first" | "last" }
   | { type: "ordinal"; ordinal: number }
@@ -62,6 +66,7 @@ interface IntentBase<K extends string, A> {
 export type CoachSpeechIntent =
   | IntentBase<"shot", ShotIntentArgs>
   | IntentBase<"timer", TimerIntentArgs>
+  | IntentBase<"timer_duration_confirmation", TimerDurationConfirmationArgs>
   | IntentBase<"navigation", NavigationIntentArgs>
   | IntentBase<"completion", CompletionIntentArgs>
   | IntentBase<"progress", ProgressIntentArgs>
@@ -133,6 +138,64 @@ const ORDINAL_WORDS: Record<string, number> = {
   twentieth: 20,
 };
 
+const LEADING_SPEECH_PADDING = new Set([
+  "ah",
+  "bruh",
+  "bro",
+  "dang",
+  "dangit",
+  "damn",
+  "dammit",
+  "hey",
+  "like",
+  "man",
+  "oh",
+  "ok",
+  "okay",
+  "oops",
+  "shoot",
+  "uh",
+  "um",
+  "ugh",
+  "well",
+  "yo",
+]);
+
+const SUBJECT_PADDING = new Set([
+  "actually",
+  "definitely",
+  "freaking",
+  "just",
+  "literally",
+  "really",
+]);
+
+function normalizeConversationalPadding(text: string): string {
+  const words = text.split(" ").filter(Boolean);
+  while (words.length > 1 && LEADING_SPEECH_PADDING.has(words[0])) words.shift();
+
+  // Transcription occasionally adds a suffix to short filler words ("justed").
+  for (let index = 0; index < words.length; index += 1) {
+    if (/^just(?:ed|in|ing)?$/.test(words[index])) words[index] = "just";
+  }
+
+  if (words[0] === "i") {
+    while (words.length > 2 && SUBJECT_PADDING.has(words[1]) && words[1] !== "just") {
+      words.splice(1, 1);
+    }
+  }
+  return words.join(" ");
+}
+
+function normalizeSingleWordShotTranscription(text: string): string {
+  if (text.includes(" ")) return text;
+  // These corrections are intentionally limited to an entire one-word turn,
+  // so "list workout drills" and other legitimate commands stay untouched.
+  if (text === "list") return "miss";
+  if (text === "may") return "make";
+  return text;
+}
+
 function intent<K extends CoachSpeechIntent["kind"]>(
   kind: K,
   args: Extract<CoachSpeechIntent, { kind: K }>["args"],
@@ -162,6 +225,7 @@ export function normalizeCoachSpeech(transcript: string | null | undefined): str
     .replace(/\s*\/\s*/g, "/")
     .replace(/\s+/g, " ")
     .trim();
+  text = normalizeConversationalPadding(text);
   text = text
     .replace(
       /^(?:(?:yo|hey|hi|ok|okay)\s+)?(?:court\s+)?coach(?:es|s)?(?:\s+|$)/,
@@ -179,7 +243,7 @@ export function normalizeCoachSpeech(transcript: string | null | undefined): str
     .replace(/\s+(?:court\s+)?coach(?:es|s)?$/, "")
     .replace(/\s+please$/, "")
     .trim();
-  return text;
+  return normalizeSingleWordShotTranscription(text);
 }
 
 export function parseSpokenNumber(value: string): number | null {
@@ -635,8 +699,15 @@ export const parseProgressIntent: Parser = (text) => {
           : "exercise";
     return intent("progress", { metric: "remaining", scope }, `${scope} remaining heard`);
   }
+  if (
+    /^(?:how many attempts (?:are there )?(?:for|in) (?:this|the current) set|what are (?:the )?(?:attempts for (?:this|the current) set|(?:this|the current) sets attempts))$/.test(
+      text
+    )
+  ) {
+    return intent("progress", { metric: "target", scope: "set" }, "set target heard");
+  }
   const target = text.match(
-    /^(?:(?:whats|what is) (?:my|the) (?:target|goal)|what (?:do i need|am i aiming for|am i trying to get)|how many (?:shots|makes) (?:do i need|is the target))(?:\s+for|\s+on|\s+in)?\s*(?:this|the current|my)?\s*(set|drill|exercise|workout)?$/
+    /^(?:(?:whats|what is) (?:my|the) (?:target|goal)(?: and attempts?)?|what are (?:my|the) target(?: makes)? and attempts?|what (?:do i need|am i aiming for|am i trying to get)|how many (?:shots|makes) (?:do i need|is the target))(?:\s+for|\s+on|\s+in)?\s*(?:this|the current|my)?\s*(set|drill|exercise|workout)?$/
   );
   if (target) {
     const namedScope = target[1];

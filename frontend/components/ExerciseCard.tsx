@@ -11,6 +11,8 @@ import {
   resolveAttemptsOverride,
   resolveMinutesOverride,
   SetLogEntry,
+  targetAttemptsForSet,
+  targetMakesForSet,
 } from "@/lib/exerciseSetLogs";
 import { ExerciseLogInput } from "@/lib/plan";
 import { reportNetworkFailure } from "@/lib/connectivity";
@@ -62,6 +64,15 @@ const CATEGORY_LABELS: Record<string, string> = {
   basketball_iq: "Discipline",
 };
 const TIMED_CATEGORIES = new Set(["ball_handling", "defense", "defensive", "conditioning"]);
+
+function formatSetDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds} sec`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder === 0
+    ? `${minutes} min`
+    : `${minutes} min ${remainder} sec`;
+}
 
 function SetCheckboxRow({
   label,
@@ -164,6 +175,7 @@ function SetShootingRow({
         {targetMakes != null ? (
           <Text style={[styles.setTargetHint, { color: colors.textMuted }]}>
             Target {targetMakes}
+            {targetAttempts != null ? `/${targetAttempts}` : ""}
           </Text>
         ) : null}
       </View>
@@ -477,9 +489,13 @@ export function ExerciseCard({
     if (!row) return;
     const next = !row.completed;
     if (next) completionHaptic();
+    const setMinutes =
+      row.duration_seconds_override != null
+        ? row.duration_seconds_override / 60
+        : setPlan.perSetMinutes;
     updateSet(setNumber, {
       completed: next,
-      minutes: next ? setPlan.perSetMinutes : null,
+      minutes: next ? setMinutes : null,
     });
   };
 
@@ -497,13 +513,18 @@ export function ExerciseCard({
   const openDrillTimer = () => {
     const currentSet = normalizedSets.find((set) => !set.completed) ?? normalizedSets[0];
     if (!currentSet || !setPlan.perSetMinutes) return;
+    const durationSeconds =
+      currentSet.duration_seconds_override ??
+      Math.round(setPlan.perSetMinutes * 60);
     router.push({
       pathname: "/drill-timer",
       params: {
         name: exercise.name ?? "Drill",
         instructions: descriptionText ?? "",
-        durationSeconds: String(setPlan.perSetMinutes * 60),
+        durationSeconds: String(durationSeconds),
         setNumber: String(currentSet.set_number),
+        exerciseId: exercise.id,
+        dayId: exercise.day_id,
       },
     });
   };
@@ -511,13 +532,62 @@ export function ExerciseCard({
   const adjustSetTimer = (secondsDelta: number) => {
     if (!setPlan.perSetMinutes) return;
     hasUserEditsRef.current = true;
-    const nextMinutes = Math.max(1, Math.min(3, setPlan.perSetMinutes + secondsDelta / 60));
-    setMinutesOverride(nextMinutes);
+    const changed = setLogs.filter((set) => set.duration_seconds_override != null);
+    const unchanged = setLogs.filter((set) => set.duration_seconds_override == null);
+    const targetSetNumbers =
+      changed.length === 0
+        ? new Set(setLogs.map((set) => set.set_number))
+        : unchanged.length > 0
+          ? new Set(unchanged.map((set) => set.set_number))
+          : new Set(
+              changed.every(
+                (set) =>
+                  set.duration_seconds_override === changed[0].duration_seconds_override
+              )
+                ? changed.map((set) => set.set_number)
+                : [Math.max(...changed.map((set) => set.set_number))]
+            );
+    setMinutesOverride(null);
+    setSetLogs((previous) =>
+      previous.map((set) => {
+        if (!targetSetNumbers.has(set.set_number)) return set;
+        const currentSeconds =
+          set.duration_seconds_override ??
+          Math.round(setPlan.perSetMinutes! * 60);
+        return {
+          ...set,
+          duration_seconds_override: Math.max(
+            30,
+            Math.min(180, currentSeconds + secondsDelta)
+          ),
+        };
+      })
+    );
   };
 
-  const setTimerLabel = setPlan.perSetMinutes
-    ? `${Math.round(setPlan.perSetMinutes * 60)}s`
-    : null;
+  const timerAdjustmentSets = (() => {
+    const changed = normalizedSets.filter((set) => set.duration_seconds_override != null);
+    const unchanged = normalizedSets.filter((set) => set.duration_seconds_override == null);
+    if (changed.length === 0) return normalizedSets;
+    if (unchanged.length > 0) return unchanged;
+    if (
+      changed.every(
+        (set) => set.duration_seconds_override === changed[0].duration_seconds_override
+      )
+    ) {
+      return changed;
+    }
+    return [changed.reduce((latest, set) =>
+      set.set_number > latest.set_number ? set : latest
+    )];
+  })();
+  const setTimerLabel =
+    timerAdjustmentSets[0] && setPlan.perSetMinutes
+      ? `${
+          timerAdjustmentSets[0].duration_seconds_override ??
+          Math.round(setPlan.perSetMinutes * 60)
+        }s`
+      : null;
 
   const gradientColors =
     scheme === "dark"
@@ -533,8 +603,8 @@ export function ExerciseCard({
           sideLabel={setPlan.setSideLabels?.[row.set_number - 1] ?? null}
           makes={row.makes?.toString() ?? ""}
           attempts={row.attempts?.toString() ?? ""}
-          targetAttempts={setPlan.perSetAttempts}
-          targetMakes={setPlan.perSetMakes}
+          targetAttempts={targetAttemptsForSet(row, setPlan)}
+          targetMakes={targetMakesForSet(row, setPlan)}
           completed={row.completed}
           makesDraft={makesDrafts[row.set_number]}
           attemptsDraft={attemptsDrafts[row.set_number]}
@@ -557,9 +627,16 @@ export function ExerciseCard({
     if (logType === "minutes" || logType === "checkbox") {
       return normalizedSets.map((row) => {
         const side = setPlan.setSideLabels?.[row.set_number - 1];
+        const durationSeconds =
+          row.duration_seconds_override ??
+          (setPlan.perSetMinutes
+            ? Math.round(setPlan.perSetMinutes * 60)
+            : null);
         const label =
-          logType === "minutes" && setPlan.perSetMinutes
-            ? `Set ${row.set_number}${side ? ` · ${side}` : ""} · ${setPlan.perSetMinutes} min`
+          logType === "minutes" && durationSeconds != null
+            ? `Set ${row.set_number}${side ? ` · ${side}` : ""} · ${formatSetDuration(
+                durationSeconds
+              )}`
             : `Set ${row.set_number}${side ? ` · ${side}` : ""}`;
         return (
           <SetCheckboxRow

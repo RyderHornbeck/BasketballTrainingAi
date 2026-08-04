@@ -4,6 +4,8 @@ import {
   decodeExerciseLogMeta,
   ExerciseSetPlan,
   SetLogEntry,
+  targetAttemptsForSet,
+  targetMakesForSet,
 } from "./exerciseSetLogs";
 
 export const RADAR_SKILLS = [
@@ -105,8 +107,8 @@ function baselineForSkill(
 
 function scoreSetEntry(entry: SetLogEntry, plan: ExerciseSetPlan, category: string): number {
   if (plan.logType === "makes_attempts") {
-    const targetMakes = plan.perSetMakes ?? 0;
-    const targetAttempts = plan.perSetAttempts ?? targetMakes;
+    const targetMakes = targetMakesForSet(entry, plan) ?? 0;
+    const targetAttempts = targetAttemptsForSet(entry, plan) ?? targetMakes;
     const makes = entry.makes ?? 0;
     const attempts = entry.attempts ?? targetAttempts;
     const attainment =

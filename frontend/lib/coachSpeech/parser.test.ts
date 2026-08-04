@@ -75,6 +75,10 @@ test("parses make and miss vocabulary", () => {
     ["made three in a row", { mode: "increment", makes: 3, attempts: 3, source: "count" }],
     ["I missed again", { mode: "increment", makes: 0, attempts: 1, source: "count" }],
     ["I made again", { mode: "increment", makes: 1, attempts: 1, source: "count" }],
+    ["Dangit, I missed", { mode: "increment", makes: 0, attempts: 1, source: "count" }],
+    ["Bruh, I justed missed", { mode: "increment", makes: 0, attempts: 1, source: "count" }],
+    ["list", { mode: "increment", makes: 0, attempts: 1, source: "count" }],
+    ["may", { mode: "increment", makes: 1, attempts: 1, source: "count" }],
     ["I missed 2 in a row again", { mode: "increment", makes: 0, attempts: 2, source: "count" }],
     ["I just made 2 more again", { mode: "increment", makes: 2, attempts: 2, source: "count" }],
     ["4 buckets", { mode: "increment", makes: 4, attempts: 4, source: "count" }],
@@ -83,6 +87,33 @@ test("parses make and miss vocabulary", () => {
     ["I made 2 and missed 3", { mode: "increment", makes: 2, attempts: 5, source: "count" }],
   ];
   for (const [phrase, args] of cases) expectIntent(phrase, { kind: "shot", args });
+});
+
+test("removes conversational padding before every command family", () => {
+  expectIntent("Bruh, can you start a thirty second timer?", {
+    kind: "timer",
+    args: { action: "start", durationSeconds: 30 },
+  });
+  expectIntent("Dang, what's next?", {
+    kind: "navigation",
+    args: { mode: "query", unit: "set", target: { type: "next" } },
+  });
+  expectIntent("Man, finish this set", {
+    kind: "completion",
+    args: { action: "complete", scope: "set" },
+  });
+  expectIntent("Ugh, how many shots left?", {
+    kind: "progress",
+    args: { metric: "remaining", scope: "set" },
+  });
+  expectIntent("Well, list workout drills", {
+    kind: "list_drills",
+    args: {},
+  });
+  expectIntent("Okay, say that again", {
+    kind: "repeat",
+    args: {},
+  });
 });
 
 test("distinguishes incremental and absolute shot ratios", () => {
@@ -297,6 +328,10 @@ test("parses targets, totals, and remaining-work queries", () => {
     ["how many exercises are left", { metric: "remaining", scope: "workout" }],
     ["what's left in this workout", { metric: "remaining", scope: "workout" }],
     ["what's my target for this set", { metric: "target", scope: "set" }],
+    ["what's my target and attempts for this set", { metric: "target", scope: "set" }],
+    ["what are my target makes and attempts", { metric: "target", scope: "set" }],
+    ["how many attempts are there for this set", { metric: "target", scope: "set" }],
+    ["what are this set's attempts", { metric: "target", scope: "set" }],
     ["what's the goal", { metric: "target", scope: "set" }],
     ["what am I aiming for", { metric: "target", scope: "set" }],
     ["how many makes do I have in this set", { metric: "totals", scope: "set" }],
@@ -400,3 +435,4 @@ test("preserves the shotSpeech compatibility exports", () => {
     { makes: 2, attempts: 4 }
   );
 });
+

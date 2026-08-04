@@ -4,6 +4,7 @@ import {
   decodeExerciseLogMeta,
   hydrateSetLogs,
   normalizeSetLogs,
+  targetMakesForSet,
 } from "@/lib/exerciseSetLogs";
 import type { ExerciseLogInput } from "@/lib/plan";
 import { WorkoutExerciseWithClip } from "@/types/plan";
@@ -45,7 +46,10 @@ function scoreExercise(exercise: WorkoutExerciseWithClip, log?: ExerciseLogInput
   if (!hasStarted && !log?.completed) return null;
 
   if (plan.logType === "makes_attempts") {
-    const targetMakes = (plan.perSetMakes ?? 0) * plan.setCount;
+    const targetMakes = normalized.reduce(
+      (sum, set) => sum + (targetMakesForSet(set, plan) ?? 0),
+      0
+    );
     const totals = aggregateSetLogs(normalized, plan);
     const makes = totals.makes ?? 0;
 

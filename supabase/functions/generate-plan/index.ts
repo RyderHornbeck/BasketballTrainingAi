@@ -865,7 +865,8 @@ function sanityCheckPlan(
       }
       if (
         clip.difficulty_level &&
-        !allowedDifficulties.includes(clip.difficulty_level)
+        !allowedDifficulties.includes(clip.difficulty_level) &&
+        !isRequiredWorkoutCoreClip(clip, Boolean(answers.has_court_access))
       ) {
         return `Exercise "${exercise.name}" is outside the athlete's allowed difficulty range.`;
       }

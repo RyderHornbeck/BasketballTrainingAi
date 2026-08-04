@@ -10,6 +10,12 @@ import {
   executeCoachTool,
   loadWorkoutContext,
 } from "../_shared/coachCore.ts";
+import {
+  COACH_IDEMPOTENT_TOOLS,
+  COACH_READ_ONLY_TOOLS,
+  GENERATED_COACH_TOOL_REGISTRY,
+  validateCoachToolArguments,
+} from "../_shared/generated/coachTools.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -85,37 +91,20 @@ Deno.serve(async (req: Request) => {
     let clientRequestId =
       typeof args.client_request_id === "string" ? args.client_request_id : null;
 
-    const idempotentTools = new Set([
-      "save_shooting_results",
-      "set_set_completion",
-      "complete_drill",
-      "uncomplete_drill",
-      "skip_drill",
-      "save_note",
-      "extend_workout",
-      "shorten_workout",
-      "finish_workout",
-      "start_timer",
-      "pause_timer",
-      "resume_timer",
-      "stop_timer",
-    ]);
-    const readOnlyTools = new Set([
-      "get_workout_position",
-      "get_next_drill",
-      "get_progress",
-      "list_workout_drills",
-      "search_exercise_catalog",
-    ]);
-    const allowedTools = new Set([
-      ...idempotentTools,
-      ...readOnlyTools,
-      "set_current_drill",
-      "add_workout_exercise",
-      "remove_workout_exercise",
-    ]);
+    const idempotentTools = COACH_IDEMPOTENT_TOOLS;
+    const readOnlyTools = COACH_READ_ONLY_TOOLS;
+    const allowedTools = new Set(
+      GENERATED_COACH_TOOL_REGISTRY
+        .filter((tool) => tool.execution === "server")
+        .map((tool) => tool.name)
+    );
     if (!allowedTools.has(body.tool_name)) {
       return jsonResponse({ error: "Unsupported tool" }, 400);
+    }
+
+    const validation = validateCoachToolArguments(body.tool_name, body.arguments ?? {});
+    if (!validation.ok) {
+      return jsonResponse({ error: validation.error, code: "invalid_tool_arguments" }, 400);
     }
 
     if (!clientRequestId && idempotentTools.has(body.tool_name)) {
@@ -172,16 +161,28 @@ Deno.serve(async (req: Request) => {
         const refreshedContext = cached.db_changed
           ? await loadWorkoutContext(supabase, userId, body.day_id)
           : null;
+        const contextJson = refreshedContext
+          ? buildCompactContextSummary(refreshedContext, answers ?? null, undefined)
+          : null;
         return jsonResponse({
+          ok: true,
+          status: "succeeded",
           result: cached.result,
+          say: cached.local_confirmation ?? cached.result,
+          continuation: cached.skip_model_response
+            ? "none"
+            : readOnlyTools.has(body.tool_name)
+              ? "model"
+              : "speak_exact",
           client_action: cached.client_action,
           db_changed: cached.db_changed,
           local_confirmation: cached.local_confirmation,
           skip_model_response: cached.skip_model_response,
           deduplicated: true,
           updated_context: refreshedContext ? buildRealtimeNavigationUpdate(refreshedContext) : null,
-          client_workout_context: refreshedContext
-            ? buildCompactContextSummary(refreshedContext, answers ?? null, undefined)
+          client_workout_context: contextJson,
+          snapshot_id: contextJson
+            ? (JSON.parse(contextJson) as { snapshot_id?: string }).snapshot_id ?? null
             : null,
           updated_instructions: refreshedContext
             && (cached.db_changed || body.refresh_context)
@@ -263,8 +264,19 @@ Deno.serve(async (req: Request) => {
       : ctx;
     const toolKind = readOnlyTools.has(body.tool_name) ? "read_only" : "mutation";
 
+    const contextJson = refreshedContext
+      ? buildCompactContextSummary(refreshedContext, answers ?? null, undefined)
+      : null;
     return jsonResponse({
+      ok: true,
+      status: "succeeded",
       result: outcome.result,
+      say: outcome.localConfirmation ?? outcome.result,
+      continuation: outcome.skipModelResponse
+        ? "none"
+        : toolKind === "read_only"
+          ? "model"
+          : "speak_exact",
       client_action: outcome.clientAction ?? null,
       db_changed: outcome.dbChanged,
       local_confirmation: outcome.localConfirmation ?? null,
@@ -275,8 +287,9 @@ Deno.serve(async (req: Request) => {
             outcome.dbChanged ? ctx : undefined
           )
         : null,
-      client_workout_context: refreshedContext
-        ? buildCompactContextSummary(refreshedContext, answers ?? null, undefined)
+      client_workout_context: contextJson,
+      snapshot_id: contextJson
+        ? (JSON.parse(contextJson) as { snapshot_id?: string }).snapshot_id ?? null
         : null,
       updated_instructions: refreshedContext
         && (outcome.dbChanged || body.refresh_context)

@@ -10,7 +10,9 @@
     "seed:shot-zones": "tsx seed/seed-shot-zone-drills.ts",
     "export:catalog": "tsx seed/export-exercise-catalog.ts",
     "catalog:apply-first-21-descriptions": "tsx seed/apply-first-21-catalog-descriptions.ts",
-    "catalog:strip-prescriptions": "tsx seed/strip-catalog-prescriptions.ts"
+    "catalog:strip-prescriptions": "tsx seed/strip-catalog-prescriptions.ts",
+    "coach:generate": "tsx ../scripts/generate-coach-tools.ts",
+    "coach:check": "tsx ../scripts/generate-coach-tools.ts --check"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

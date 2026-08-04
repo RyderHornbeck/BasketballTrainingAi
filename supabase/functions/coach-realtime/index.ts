@@ -5,7 +5,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import {
   buildCompactContextSummary,
-  buildRealtimeInstructions,
+  buildRealtimeBaseInstructions,
   buildRealtimeSessionConfig,
   loadWorkoutContext,
   type TimerState,
@@ -190,13 +190,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const sessionConfig = buildRealtimeSessionConfig(
-      buildRealtimeInstructions(
-        ctx,
-        answers ?? null,
-        body.timer,
-        body.conversation_summary,
-        COACH_NAME_BY_VOICE[realtimeVoice] ?? "Coach Tyler"
-      ),
+      buildRealtimeBaseInstructions(COACH_NAME_BY_VOICE[realtimeVoice] ?? "Coach Tyler"),
       REALTIME_MODEL,
       realtimeVoice,
       body.audio_profile === "speaker" ? "speaker" : "bluetooth"

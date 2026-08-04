@@ -2,6 +2,7 @@ import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { useTimerAudioCues } from "@/hooks/useTimerAudioCues";
 import { parseDrillDescription } from "@/lib/drillDescription";
+import { completeTimedExerciseSet } from "@/lib/timedSetCompletion";
 import { ArrowLeftIcon, ArrowCounterClockwiseIcon, PauseIcon, PlayIcon } from "phosphor-react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -23,11 +24,15 @@ export default function DrillTimerScreen() {
     instructions?: string;
     durationSeconds?: string;
     setNumber?: string;
+    exerciseId?: string;
+    dayId?: string;
   }>();
   const durationSeconds = Math.max(1, Number(params.durationSeconds) || 60);
   const drillName = params.name ?? "Drill timer";
   const instructions = params.instructions ?? "";
   const setNumber = params.setNumber ? Number(params.setNumber) : null;
+  const exerciseId = params.exerciseId ?? null;
+  const dayId = params.dayId ?? null;
   const parsed = useMemo(() => parseDrillDescription(instructions), [instructions]);
   const [remainingSeconds, setRemainingSeconds] = useState(durationSeconds);
   const [running, setRunning] = useState(false);
@@ -35,6 +40,23 @@ export default function DrillTimerScreen() {
   const startedAtRef = useRef(0);
   const pausedRemainingRef = useRef(durationSeconds);
   const timerAudio = useTimerAudioCues();
+  const completionSavedRef = useRef(false);
+
+  const completeSet = useCallback(async () => {
+    if (!exerciseId || !dayId || !setNumber || completionSavedRef.current) return;
+    completionSavedRef.current = true;
+    try {
+      await completeTimedExerciseSet(
+        dayId,
+        exerciseId,
+        setNumber,
+        durationSeconds
+      );
+    } catch (error) {
+      completionSavedRef.current = false;
+      console.error("Failed to complete timed set:", error);
+    }
+  }, [dayId, durationSeconds, exerciseId, setNumber]);
 
   const reset = useCallback(() => {
     runIdRef.current += 1;
@@ -73,10 +95,11 @@ export default function DrillTimerScreen() {
       if (nextRemaining === 0) {
         pausedRemainingRef.current = 0;
         setRunning(false);
+        void completeSet();
       }
     }, 250);
     return () => clearInterval(interval);
-  }, [durationSeconds, running, timerAudio]);
+  }, [completeSet, durationSeconds, running, timerAudio]);
 
   const hasStarted = remainingSeconds < durationSeconds;
   const primaryLabel = running ? "Pause" : remainingSeconds === 0 ? "Start Again" : hasStarted ? "Resume" : "Start";

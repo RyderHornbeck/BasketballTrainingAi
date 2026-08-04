@@ -6,6 +6,9 @@ export interface SetLogEntry {
   set_number: number;
   completed: boolean;
   force_incomplete?: boolean;
+  duration_seconds_override?: number | null;
+  target_makes_override?: number | null;
+  target_attempts_override?: number | null;
   makes: number | null;
   attempts: number | null;
   minutes: number | null;
@@ -172,17 +175,32 @@ function isSetComplete(entry: SetLogEntry, plan: ExerciseSetPlan): boolean {
   if (entry.completed) return true;
   if (plan.logType === "makes_attempts") {
     const attempts = entry.attempts ?? 0;
-    const targetAttempts = plan.perSetAttempts ?? 0;
+    const targetAttempts =
+      entry.target_attempts_override ?? plan.perSetAttempts ?? 0;
     return entry.makes != null && targetAttempts > 0 && attempts >= targetAttempts;
   }
   return false;
+}
+
+export function targetMakesForSet(
+  entry: SetLogEntry,
+  plan: ExerciseSetPlan,
+): number | null {
+  return entry.target_makes_override ?? plan.perSetMakes;
+}
+
+export function targetAttemptsForSet(
+  entry: SetLogEntry,
+  plan: ExerciseSetPlan,
+): number | null {
+  return entry.target_attempts_override ?? plan.perSetAttempts;
 }
 
 export function normalizeSetLogs(setLogs: SetLogEntry[], plan: ExerciseSetPlan): SetLogEntry[] {
   return setLogs.map((entry) => ({
     ...entry,
     completed: isSetComplete(entry, plan),
-    attempts: entry.attempts ?? plan.perSetAttempts,
+    attempts: entry.attempts ?? targetAttemptsForSet(entry, plan),
   }));
 }
 
@@ -207,12 +225,17 @@ export function aggregateSetLogs(setLogs: SetLogEntry[], plan: ExerciseSetPlan) 
       hasMakes = true;
     }
     if (entry.attempts != null) attempts += entry.attempts;
-    else if (plan.perSetAttempts != null) attempts += plan.perSetAttempts;
+    else attempts += targetAttemptsForSet(entry, plan) ?? 0;
     if (entry.minutes != null) {
       minutes += entry.minutes;
       hasMinutes = true;
-    } else if (entry.completed && plan.perSetMinutes != null) {
-      minutes += plan.perSetMinutes;
+    } else if (
+      entry.completed &&
+      (entry.duration_seconds_override != null || plan.perSetMinutes != null)
+    ) {
+      minutes += entry.duration_seconds_override != null
+        ? entry.duration_seconds_override / 60
+        : plan.perSetMinutes!;
       hasMinutes = true;
     }
   }
@@ -236,9 +259,13 @@ export function markAllSetsComplete(setLogs: SetLogEntry[], plan: ExerciseSetPla
     ...entry,
     completed: true,
     force_incomplete: false,
-    makes: entry.makes ?? plan.perSetMakes,
-    attempts: entry.attempts ?? plan.perSetAttempts,
-    minutes: entry.minutes ?? plan.perSetMinutes,
+    makes: entry.makes ?? targetMakesForSet(entry, plan),
+    attempts: entry.attempts ?? targetAttemptsForSet(entry, plan),
+    minutes:
+      entry.minutes ??
+      (entry.duration_seconds_override != null
+        ? entry.duration_seconds_override / 60
+        : plan.perSetMinutes),
   }));
 }
 
