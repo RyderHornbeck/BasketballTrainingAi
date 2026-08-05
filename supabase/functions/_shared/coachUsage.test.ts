@@ -1,4 +1,5 @@
 import {
+  estimateAnthropicCostUsd,
   estimateCartesiaCostUsd,
   estimateRealtimeCostUsd,
   estimateResponsesCostUsd,
@@ -55,13 +56,16 @@ Deno.test("validateTtsRequest rejects unsafe identifiers", () => {
 Deno.test("estimateTtsCostUsd is positive, bounded, and monotonic", () => {
   const shortCost = estimateTtsCostUsd("Done.");
   const longCost = estimateTtsCostUsd(
-    "Saved eight of ten. Move to the next drill and start the timer."
+    "Saved eight of ten. Move to the next drill and start the timer.",
   );
   const maxCost = estimateTtsCostUsd("word ".repeat(60).trim());
 
   assert(shortCost > 0, "expected a positive minimum cost");
   assert(longCost > shortCost, "expected longer speech to cost more");
-  assert(maxCost < 0.01, "a bounded TTS request should cost well below the daily cap");
+  assert(
+    maxCost < 0.01,
+    "a bounded TTS request should cost well below the daily cap",
+  );
 });
 
 Deno.test("Realtime cost estimation remains unchanged", () => {
@@ -73,8 +77,7 @@ Deno.test("Realtime cost estimation remains unchanged", () => {
     output_text_tokens: 250,
     output_audio_tokens: 300,
   });
-  const expected =
-    800 * (0.6 / 1_000_000) +
+  const expected = 800 * (0.6 / 1_000_000) +
     200 * (0.06 / 1_000_000) +
     400 * (10 / 1_000_000) +
     100 * (0.30 / 1_000_000) +
@@ -83,12 +86,15 @@ Deno.test("Realtime cost estimation remains unchanged", () => {
   assert(Math.abs(cost - expected) < 1e-12, "expected existing Realtime rates");
 });
 
-Deno.test("Cartesia and Responses costs use provider billable units", () => {
+Deno.test("Cartesia, Anthropic, and Responses costs use provider billable units", () => {
   const cartesia = estimateCartesiaCostUsd({
     sttAudioSeconds: 60,
     ttsCharacters: 900,
   });
-  assert(Math.abs(cartesia - 0.054) < 1e-12, "expected Ink-2 and Sonic credit cost");
+  assert(
+    Math.abs(cartesia - 0.054) < 1e-12,
+    "expected Ink-2 and Sonic credit cost",
+  );
   const luna = estimateResponsesCostUsd({
     model: "gpt-5.6-luna",
     inputTokens: 1_000,
@@ -101,4 +107,15 @@ Deno.test("Cartesia and Responses costs use provider billable units", () => {
   });
   assert(luna > 0, "expected positive Luna cost");
   assert(terra > luna, "expected Terra to cost more than Luna");
+  const haiku = estimateAnthropicCostUsd({
+    model: "claude-haiku-4-5-20251001",
+    inputTokens: 1_000,
+    outputTokens: 100,
+    cacheCreationInputTokens: 500,
+    cacheReadInputTokens: 250,
+  });
+  assert(
+    Math.abs(haiku - 0.00215) < 1e-12,
+    "expected Haiku input, output, and prompt-cache rates",
+  );
 });

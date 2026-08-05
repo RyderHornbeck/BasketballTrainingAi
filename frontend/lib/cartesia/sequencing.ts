@@ -19,3 +19,24 @@ export function shouldAcceptTurnEvent(
   );
 }
 
+export function shouldAcceptPlaybackChunk(
+  current: {
+    speechEpoch: number;
+    playbackGeneration: number;
+    contextId: string | null;
+    active: boolean;
+  },
+  chunk: {
+    speechEpoch: number;
+    playbackGeneration: number;
+    contextId: string;
+  }
+): boolean {
+  return (
+    current.active &&
+    current.speechEpoch === chunk.speechEpoch &&
+    current.playbackGeneration === chunk.playbackGeneration &&
+    current.contextId === chunk.contextId
+  );
+}
+

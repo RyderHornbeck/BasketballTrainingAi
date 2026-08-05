@@ -18,6 +18,9 @@ const replayCases = [
   { phrase: "go to the fifth drill", deterministic: "navigation", capabilities: ["reads", "navigation"] },
   { phrase: "reopen the current workout", deterministic: "completion", capabilities: ["reads", "completion"] },
   { phrase: "save note my left hand felt weak", deterministic: "save_note", capabilities: ["reads", "notes"] },
+  { phrase: "change this set to 30 seconds", deterministic: "set_prescription", capabilities: ["reads", "navigation", "edits"] },
+  { phrase: "set this set target to 8 makes in 12 attempts", deterministic: "set_prescription", capabilities: ["reads", "shots", "navigation"] },
+  { phrase: "complete set two", deterministic: "completion", capabilities: ["reads", "navigation", "completion"] },
   { phrase: "recommend and add a shooting drill", deterministic: null, capabilities: ["reads", "shots", "navigation", "edits", "recommendations"] },
   {
     phrase: "help me adjust this",
@@ -49,7 +52,7 @@ async function main() {
     resolve(root, "supabase/functions/_shared/coachCore.ts"),
     "utf8"
   );
-  const prompt = coachCore.match(/export const COACH_SYSTEM_PROMPT = `([\s\S]*?)`;/)?.[1] ?? "";
+  const prompt = coachCore.match(/export const COACH_TURN_STABLE_SYSTEM_PROMPT = `([\s\S]*?)`;/)?.[1] ?? "";
   const realtimeTools = COACH_TOOL_REGISTRY.filter((tool) => tool.realtime);
   const capabilityPayloads = Object.fromEntries(
     [...new Set(realtimeTools.map((tool) => tool.capability))].map((capability) => [
@@ -57,7 +60,7 @@ async function main() {
       JSON.stringify(realtimeTools.filter((tool) => tool.capability === capability)).length,
     ])
   );
-  const committedBaselinePromptChars = 6917;
+  const committedBaselinePromptChars = 8905;
   const promptReductionPct = Number(
     ((1 - prompt.length / committedBaselinePromptChars) * 100).toFixed(1)
   );

@@ -58,6 +58,9 @@ export interface Profile {
   theme: "light" | "dark";
   timezone: string | null;
   realtime_coach_voice: "ash" | "cedar" | "marin" | "shimmer";
+  ai_data_processing_allowed: boolean;
+  ai_data_processing_consent_version: string | null;
+  ai_data_processing_consent_updated_at: string | null;
 }
 
 export interface OnboardingAnswers {

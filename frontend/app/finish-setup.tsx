@@ -3,8 +3,15 @@ import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
 import { useSubscription } from "@/hooks/useSubscription";
 import { useTheme } from "@/hooks/useTheme";
+import {
+  clearPendingAIDataConsent,
+  loadPendingAIDataConsent,
+  setAIDataConsent,
+} from "@/lib/aiDataConsent";
+import { DEFAULT_COACH_VOICE } from "@/lib/coachProfiles";
 import { clearOnboardingDraft, loadOnboardingDraft } from "@/lib/onboardingDraft";
 import { requestPlanGeneration, submitOnboardingAnswers } from "@/lib/plan";
+import { supabase } from "@/lib/supabase";
 import { Redirect, router } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
@@ -55,11 +62,27 @@ export default function FinishSetupScreen() {
         return;
       }
 
+      const pendingAIConsent = await loadPendingAIDataConsent();
       await withSetupTimeout(
-        submitOnboardingAnswers(user.id, draft),
+        (async () => {
+          await setAIDataConsent(pendingAIConsent?.allowed === true, "onboarding");
+          const { error: voiceError } = await supabase
+            .from("profiles")
+            .update({
+              realtime_coach_voice:
+                draft.realtime_coach_voice ?? DEFAULT_COACH_VOICE,
+            })
+            .eq("id", user.id);
+          if (voiceError) throw voiceError;
+          // Mark onboarding complete only after every preference is durable.
+          await submitOnboardingAnswers(user.id, draft);
+        })(),
         "Saving your preferences"
       );
-      await clearOnboardingDraft();
+      await Promise.all([
+        clearOnboardingDraft(),
+        clearPendingAIDataConsent(),
+      ]);
       await withSetupTimeout(refreshProfile(), "Refreshing your profile");
       await waitForCommittedFrame();
       router.push("/(tabs)/days");

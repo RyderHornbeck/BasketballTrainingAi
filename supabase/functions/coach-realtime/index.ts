@@ -10,13 +10,15 @@ import {
   loadWorkoutContext,
   type TimerState,
 } from "../_shared/coachCore.ts";
+import { COACH_LIMITS, DEFAULT_REALTIME_MODEL } from "../_shared/coachUsage.ts";
 import {
-  COACH_LIMITS,
-  DEFAULT_REALTIME_MODEL,
-} from "../_shared/coachUsage.ts";
+  aiDataConsentRequiredBody,
+  hasCurrentAIDataConsent,
+} from "../_shared/aiDataConsent.ts";
 
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
-const REALTIME_MODEL = Deno.env.get("OPENAI_REALTIME_MODEL") ?? DEFAULT_REALTIME_MODEL;
+const REALTIME_MODEL = Deno.env.get("OPENAI_REALTIME_MODEL") ??
+  DEFAULT_REALTIME_MODEL;
 const DEFAULT_REALTIME_VOICE = Deno.env.get("OPENAI_REALTIME_VOICE") ?? "ash";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -38,7 +40,7 @@ function jsonResponse(body: unknown, status = 200) {
 async function getDailyUsageTotals(
   supabase: any,
   userId: string,
-  timezone: string | null
+  timezone: string | null,
 ) {
   let formatter: Intl.DateTimeFormat;
   try {
@@ -57,9 +59,11 @@ async function getDailyUsageTotals(
     });
   }
   const parts = formatter.formatToParts(new Date());
-  const localDate = `${parts.find((part) => part.type === "year")?.value}-${parts.find(
-    (part) => part.type === "month"
-  )?.value}-${parts.find((part) => part.type === "day")?.value}`;
+  const localDate = `${parts.find((part) => part.type === "year")?.value}-${
+    parts.find(
+      (part) => part.type === "month",
+    )?.value
+  }-${parts.find((part) => part.type === "day")?.value}`;
   const { data } = await supabase
     .from("coach_daily_usage")
     .select("spent_usd")
@@ -84,14 +88,21 @@ Deno.serve(async (req: Request) => {
 
   try {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) return jsonResponse({ error: "Missing Authorization header" }, 401);
+    if (!authHeader) {
+      return jsonResponse({ error: "Missing Authorization header" }, 401);
+    }
 
     const jwt = authHeader.replace(/^Bearer\s+/i, "");
-    const { data: userData, error: userError } = await supabase.auth.getUser(jwt);
+    const { data: userData, error: userError } = await supabase.auth.getUser(
+      jwt,
+    );
     if (userError || !userData?.user) {
       return jsonResponse({ error: "Invalid or expired session" }, 401);
     }
     const userId = userData.user.id;
+    if (!(await hasCurrentAIDataConsent(supabase, userId))) {
+      return jsonResponse(aiDataConsentRequiredBody(), 403);
+    }
 
     const body = (await req.json().catch(() => ({}))) as {
       day_id?: string;
@@ -104,11 +115,18 @@ Deno.serve(async (req: Request) => {
 
     if (!body.day_id) return jsonResponse({ error: "day_id is required" }, 400);
     if (!body.sdp) return jsonResponse({ error: "sdp is required" }, 400);
-    if (!body.session_key) return jsonResponse({ error: "session_key is required" }, 400);
-    if (body.day_id.length > 64 || body.session_key.length < 16 || body.session_key.length > 128) {
+    if (!body.session_key) {
+      return jsonResponse({ error: "session_key is required" }, 400);
+    }
+    if (
+      body.day_id.length > 64 || body.session_key.length < 16 ||
+      body.session_key.length > 128
+    ) {
       return jsonResponse({ error: "Invalid session parameters" }, 400);
     }
-    if (body.sdp.length > 2_000_000) return jsonResponse({ error: "SDP payload is too large" }, 413);
+    if (body.sdp.length > 2_000_000) {
+      return jsonResponse({ error: "SDP payload is too large" }, 413);
+    }
     if ((body.conversation_summary?.length ?? 0) > 8_000) {
       return jsonResponse({ error: "Conversation summary is too large" }, 413);
     }
@@ -118,10 +136,15 @@ Deno.serve(async (req: Request) => {
       .select("timezone, realtime_coach_voice")
       .eq("id", userId)
       .maybeSingle();
-    const realtimeVoice = ALLOWED_REALTIME_VOICES.has(profile?.realtime_coach_voice ?? "")
-      ? profile!.realtime_coach_voice
-      : DEFAULT_REALTIME_VOICE;
-    const dailySpent = await getDailyUsageTotals(supabase, userId, profile?.timezone ?? null);
+    const realtimeVoice =
+      ALLOWED_REALTIME_VOICES.has(profile?.realtime_coach_voice ?? "")
+        ? profile!.realtime_coach_voice
+        : DEFAULT_REALTIME_VOICE;
+    const dailySpent = await getDailyUsageTotals(
+      supabase,
+      userId,
+      profile?.timezone ?? null,
+    );
     if (dailySpent >= COACH_LIMITS.maxDailyCostUsd) {
       return jsonResponse(
         {
@@ -133,7 +156,7 @@ Deno.serve(async (req: Request) => {
             remaining_usd: 0,
           },
         },
-        429
+        429,
       );
     }
 
@@ -143,10 +166,13 @@ Deno.serve(async (req: Request) => {
       .eq("session_key", body.session_key)
       .maybeSingle();
     if (
-      existingSession
-      && (existingSession.user_id !== userId || existingSession.day_id !== body.day_id)
+      existingSession &&
+      (existingSession.user_id !== userId ||
+        existingSession.day_id !== body.day_id)
     ) {
-      return jsonResponse({ error: "Session key is already bound to another workout." }, 409);
+      return jsonResponse({
+        error: "Session key is already bound to another workout.",
+      }, 409);
     }
 
     const ctx = await loadWorkoutContext(supabase, userId, body.day_id);
@@ -164,20 +190,23 @@ Deno.serve(async (req: Request) => {
       ctx,
       answers ?? null,
       body.timer,
-      body.conversation_summary
+      body.conversation_summary,
     );
-    const { data: reservationRows, error: reservationError } = await supabase.rpc(
-      "reserve_coach_session_usage",
-      {
-        p_user_id: userId,
-        p_session_key: body.session_key,
-        p_day_id: body.day_id,
-        p_model: REALTIME_MODEL,
-        p_reservation_usd: 0.0025,
-      }
-    );
+    const { data: reservationRows, error: reservationError } = await supabase
+      .rpc(
+        "reserve_coach_session_usage",
+        {
+          p_user_id: userId,
+          p_session_key: body.session_key,
+          p_day_id: body.day_id,
+          p_model: REALTIME_MODEL,
+          p_reservation_usd: 0.0025,
+        },
+      );
     if (reservationError) throw reservationError;
-    const reservation = Array.isArray(reservationRows) ? reservationRows[0] : reservationRows;
+    const reservation = Array.isArray(reservationRows)
+      ? reservationRows[0]
+      : reservationRows;
     if (!reservation?.allowed) {
       return jsonResponse(
         {
@@ -185,7 +214,7 @@ Deno.serve(async (req: Request) => {
           code: "daily_budget_exhausted",
           daily_usage: reservation,
         },
-        429
+        429,
       );
     }
 
@@ -195,29 +224,32 @@ Deno.serve(async (req: Request) => {
         answers ?? null,
         body.timer,
         body.conversation_summary,
-        COACH_NAME_BY_VOICE[realtimeVoice] ?? "Coach Tyler"
+        COACH_NAME_BY_VOICE[realtimeVoice] ?? "Coach Tyler",
       ),
       REALTIME_MODEL,
       realtimeVoice,
-      body.audio_profile === "speaker" ? "speaker" : "bluetooth"
+      body.audio_profile === "speaker" ? "speaker" : "bluetooth",
     );
 
     // This is retained as a database session-validity timestamp, not a coach
     // conversation limit. Workout/day limits are enforced separately above.
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const sessionValues = {
-        user_id: userId,
-        day_id: body.day_id,
-        session_key: body.session_key,
-        model: REALTIME_MODEL,
-        response_count: existingSession?.response_count ?? 0,
-        workout_response_count: 0,
-        started_at: new Date().toISOString(),
-        expires_at: expiresAt,
-        ended_at: null,
-      };
+      user_id: userId,
+      day_id: body.day_id,
+      session_key: body.session_key,
+      model: REALTIME_MODEL,
+      response_count: existingSession?.response_count ?? 0,
+      workout_response_count: 0,
+      started_at: new Date().toISOString(),
+      expires_at: expiresAt,
+      ended_at: null,
+    };
     const sessionWrite = existingSession
-      ? supabase.from("coach_sessions").update(sessionValues).eq("id", existingSession.id)
+      ? supabase.from("coach_sessions").update(sessionValues).eq(
+        "id",
+        existingSession.id,
+      )
       : supabase.from("coach_sessions").insert(sessionValues);
     const { error: sessionWriteError } = await sessionWrite;
     if (sessionWriteError) throw sessionWriteError;
@@ -225,6 +257,15 @@ Deno.serve(async (req: Request) => {
     const form = new FormData();
     form.set("sdp", body.sdp);
     form.set("session", JSON.stringify(sessionConfig));
+
+    if (!(await hasCurrentAIDataConsent(supabase, userId))) {
+      await supabase
+        .from("coach_sessions")
+        .update({ ended_at: new Date().toISOString() })
+        .eq("session_key", body.session_key)
+        .eq("user_id", userId);
+      return jsonResponse(aiDataConsentRequiredBody(), 403);
+    }
 
     const openaiRes = await fetch("https://api.openai.com/v1/realtime/calls", {
       method: "POST",
@@ -237,7 +278,10 @@ Deno.serve(async (req: Request) => {
 
     if (!openaiRes.ok) {
       const errText = await openaiRes.text();
-      console.error(`OpenAI realtime/calls failed (${openaiRes.status}):`, errText.slice(0, 500));
+      console.error(
+        `OpenAI realtime/calls failed (${openaiRes.status}):`,
+        errText.slice(0, 500),
+      );
       let detail: string | undefined;
       try {
         const parsed = JSON.parse(errText) as { error?: { message?: string } };
@@ -250,7 +294,7 @@ Deno.serve(async (req: Request) => {
           error: `Realtime session failed (${openaiRes.status})`,
           detail,
         },
-        502
+        502,
       );
     }
 

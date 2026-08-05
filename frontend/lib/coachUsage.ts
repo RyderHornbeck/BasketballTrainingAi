@@ -245,3 +245,20 @@ export function appendConversationSummary(current: string, addition: string, max
   const merged = current ? `${current} ${trimmed}` : trimmed;
   return merged.length > maxLen ? merged.slice(-maxLen) : merged;
 }
+
+export function appendConversationTurn(
+  current: string,
+  userTranscript: string,
+  coachResponse: string,
+  maxLen = 1_200,
+): string {
+  const user = userTranscript.trim();
+  const coach = coachResponse.trim();
+  if (!user && !coach) return current.slice(-maxLen);
+  const turn = [
+    user ? `User: ${user}` : "",
+    coach ? `Coach: ${coach}` : "",
+  ].filter(Boolean).join("\n");
+  const merged = current ? `${current}\n${turn}` : turn;
+  return merged.length > maxLen ? merged.slice(-maxLen) : merged;
+}

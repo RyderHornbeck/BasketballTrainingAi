@@ -26,12 +26,18 @@
 
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import {
+  aiDataConsentRequiredBody,
+  hasCurrentAIDataConsent,
+} from "../_shared/aiDataConsent.ts";
 
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const COACH_MODEL = Deno.env.get("OPENAI_COACH_MODEL") ?? "gpt-4o-mini";
-const TRANSCRIBE_MODEL = Deno.env.get("OPENAI_TRANSCRIBE_MODEL") ?? "gpt-4o-mini-transcribe";
+const TRANSCRIBE_MODEL = Deno.env.get("OPENAI_TRANSCRIBE_MODEL") ??
+  "gpt-4o-mini-transcribe";
 const ELEVENLABS_API_KEY = Deno.env.get("ELEVENLABS_API_KEY");
-const ELEVENLABS_VOICE_ID = Deno.env.get("ELEVENLABS_VOICE_ID") ?? "21m00Tcm4TlvDq8ikWAM";
+const ELEVENLABS_VOICE_ID = Deno.env.get("ELEVENLABS_VOICE_ID") ??
+  "21m00Tcm4TlvDq8ikWAM";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
@@ -86,12 +92,22 @@ function bytesToBase64(buffer: ArrayBuffer): string {
 // Speech to text
 // ---------------------------------------------------------------------------
 
-async function transcribeAudio(audioBase64: string, mime: string): Promise<string> {
+async function transcribeAudio(
+  audioBase64: string,
+  mime: string,
+): Promise<string> {
   const bytes = base64ToBytes(audioBase64);
-  const ext = mime.includes("wav") ? "wav" : mime.includes("mp3") ? "mp3" : "m4a";
+  const ext = mime.includes("wav")
+    ? "wav"
+    : mime.includes("mp3")
+    ? "mp3"
+    : "m4a";
 
   const form = new FormData();
-  form.append("file", new File([bytes.buffer as ArrayBuffer], `speech.${ext}`, { type: mime }));
+  form.append(
+    "file",
+    new File([bytes.buffer as ArrayBuffer], `speech.${ext}`, { type: mime }),
+  );
   form.append("model", TRANSCRIBE_MODEL);
   form.append("language", "en");
 
@@ -103,7 +119,9 @@ async function transcribeAudio(audioBase64: string, mime: string): Promise<strin
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Transcription failed (${res.status}): ${text.slice(0, 300)}`);
+    throw new Error(
+      `Transcription failed (${res.status}): ${text.slice(0, 300)}`,
+    );
   }
 
   const data = await res.json();
@@ -154,11 +172,13 @@ interface WorkoutContext {
 async function loadWorkoutContext(
   supabase: SupabaseClient,
   userId: string,
-  dayId: string
+  dayId: string,
 ): Promise<WorkoutContext | null> {
   const { data: day } = await supabase
     .from("workout_days")
-    .select("id, title, focus, estimated_minutes, coach_notes, completed, user_id")
+    .select(
+      "id, title, focus, estimated_minutes, coach_notes, completed, user_id",
+    )
     .eq("id", dayId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -168,7 +188,7 @@ async function loadWorkoutContext(
   const { data: exercises } = await supabase
     .from("workout_exercises")
     .select(
-      "id, order_index, name, category, instructions, sets, reps, duration, target_makes, target_attempts, log_type"
+      "id, order_index, name, category, instructions, sets, reps, duration, target_makes, target_attempts, log_type",
     )
     .eq("day_id", dayId)
     .order("order_index", { ascending: true });
@@ -179,7 +199,9 @@ async function loadWorkoutContext(
   if (exerciseIds.length > 0) {
     const { data: logRows } = await supabase
       .from("exercise_logs")
-      .select("exercise_id, completed, makes, attempts, minutes_completed, difficulty, notes")
+      .select(
+        "exercise_id, completed, makes, attempts, minutes_completed, difficulty, notes",
+      )
       .in("exercise_id", exerciseIds);
     for (const log of (logRows ?? []) as LogRow[]) {
       logs.set(log.exercise_id, log);
@@ -196,7 +218,7 @@ async function loadWorkoutContext(
 function buildContextSummary(
   ctx: WorkoutContext,
   profile: Record<string, unknown> | null,
-  timer: TimerState | undefined
+  timer: TimerState | undefined,
 ): string {
   const drills = ctx.exercises.map((ex) => {
     const log = ctx.logs.get(ex.id);
@@ -229,8 +251,9 @@ function buildContextSummary(
   }
 
   const elapsedMin = timer ? Math.round(timer.elapsed_seconds / 60) : 0;
-  const remainingMin =
-    ctx.day.estimated_minutes != null ? Math.max(0, ctx.day.estimated_minutes - elapsedMin) : null;
+  const remainingMin = ctx.day.estimated_minutes != null
+    ? Math.max(0, ctx.day.estimated_minutes - elapsedMin)
+    : null;
 
   return JSON.stringify({
     workout_day: {
@@ -241,13 +264,17 @@ function buildContextSummary(
       day_completed: ctx.day.completed,
     },
     drills,
-    current_drill: current ? { exercise_id: current.exercise_id, name: current.name } : null,
+    current_drill: current
+      ? { exercise_id: current.exercise_id, name: current.name }
+      : null,
     progress: {
       completed_drills: completedCount,
       total_drills: drills.length,
       total_makes_today: totalMakes,
       total_attempts_today: totalAttempts,
-      shooting_pct_today: totalAttempts > 0 ? Math.round((totalMakes / totalAttempts) * 100) : null,
+      shooting_pct_today: totalAttempts > 0
+        ? Math.round((totalMakes / totalAttempts) * 100)
+        : null,
     },
     timer: {
       running: timer?.running ?? false,
@@ -272,12 +299,16 @@ const TOOLS = [
       parameters: {
         type: "object",
         properties: {
-          exercise_id: { type: "string", description: "The drill's exercise_id from context" },
+          exercise_id: {
+            type: "string",
+            description: "The drill's exercise_id from context",
+          },
           makes: { type: "number" },
           attempts: { type: "number" },
           completed: {
             type: "boolean",
-            description: "True if this set finishes the drill (target reached or user is done with it)",
+            description:
+              "True if this set finishes the drill (target reached or user is done with it)",
           },
         },
         required: ["exercise_id", "makes", "attempts"],
@@ -313,12 +344,16 @@ const TOOLS = [
     type: "function",
     function: {
       name: "skip_drill",
-      description: "Skip the current drill and move on when the user asks to skip.",
+      description:
+        "Skip the current drill and move on when the user asks to skip.",
       parameters: {
         type: "object",
         properties: {
           exercise_id: { type: "string" },
-          reason: { type: "string", description: "Short reason, e.g. 'user tired'" },
+          reason: {
+            type: "string",
+            description: "Short reason, e.g. 'user tired'",
+          },
         },
         required: ["exercise_id"],
       },
@@ -328,7 +363,8 @@ const TOOLS = [
     type: "function",
     function: {
       name: "save_note",
-      description: "Attach a note to a drill when the user says something worth remembering.",
+      description:
+        "Attach a note to a drill when the user says something worth remembering.",
       parameters: {
         type: "object",
         properties: {
@@ -343,7 +379,8 @@ const TOOLS = [
     type: "function",
     function: {
       name: "extend_workout",
-      description: "Add minutes to today's workout when the user wants more time.",
+      description:
+        "Add minutes to today's workout when the user wants more time.",
       parameters: {
         type: "object",
         properties: { minutes: { type: "number" } },
@@ -359,7 +396,9 @@ const TOOLS = [
         "Reduce today's workout when the user is short on time (e.g. 'I only have twenty minutes left').",
       parameters: {
         type: "object",
-        properties: { minutes: { type: "number", description: "Minutes to remove" } },
+        properties: {
+          minutes: { type: "number", description: "Minutes to remove" },
+        },
         required: ["minutes"],
       },
     },
@@ -368,7 +407,8 @@ const TOOLS = [
     type: "function",
     function: {
       name: "finish_workout",
-      description: "Finish and close out today's workout when the user says they're done, even if drills remain unfinished.",
+      description:
+        "Finish and close out today's workout when the user says they're done, even if drills remain unfinished.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -410,25 +450,28 @@ async function executeTool(
   dayId: string,
   ctx: WorkoutContext,
   name: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
 ): Promise<ToolOutcome> {
   const validExercise = (id: unknown): string | null =>
-    typeof id === "string" && ctx.exercises.some((e) => e.id === id) ? id : null;
+    typeof id === "string" && ctx.exercises.some((e) => e.id === id)
+      ? id
+      : null;
 
   switch (name) {
     case "save_shooting_results": {
       const exerciseId = validExercise(args.exercise_id);
-      if (!exerciseId) return { result: "Error: unknown exercise_id", dbChanged: false };
+      if (!exerciseId) {
+        return { result: "Error: unknown exercise_id", dbChanged: false };
+      }
       const makes = Number(args.makes ?? 0);
       const attempts = Number(args.attempts ?? 0);
       const existing = ctx.logs.get(exerciseId);
       const ex = ctx.exercises.find((e) => e.id === exerciseId);
-      const completed =
-        typeof args.completed === "boolean"
-          ? args.completed
-          : ex?.target_makes != null
-            ? makes >= ex.target_makes
-            : false;
+      const completed = typeof args.completed === "boolean"
+        ? args.completed
+        : ex?.target_makes != null
+        ? makes >= ex.target_makes
+        : false;
 
       const { error } = await supabase.from("exercise_logs").upsert(
         {
@@ -442,12 +485,15 @@ async function executeTool(
           difficulty: existing?.difficulty ?? null,
           notes: existing?.notes ?? null,
         },
-        { onConflict: "exercise_id" }
+        { onConflict: "exercise_id" },
       );
-      if (error) return { result: `Error saving: ${error.message}`, dbChanged: false };
+      if (error) {
+        return { result: `Error saving: ${error.message}`, dbChanged: false };
+      }
       const pct = attempts > 0 ? Math.round((makes / attempts) * 100) : 0;
       return {
-        result: `Saved ${makes}/${attempts} (${pct}%). Drill completed: ${completed}.`,
+        result:
+          `Saved ${makes}/${attempts} (${pct}%). Drill completed: ${completed}.`,
         dbChanged: true,
       };
     }
@@ -455,12 +501,17 @@ async function executeTool(
     case "complete_drill":
     case "skip_drill": {
       const exerciseId = validExercise(args.exercise_id);
-      if (!exerciseId) return { result: "Error: unknown exercise_id", dbChanged: false };
+      if (!exerciseId) {
+        return { result: "Error: unknown exercise_id", dbChanged: false };
+      }
       const existing = ctx.logs.get(exerciseId);
-      const skipNote =
-        name === "skip_drill"
-          ? `Skipped${typeof args.reason === "string" && args.reason ? `: ${args.reason}` : ""}`
-          : null;
+      const skipNote = name === "skip_drill"
+        ? `Skipped${
+          typeof args.reason === "string" && args.reason
+            ? `: ${args.reason}`
+            : ""
+        }`
+        : null;
       const { error } = await supabase.from("exercise_logs").upsert(
         {
           exercise_id: exerciseId,
@@ -473,7 +524,7 @@ async function executeTool(
           difficulty: existing?.difficulty ?? null,
           notes: skipNote ?? existing?.notes ?? null,
         },
-        { onConflict: "exercise_id" }
+        { onConflict: "exercise_id" },
       );
       if (error) return { result: `Error: ${error.message}`, dbChanged: false };
       const idx = ctx.exercises.findIndex((e) => e.id === exerciseId);
@@ -481,14 +532,18 @@ async function executeTool(
         .slice(idx + 1)
         .find((e) => !(ctx.logs.get(e.id)?.completed ?? false));
       return {
-        result: `${name === "skip_drill" ? "Skipped" : "Completed"}. Next drill: ${next?.name ?? "none — workout drills all done"}.`,
+        result: `${
+          name === "skip_drill" ? "Skipped" : "Completed"
+        }. Next drill: ${next?.name ?? "none — workout drills all done"}.`,
         dbChanged: true,
       };
     }
 
     case "uncomplete_drill": {
       const exerciseId = validExercise(args.exercise_id);
-      if (!exerciseId) return { result: "Error: unknown exercise_id", dbChanged: false };
+      if (!exerciseId) {
+        return { result: "Error: unknown exercise_id", dbChanged: false };
+      }
       const existing = ctx.logs.get(exerciseId);
       const ex = ctx.exercises.find((e) => e.id === exerciseId);
 
@@ -504,7 +559,7 @@ async function executeTool(
           difficulty: existing?.difficulty ?? null,
           notes: existing?.notes ?? null,
         },
-        { onConflict: "exercise_id" }
+        { onConflict: "exercise_id" },
       );
       if (error) return { result: `Error: ${error.message}`, dbChanged: false };
 
@@ -519,14 +574,18 @@ async function executeTool(
       }
 
       return {
-        result: `Marked "${ex?.name ?? "drill"}" as not complete. You can run it again.`,
+        result: `Marked "${
+          ex?.name ?? "drill"
+        }" as not complete. You can run it again.`,
         dbChanged: true,
       };
     }
 
     case "save_note": {
       const exerciseId = validExercise(args.exercise_id);
-      if (!exerciseId) return { result: "Error: unknown exercise_id", dbChanged: false };
+      if (!exerciseId) {
+        return { result: "Error: unknown exercise_id", dbChanged: false };
+      }
       const existing = ctx.logs.get(exerciseId);
       const note = String(args.note ?? "").slice(0, 500);
       const merged = existing?.notes ? `${existing.notes}\n${note}` : note;
@@ -542,7 +601,7 @@ async function executeTool(
           difficulty: existing?.difficulty ?? null,
           notes: merged,
         },
-        { onConflict: "exercise_id" }
+        { onConflict: "exercise_id" },
       );
       if (error) return { result: `Error: ${error.message}`, dbChanged: false };
       return { result: "Note saved.", dbChanged: true };
@@ -551,10 +610,13 @@ async function executeTool(
     case "extend_workout":
     case "shorten_workout": {
       const minutes = Math.abs(Number(args.minutes ?? 0));
-      if (!minutes) return { result: "Error: minutes required", dbChanged: false };
+      if (!minutes) {
+        return { result: "Error: minutes required", dbChanged: false };
+      }
       const current = ctx.day.estimated_minutes ?? 45;
-      const updated =
-        name === "extend_workout" ? current + minutes : Math.max(5, current - minutes);
+      const updated = name === "extend_workout"
+        ? current + minutes
+        : Math.max(5, current - minutes);
       const { error } = await supabase
         .from("workout_days")
         .update({ estimated_minutes: updated })
@@ -565,26 +627,33 @@ async function executeTool(
     }
 
     case "finish_workout": {
-      if (ctx.day.completed) return { result: "Workout already finished.", dbChanged: false };
-      const completionKind =
-        ctx.exercises.length > 0 &&
-        ctx.exercises.every((exercise) => ctx.logs.get(exercise.id)?.completed === true)
-          ? "full"
-          : "partial";
+      if (ctx.day.completed) {
+        return { result: "Workout already finished.", dbChanged: false };
+      }
+      const completionKind = ctx.exercises.length > 0 &&
+          ctx.exercises.every((exercise) =>
+            ctx.logs.get(exercise.id)?.completed === true
+          )
+        ? "full"
+        : "partial";
       const completedMinutes = [...ctx.logs.values()].reduce(
         (total, log) => total + (log.minutes_completed ?? 0),
-        0
+        0,
       );
 
-      const { error: logError } = await supabase.from("workout_day_logs").upsert(
-        {
-          day_id: dayId,
-          user_id: userId,
-          total_minutes: completedMinutes || ctx.day.estimated_minutes || null,
-        },
-        { onConflict: "day_id" }
-      );
-      if (logError) return { result: `Error: ${logError.message}`, dbChanged: false };
+      const { error: logError } = await supabase.from("workout_day_logs")
+        .upsert(
+          {
+            day_id: dayId,
+            user_id: userId,
+            total_minutes: completedMinutes || ctx.day.estimated_minutes ||
+              null,
+          },
+          { onConflict: "day_id" },
+        );
+      if (logError) {
+        return { result: `Error: ${logError.message}`, dbChanged: false };
+      }
 
       await supabase
         .from("workout_days")
@@ -619,11 +688,23 @@ async function executeTool(
     }
 
     case "start_timer":
-      return { result: "Timer started.", dbChanged: false, clientAction: { type: "start_timer" } };
+      return {
+        result: "Timer started.",
+        dbChanged: false,
+        clientAction: { type: "start_timer" },
+      };
     case "pause_timer":
-      return { result: "Timer paused.", dbChanged: false, clientAction: { type: "pause_timer" } };
+      return {
+        result: "Timer paused.",
+        dbChanged: false,
+        clientAction: { type: "pause_timer" },
+      };
     case "resume_timer":
-      return { result: "Timer resumed.", dbChanged: false, clientAction: { type: "resume_timer" } };
+      return {
+        result: "Timer resumed.",
+        dbChanged: false,
+        clientAction: { type: "resume_timer" },
+      };
 
     default:
       return { result: `Unknown tool: ${name}`, dbChanged: false };
@@ -634,7 +715,8 @@ async function executeTool(
 // Chat
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are an experienced basketball shooting coach speaking into the athlete's earbud during a live workout. You are calm, confident, positive, focused, and direct.
+const SYSTEM_PROMPT =
+  `You are an experienced basketball shooting coach speaking into the athlete's earbud during a live workout. You are calm, confident, positive, focused, and direct.
 
 Rules:
 - Your replies are spoken aloud. Keep them SHORT: 1-3 sentences, under ~35 words, unless the athlete explicitly asks for a detailed explanation.
@@ -661,7 +743,10 @@ interface ChatMessage {
   tool_call_id?: string;
 }
 
-async function chatCompletion(messages: ChatMessage[], useTools: boolean): Promise<{
+async function chatCompletion(
+  messages: ChatMessage[],
+  useTools: boolean,
+): Promise<{
   content: string | null;
   toolCalls: Array<{ id: string; name: string; arguments: string }>;
 }> {
@@ -681,7 +766,9 @@ async function chatCompletion(messages: ChatMessage[], useTools: boolean): Promi
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Chat completion failed (${res.status}): ${text.slice(0, 300)}`);
+    throw new Error(
+      `Chat completion failed (${res.status}): ${text.slice(0, 300)}`,
+    );
   }
 
   const data = await res.json();
@@ -691,7 +778,7 @@ async function chatCompletion(messages: ChatMessage[], useTools: boolean): Promi
       id: tc.id,
       name: tc.function.name,
       arguments: tc.function.arguments,
-    })
+    }),
   );
 
   return { content: message?.content ?? null, toolCalls };
@@ -715,12 +802,20 @@ async function synthesizeSpeech(text: string): Promise<string | null> {
         body: JSON.stringify({
           text,
           model_id: "eleven_turbo_v2_5",
-          voice_settings: { stability: 0.5, similarity_boost: 0.75, speed: 1.05 },
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75,
+            speed: 1.05,
+          },
         }),
-      }
+      },
     );
     if (!res.ok) {
-      console.error(`ElevenLabs TTS failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+      console.error(
+        `ElevenLabs TTS failed (${res.status}): ${
+          (await res.text()).slice(0, 200)
+        }`,
+      );
       return null;
     }
     return bytesToBase64(await res.arrayBuffer());
@@ -749,19 +844,30 @@ Deno.serve(async (req: Request) => {
 
   try {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) return jsonResponse({ error: "Missing Authorization header" }, 401);
+    if (!authHeader) {
+      return jsonResponse({ error: "Missing Authorization header" }, 401);
+    }
 
     const jwt = authHeader.replace(/^Bearer\s+/i, "");
-    const { data: userData, error: userError } = await supabase.auth.getUser(jwt);
+    const { data: userData, error: userError } = await supabase.auth.getUser(
+      jwt,
+    );
     if (userError || !userData?.user) {
       return jsonResponse({ error: "Invalid or expired session" }, 401);
     }
     const userId = userData.user.id;
+    if (!(await hasCurrentAIDataConsent(supabase, userId))) {
+      return jsonResponse(aiDataConsentRequiredBody(), 403);
+    }
 
     const body = (await req.json().catch(() => ({}))) as CoachRequest;
     if (!body.day_id) return jsonResponse({ error: "day_id is required" }, 400);
-    if (body.day_id.length > 64) return jsonResponse({ error: "Invalid day_id" }, 400);
-    if ((body.text?.length ?? 0) > 4_000) return jsonResponse({ error: "Text is too long" }, 413);
+    if (body.day_id.length > 64) {
+      return jsonResponse({ error: "Invalid day_id" }, 400);
+    }
+    if ((body.text?.length ?? 0) > 4_000) {
+      return jsonResponse({ error: "Text is too long" }, 413);
+    }
     if ((body.audio_base64?.length ?? 0) > 20_000_000) {
       return jsonResponse({ error: "Audio payload is too large" }, 413);
     }
@@ -771,36 +877,51 @@ Deno.serve(async (req: Request) => {
 
     const ctx = await loadWorkoutContext(supabase, userId, body.day_id);
     if (!ctx) return jsonResponse({ error: "Workout day not found" }, 404);
-    const { data: reservationRows, error: reservationError } = await supabase.rpc(
-      "reserve_coach_session_usage",
-      {
-        p_user_id: userId,
-        p_session_key: `legacy-${crypto.randomUUID()}`,
-        p_day_id: body.day_id,
-        p_model: COACH_MODEL,
-        p_reservation_usd: 0.01,
-      }
-    );
+    const { data: reservationRows, error: reservationError } = await supabase
+      .rpc(
+        "reserve_coach_session_usage",
+        {
+          p_user_id: userId,
+          p_session_key: `legacy-${crypto.randomUUID()}`,
+          p_day_id: body.day_id,
+          p_model: COACH_MODEL,
+          p_reservation_usd: 0.01,
+        },
+      );
     if (reservationError) throw reservationError;
-    const reservation = Array.isArray(reservationRows) ? reservationRows[0] : reservationRows;
+    const reservation = Array.isArray(reservationRows)
+      ? reservationRows[0]
+      : reservationRows;
     if (!reservation?.allowed) {
-      return jsonResponse({ error: "Daily coach credit is used up.", code: "daily_budget_exhausted" }, 429);
+      return jsonResponse({
+        error: "Daily coach credit is used up.",
+        code: "daily_budget_exhausted",
+      }, 429);
     }
 
     // 1. Get the user's words: either raw text or transcribed audio.
     let userText = (body.text ?? "").trim();
     if (!userText && body.audio_base64) {
-      userText = await transcribeAudio(body.audio_base64, body.audio_mime ?? "audio/mp4");
+      userText = await transcribeAudio(
+        body.audio_base64,
+        body.audio_mime ?? "audio/mp4",
+      );
     }
     if (!userText) {
-      return jsonResponse({ transcript: "", reply: null, audio_base64: null, actions: [], db_changed: false });
+      return jsonResponse({
+        transcript: "",
+        reply: null,
+        audio_base64: null,
+        actions: [],
+        db_changed: false,
+      });
     }
 
     // 2. Fresh athlete profile.
     const { data: answers } = await supabase
       .from("onboarding_answers")
       .select(
-        "overall_skill_level, main_goal, position, strengths, weaknesses, preferred_intensity, minutes_per_workout"
+        "overall_skill_level, main_goal, position, strengths, weaknesses, preferred_intensity, minutes_per_workout",
       )
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
@@ -851,15 +972,30 @@ Deno.serve(async (req: Request) => {
         } catch {
           // fall through with empty args; the tool will report the error
         }
-        const outcome = await executeTool(supabase, userId, body.day_id, ctx, tc.name, args);
+        const outcome = await executeTool(
+          supabase,
+          userId,
+          body.day_id,
+          ctx,
+          tc.name,
+          args,
+        );
         if (outcome.dbChanged) dbChanged = true;
         if (outcome.clientAction) actions.push(outcome.clientAction);
-        messages.push({ role: "tool", content: outcome.result, tool_call_id: tc.id });
+        messages.push({
+          role: "tool",
+          content: outcome.result,
+          tool_call_id: tc.id,
+        });
       }
 
       // Refresh context after DB writes so follow-up rounds see new state.
       if (dbChanged) {
-        const freshCtx = await loadWorkoutContext(supabase, userId, body.day_id);
+        const freshCtx = await loadWorkoutContext(
+          supabase,
+          userId,
+          body.day_id,
+        );
         if (freshCtx) {
           ctx.logs = freshCtx.logs;
           ctx.day = freshCtx.day;

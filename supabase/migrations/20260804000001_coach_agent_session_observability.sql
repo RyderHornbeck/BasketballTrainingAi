@@ -223,7 +223,7 @@ declare
   local_date date;
   current_spent numeric := 0;
   daily_budget constant numeric := 0.75;
-  current_time timestamptz := clock_timestamp();
+  v_now timestamptz := clock_timestamp();
 begin
   if p_user_id is null
     or p_day_id is null
@@ -272,7 +272,7 @@ begin
       where timezone.name = profile.timezone
     );
   local_timezone := coalesce(local_timezone, 'UTC');
-  local_date := (current_time at time zone local_timezone)::date;
+  local_date := (v_now at time zone local_timezone)::date;
 
   insert into public.coach_daily_usage (user_id, usage_date, timezone, spent_usd)
   values (p_user_id, local_date, local_timezone, 0)
@@ -299,8 +299,8 @@ begin
       state_version, started_at, refreshed_at, expires_at, ended_at
     ) values (
       p_user_id, p_day_id, p_session_key, p_model, p_provider, p_voice_persona,
-      coalesce(p_state_version, 0), current_time, current_time,
-      current_time + interval '24 hours', null
+      coalesce(p_state_version, 0), v_now, v_now,
+      v_now + interval '24 hours', null
     )
     returning * into active_session;
   else
@@ -310,12 +310,12 @@ begin
         voice_persona = p_voice_persona,
         state_version = greatest(session.state_version, coalesce(p_state_version, 0)),
         started_at = case
-          when session.ended_at is not null or session.expires_at <= current_time
-            then current_time
+          when session.ended_at is not null or session.expires_at <= v_now
+            then v_now
           else session.started_at
         end,
-        refreshed_at = current_time,
-        expires_at = current_time + interval '24 hours',
+        refreshed_at = v_now,
+        expires_at = v_now + interval '24 hours',
         ended_at = null
     where session.id = existing_session.id
     returning * into active_session;

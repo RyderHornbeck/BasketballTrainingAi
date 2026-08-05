@@ -5,7 +5,9 @@ import { usePlan } from "@/hooks/usePlan";
 import { getAnalyticsSummary, prepareAnalyticsSummary } from "@/lib/analytics";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { actionHaptic, selectionHaptic } from "@/lib/haptics";
+import { hasCurrentAIDataConsent } from "@/lib/aiDataConsent";
 import { isDayUnlocked } from "@/lib/plan";
+import { router } from "expo-router";
 import { ChartLineUpIcon, CourtBasketballIcon, UserCircleIcon } from "phosphor-react-native";
 import { BottomTabBar, Tabs } from "expo-router/js-tabs";
 import React, { useEffect, useMemo, useState } from "react";
@@ -28,7 +30,7 @@ const COACH_GAP = 12;
 
 export default function TabsLayout() {
   const { colors, scheme } = useTheme();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const insets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
   const { days } = usePlan();
@@ -183,6 +185,13 @@ export default function TabsLayout() {
       <Pressable
         onPress={() => {
           actionHaptic();
+          if (!hasCurrentAIDataConsent(profile)) {
+            router.push({
+              pathname: "/ai-data-processing",
+              params: { source: "coach_gate" },
+            });
+            return;
+          }
           setCoachOpen(true);
         }}
         style={({ pressed }) => [

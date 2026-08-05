@@ -5,6 +5,7 @@ import { ThemeMode } from "@/components/ThemeProvider";
 import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
+import { hasCurrentAIDataConsent } from "@/lib/aiDataConsent";
 import { actionHaptic } from "@/lib/haptics";
 import { PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL } from "@/lib/legal";
 import { clearOnboardingDraft } from "@/lib/onboardingDraft";
@@ -504,6 +505,16 @@ export default function ProfileScreen() {
           title="Sign Out"
           variant="danger"
           onPress={handleSignOut}
+          style={styles.actionButton}
+        />
+
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Privacy</Text>
+        <Button
+          title={`AI Data Processing · ${
+            hasCurrentAIDataConsent(profile) ? "Allowed" : "Not Allowed"
+          }`}
+          variant="outline"
+          onPress={() => router.push("/ai-data-processing")}
           style={styles.actionButton}
         />
 

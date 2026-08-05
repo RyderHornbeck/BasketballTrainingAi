@@ -4,6 +4,7 @@ import { Profile } from "@/types/database";
 import * as AppleAuthentication from "expo-apple-authentication";
 import * as Crypto from "expo-crypto";
 import * as WebBrowser from "expo-web-browser";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Session, User } from "@supabase/supabase-js";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Platform } from "react-native";
@@ -27,6 +28,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 const STARTUP_TIMEOUT_MS = 3_000;
 const STARTUP_RETRY_ATTEMPTS = 2;
+const PENDING_APPLE_NAME_PREFIX = "court-coach:pending-apple-name:";
 
 function getDeviceTimezone(): string | null {
   try {
@@ -66,12 +68,26 @@ function formatAppleName(
 }
 
 function isCanceledAuth(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const code = "code" in error
+    ? String((error as { code?: unknown }).code ?? "").toUpperCase()
+    : "";
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
   return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: string }).code === "ERR_REQUEST_CANCELED"
+    code === "ERR_REQUEST_CANCELED" ||
+    code === "ERR_CANCELED" ||
+    code === "1001" ||
+    message.includes("authorization attempt was canceled") ||
+    message.includes("authorization attempt was cancelled")
   );
+}
+
+async function appleNameStorageKey(appleUserId: string): Promise<string> {
+  const userHash = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    appleUserId
+  );
+  return `${PENDING_APPLE_NAME_PREFIX}${userHash}`;
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -119,8 +135,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .from("profiles")
         .update({ full_name: fullName })
         .eq("id", user.id);
-      if (error) throw error;
+      // Apple only returns the name during the first authorization. Name
+      // persistence is optional and must never turn a successful Apple token
+      // exchange into a failed sign-in.
+      if (error) {
+        console.warn("Unable to save social profile name:", error.message);
+        return false;
+      }
     }
+    return true;
   }, []);
 
   useEffect(() => {
@@ -298,6 +321,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!credential.identityToken) {
         throw new Error("Apple did not return an identity token.");
       }
+      const returnedAppleName = formatAppleName(credential.fullName);
+      const pendingNameKey = await appleNameStorageKey(credential.user);
+      if (returnedAppleName) {
+        await AsyncStorage.setItem(pendingNameKey, returnedAppleName).catch(() => {});
+      }
+      const appleName =
+        returnedAppleName ??
+        (await AsyncStorage.getItem(pendingNameKey).catch(() => null));
 
       const { data, error } = await supabase.auth.signInWithIdToken({
         provider: "apple",
@@ -308,7 +339,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!data.user) throw new Error("Apple sign-in did not return a user.");
 
       // Apple may return the person's name only on the first authorization.
-      await ensureProfile(data.user, formatAppleName(credential.fullName));
+      const nameSaved = await ensureProfile(data.user, appleName);
+      if (appleName && nameSaved) {
+        await AsyncStorage.removeItem(pendingNameKey).catch(() => {});
+      }
       return data.user;
     } catch (error) {
       if (isCanceledAuth(error)) return null;

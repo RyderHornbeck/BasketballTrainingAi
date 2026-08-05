@@ -151,9 +151,11 @@ export function useCoach(dayId: string | null): UseCoachResult {
             t.exerciseId,
             t.setNumber,
             t.durationSeconds
-          ).catch((error) => {
-            console.error("Failed to complete timed set:", error);
-          });
+          )
+            .then(() => sessionRef.current?.refreshWorkoutContext())
+            .catch((error) => {
+              console.error("Failed to complete timed set:", error);
+            });
         }
       }
 

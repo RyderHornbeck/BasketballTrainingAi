@@ -11,9 +11,15 @@ import {
   decodeBase64,
 } from "./protocol";
 import {
+  SonicAudioLruCache,
+  buildSonicAudioCacheKey,
   buildSonicGenerationRequest,
   buildSonicWebSocketUrl,
+  drainSonicTextChunks,
   parseSonicServerEvent,
+  sanitizeCoachSpeechText,
+  takeSonicTextChunk,
+  type SonicAudioCacheKey,
 } from "./sonic";
 import { shouldAcceptTurnEvent } from "./sequencing";
 
@@ -52,6 +58,7 @@ test("builds an Ink-2 short-lived-token URL", () => {
     encoding: "pcm_s16le",
     sampleRate: 16000,
     keyterms: ["free throw", "Cartesia"],
+    turn: { endTimeoutMs: 640 },
   }));
   assert.equal(url.origin, "wss://api.cartesia.ai");
   assert.equal(url.pathname, "/stt/turns/websocket");
@@ -59,6 +66,17 @@ test("builds an Ink-2 short-lived-token URL", () => {
   assert.equal(url.searchParams.get("cartesia_version"), CARTESIA_API_VERSION);
   assert.equal(url.searchParams.get("access_token"), "short lived/+");
   assert.deepEqual(url.searchParams.getAll("keyterm"), ["free throw", "Cartesia"]);
+  assert.equal(url.searchParams.get("turn_end_timeout_ms"), "640");
+  assert.throws(
+    () =>
+      buildInkWebSocketUrl({
+        accessToken: "token",
+        encoding: "pcm_s16le",
+        sampleRate: 16000,
+        turn: { endTimeoutMs: 639 },
+      }),
+    "invalid_configuration",
+  );
 });
 
 test("parses all Ink lifecycle event shapes", () => {
@@ -122,6 +140,157 @@ test("builds Sonic 3.5 continuation and token payloads", () => {
   assert.equal(request.context_id, "context-1");
   assert.equal(request.continue, true);
   assert.equal(request.output_format.container, "raw");
+});
+
+test("streams Sonic text on early word and punctuation boundaries", () => {
+  assert.deepEqual(takeSonicTextChunk("Set one is now thirty seconds and counting ", false), {
+    chunk: "Set one is now thirty seconds and counting ",
+    remainder: "",
+  });
+  assert.deepEqual(takeSonicTextChunk("seconds. Next up", false), {
+    chunk: "seconds. ",
+    remainder: "Next up",
+  });
+  assert.deepEqual(takeSonicTextChunk("short", false), {
+    chunk: "",
+    remainder: "short",
+  });
+});
+
+test("drains every complete Sonic phrase and preserves exact input", () => {
+  const input = 'First phrase,  then 3.5 seconds. Next phrase! "Partial';
+  const result = drainSonicTextChunks(input, false);
+  assert.deepEqual(result, {
+    chunks: ["First phrase,  ", "then 3.5 seconds. ", "Next phrase! "],
+    remainder: '"Partial',
+  });
+  assert.equal(result.chunks.join("") + result.remainder, input);
+});
+
+test("keeps decimal points inside Sonic phrases", () => {
+  assert.deepEqual(drainSonicTextChunks("Hold for 2.5 seconds. Then go", false), {
+    chunks: ["Hold for 2.5 seconds. "],
+    remainder: "Then go",
+  });
+  assert.deepEqual(drainSonicTextChunks("The target is 3.14159", false), {
+    chunks: [],
+    remainder: "The target is 3.14159",
+  });
+});
+
+test("uses word-safe fallback chunks without emitting tiny fragments", () => {
+  const completeWords = "Set one is now thirty seconds and counting ";
+  assert.deepEqual(drainSonicTextChunks(completeWords, false), {
+    chunks: [completeWords],
+    remainder: "",
+  });
+  const longUnbrokenWord = "supercalifragilisticexpialidociousandstillstreaming";
+  assert.deepEqual(drainSonicTextChunks(longUnbrokenWord, false), {
+    chunks: [],
+    remainder: longUnbrokenWord,
+  });
+  assert.deepEqual(drainSonicTextChunks("tiny boundary followedbyaverylongtoken", false, 16), {
+    chunks: [],
+    remainder: "tiny boundary followedbyaverylongtoken",
+  });
+  const stalledPhrase = "word ".repeat(30);
+  const bounded = drainSonicTextChunks(stalledPhrase, false, 20, 40);
+  assert.equal(bounded.chunks.length, 1);
+  assert.equal(bounded.chunks[0], "word ".repeat(8));
+  assert.equal(bounded.chunks[0].length >= 20, true);
+  assert.equal(bounded.chunks[0].length <= 40, true);
+  assert.equal(bounded.chunks.join("") + bounded.remainder, stalledPhrase);
+});
+
+test("supports looping over one Sonic chunk at a time", () => {
+  let remainder = "One. Two? Three; unfinished";
+  const chunks: string[] = [];
+  while (true) {
+    const next = takeSonicTextChunk(remainder, false);
+    if (!next.chunk) break;
+    chunks.push(next.chunk);
+    remainder = next.remainder;
+  }
+  assert.deepEqual(chunks, ["One. ", "Two? ", "Three; "]);
+  assert.equal(remainder, "unfinished");
+  assert.deepEqual(drainSonicTextChunks(remainder, true), {
+    chunks: ["unfinished"],
+    remainder: "",
+  });
+});
+
+const cacheKey: SonicAudioCacheKey = {
+  finalText: "Stay low.",
+  voiceId: "voice-1",
+  locale: "en-US",
+  codec: "pcm_s16le",
+  sampleRate: 24000,
+  speed: 1,
+  emotion: "determined",
+  rendererVersion: "sonic-renderer-v1",
+};
+
+test("builds Sonic cache keys from every rendering input", () => {
+  const base = buildSonicAudioCacheKey(cacheKey);
+  const differences: SonicAudioCacheKey[] = [
+    { ...cacheKey, finalText: "Stay low!" },
+    { ...cacheKey, voiceId: "voice-2" },
+    { ...cacheKey, locale: "es-MX" },
+    { ...cacheKey, codec: "pcm_f32le" },
+    { ...cacheKey, sampleRate: 48000 },
+    { ...cacheKey, speed: 1.1 },
+    { ...cacheKey, emotion: "calm" },
+    { ...cacheKey, rendererVersion: "sonic-renderer-v2" },
+  ];
+  for (const difference of differences) {
+    assert.equal(buildSonicAudioCacheKey(difference) === base, false);
+  }
+  assert.equal(buildSonicAudioCacheKey({ ...cacheKey }), base);
+});
+
+test("evicts least-recently-used Sonic audio and copies byte buffers", () => {
+  const cache = new SonicAudioLruCache({ maxEntries: 2, maxBytes: 16 });
+  const secondKey = { ...cacheKey, finalText: "Second." };
+  const thirdKey = { ...cacheKey, finalText: "Third." };
+  const firstAudio = new Uint8Array([1, 2, 3]);
+  cache.set(cacheKey, firstAudio);
+  cache.set(secondKey, new Uint8Array([4, 5]));
+  firstAudio[0] = 99;
+  const cachedFirst = cache.get(cacheKey);
+  assert.deepEqual(cachedFirst ? [...cachedFirst] : undefined, [1, 2, 3]);
+  if (cachedFirst) cachedFirst[1] = 99;
+
+  cache.set(thirdKey, new Uint8Array([6]));
+  assert.equal(cache.has(cacheKey), true);
+  assert.equal(cache.has(secondKey), false);
+  assert.equal(cache.has(thirdKey), true);
+  const cachedFirstAgain = cache.get(cacheKey);
+  assert.deepEqual(cachedFirstAgain ? [...cachedFirstAgain] : undefined, [1, 2, 3]);
+  assert.equal(cache.size, 2);
+  assert.equal(cache.byteLength, 4);
+});
+
+test("bounds Sonic audio cache by bytes and skips oversized entries", () => {
+  const cache = new SonicAudioLruCache({ maxEntries: 4, maxBytes: 5 });
+  const secondKey = { ...cacheKey, finalText: "Second." };
+  cache.set(cacheKey, new Uint8Array([1, 2, 3]));
+  cache.set(secondKey, new Uint8Array([4, 5, 6]));
+  assert.equal(cache.has(cacheKey), false);
+  assert.equal(cache.has(secondKey), true);
+  cache.set(cacheKey, new Uint8Array(6));
+  assert.equal(cache.has(cacheKey), false);
+  assert.equal(cache.byteLength, 3);
+});
+
+test("sanitizes model text into natural spoken language", () => {
+  assert.equal(
+    sanitizeCoachSpeechText("**Progress:** 4/6 = 67% & improving"),
+    "Progress: 4 for 6 equals 67 percent and improving",
+  );
+  assert.equal(
+    sanitizeCoachSpeechText("Option A / Option B"),
+    "Option A or Option B",
+  );
 });
 
 test("parses Sonic audio chunks into React Native friendly bytes", () => {

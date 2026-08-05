@@ -10,11 +10,21 @@ import {
   TTS_MODEL,
   validateTtsRequest,
 } from "../_shared/coachUsage.ts";
+import {
+  aiDataConsentRequiredBody,
+  hasCurrentAIDataConsent,
+} from "../_shared/aiDataConsent.ts";
 
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const ALLOWED_TTS_VOICES = new Set(["ash", "cedar", "marin", "shimmer", "coral"]);
+const ALLOWED_TTS_VOICES = new Set([
+  "ash",
+  "cedar",
+  "marin",
+  "shimmer",
+  "coral",
+]);
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -50,18 +60,26 @@ Deno.serve(async (req: Request) => {
 
   try {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) return jsonResponse({ error: "Missing Authorization header" }, 401);
+    if (!authHeader) {
+      return jsonResponse({ error: "Missing Authorization header" }, 401);
+    }
 
     const jwt = authHeader.replace(/^Bearer\s+/i, "");
-    const { data: userData, error: userError } = await supabase.auth.getUser(jwt);
+    const { data: userData, error: userError } = await supabase.auth.getUser(
+      jwt,
+    );
     if (userError || !userData?.user) {
       return jsonResponse({ error: "Invalid or expired session" }, 401);
     }
     userId = userData.user.id;
+    if (!(await hasCurrentAIDataConsent(supabase, userId))) {
+      return jsonResponse(aiDataConsentRequiredBody(), 403);
+    }
 
     const validation = validateTtsRequest(await req.json().catch(() => null));
     if (!validation.ok) return jsonResponse({ error: validation.error }, 400);
-    const { text, requestId: validatedRequestId, sessionKey } = validation.value;
+    const { text, requestId: validatedRequestId, sessionKey } =
+      validation.value;
     requestId = validatedRequestId;
 
     const { data: profile, error: profileError } = await supabase
@@ -74,46 +92,52 @@ Deno.serve(async (req: Request) => {
     // Coral is accepted only when it is authoritative profile data; the
     // database voice constraint determines whether that value is supported.
     if (typeof voice !== "string" || !ALLOWED_TTS_VOICES.has(voice)) {
-      return jsonResponse({ error: "Profile has no supported coach voice" }, 409);
+      return jsonResponse(
+        { error: "Profile has no supported coach voice" },
+        409,
+      );
     }
 
     const estimatedCost = estimateTtsCostUsd(text);
     const fingerprint = await sha256(text);
-    const { data: reservationRows, error: reservationError } = await supabase.rpc(
-      "reserve_coach_tts_usage",
-      {
-        p_user_id: userId,
-        p_session_key: sessionKey,
-        p_request_id: requestId,
-        p_text_sha256: fingerprint,
-        p_text_length: text.length,
-        p_model: TTS_MODEL,
-        p_voice: voice,
-        p_estimated_cost_usd: estimatedCost,
-        p_max_requests_per_minute: TTS_MAX_REQUESTS_PER_MINUTE,
-        p_max_requests_per_session: TTS_MAX_REQUESTS_PER_SESSION,
-      }
-    );
+    const { data: reservationRows, error: reservationError } = await supabase
+      .rpc(
+        "reserve_coach_tts_usage",
+        {
+          p_user_id: userId,
+          p_session_key: sessionKey,
+          p_request_id: requestId,
+          p_text_sha256: fingerprint,
+          p_text_length: text.length,
+          p_model: TTS_MODEL,
+          p_voice: voice,
+          p_estimated_cost_usd: estimatedCost,
+          p_max_requests_per_minute: TTS_MAX_REQUESTS_PER_MINUTE,
+          p_max_requests_per_session: TTS_MAX_REQUESTS_PER_SESSION,
+        },
+      );
     if (reservationError) throw reservationError;
-    const reservation = Array.isArray(reservationRows) ? reservationRows[0] : reservationRows;
+    const reservation = Array.isArray(reservationRows)
+      ? reservationRows[0]
+      : reservationRows;
     if (!reservation?.allowed) {
       const reason = reservation?.reason ?? "reservation_failed";
-      const status =
-        reason === "inactive_session" ? 404
-          : reason === "duplicate_request" || reason === "request_id_conflict" ? 409
-          : 429;
+      const status = reason === "inactive_session"
+        ? 404
+        : reason === "duplicate_request" || reason === "request_id_conflict"
+        ? 409
+        : 429;
       return jsonResponse(
         {
-          error:
-            reason === "daily_budget_exhausted"
-              ? "Daily coach credit is used up."
-              : reason === "duplicate_request"
-              ? "TTS request was already handled."
-              : reason === "request_id_conflict"
-              ? "request_id was already used for different text."
-              : reason === "inactive_session"
-              ? "Active coach session not found."
-              : "TTS request limit reached.",
+          error: reason === "daily_budget_exhausted"
+            ? "Daily coach credit is used up."
+            : reason === "duplicate_request"
+            ? "TTS request was already handled."
+            : reason === "request_id_conflict"
+            ? "request_id was already used for different text."
+            : reason === "inactive_session"
+            ? "Active coach session not found."
+            : "TTS request limit reached.",
           code: reason,
           request_status: reservation?.request_status ?? undefined,
           daily_usage: {
@@ -122,10 +146,20 @@ Deno.serve(async (req: Request) => {
             remaining_usd: Number(reservation?.remaining_usd ?? 0),
           },
         },
-        status
+        status,
       );
     }
     reserved = true;
+
+    if (!(await hasCurrentAIDataConsent(supabase, userId))) {
+      await supabase.rpc("finalize_coach_tts_usage", {
+        p_user_id: userId,
+        p_request_id: requestId,
+        p_succeeded: false,
+      });
+      reserved = false;
+      return jsonResponse(aiDataConsentRequiredBody(), 403);
+    }
 
     const openaiRes = await fetch("https://api.openai.com/v1/audio/speech", {
       method: "POST",
@@ -144,7 +178,10 @@ Deno.serve(async (req: Request) => {
 
     if (!openaiRes.ok || !openaiRes.body) {
       const detail = (await openaiRes.text()).slice(0, 500);
-      console.error(`OpenAI audio/speech failed (${openaiRes.status}):`, detail);
+      console.error(
+        `OpenAI audio/speech failed (${openaiRes.status}):`,
+        detail,
+      );
       await supabase.rpc("finalize_coach_tts_usage", {
         p_user_id: userId,
         p_request_id: requestId,
@@ -159,16 +196,21 @@ Deno.serve(async (req: Request) => {
         .eq("user_id", userId)
         .eq("request_id", requestId);
       reserved = false;
-      return jsonResponse({ error: `Speech generation failed (${openaiRes.status})` }, 502);
+      return jsonResponse({
+        error: `Speech generation failed (${openaiRes.status})`,
+      }, 502);
     }
 
     // An accepted Speech request incurs provider usage even if the client
     // disconnects during transfer, so finalize before handing off the stream.
-    const { error: finalizeError } = await supabase.rpc("finalize_coach_tts_usage", {
-      p_user_id: userId,
-      p_request_id: requestId,
-      p_succeeded: true,
-    });
+    const { error: finalizeError } = await supabase.rpc(
+      "finalize_coach_tts_usage",
+      {
+        p_user_id: userId,
+        p_request_id: requestId,
+        p_succeeded: true,
+      },
+    );
     if (finalizeError) {
       console.error("Could not finalize TTS usage:", finalizeError);
       return jsonResponse({ error: "Could not finalize speech usage" }, 500);
@@ -181,7 +223,9 @@ Deno.serve(async (req: Request) => {
       })
       .eq("user_id", userId)
       .eq("request_id", requestId);
-    if (telemetryError) console.error("Could not record TTS latency:", telemetryError);
+    if (telemetryError) {
+      console.error("Could not record TTS latency:", telemetryError);
+    }
     reserved = false;
 
     return new Response(openaiRes.body, {
@@ -200,12 +244,17 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     console.error("coach-tts error:", err);
     if (reserved && userId && requestId) {
-      const { error: refundError } = await supabase.rpc("finalize_coach_tts_usage", {
-        p_user_id: userId,
-        p_request_id: requestId,
-        p_succeeded: false,
-      });
-      if (refundError) console.error("Could not refund failed TTS reservation:", refundError);
+      const { error: refundError } = await supabase.rpc(
+        "finalize_coach_tts_usage",
+        {
+          p_user_id: userId,
+          p_request_id: requestId,
+          p_succeeded: false,
+        },
+      );
+      if (refundError) {
+        console.error("Could not refund failed TTS reservation:", refundError);
+      }
       await supabase
         .from("coach_tts_requests")
         .update({

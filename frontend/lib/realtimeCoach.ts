@@ -4,6 +4,7 @@
 import { emitWorkoutUpdated } from "@/lib/coachEvents";
 import {
   appendConversationSummary,
+  appendConversationTurn,
   COACH_LIMIT_MESSAGES,
   createClientRequestId,
   createSessionKey,
@@ -23,8 +24,14 @@ import { getCoachPersonaId } from "@/lib/coachProfiles";
 import {
   CartesiaInkClient,
   CartesiaSonicClient,
+  isSafeSpeculativeTranscript,
+  sanitizeCoachSpeechText,
+  shouldAcceptPlaybackChunk,
   shouldAcceptTurnEvent,
+  shouldPromoteSpeculation,
+  drainSonicTextChunks,
   type CartesiaSonicContext,
+  type InkTranscriptEvent,
 } from "@/lib/cartesia";
 import {
   streamCoachTurn,
@@ -121,10 +128,32 @@ interface RoutedCoachTurn {
   transcript: string;
   requestId: string;
   speechEpoch: number;
+  eagerEndAt: number | null;
   speechStoppedAt: number | null;
   transcriptCompletedAt: number;
   routeDecidedAt: number | null;
+  providerFirstDeltaAt: number | null;
+  sonicFirstTextAt: number | null;
+  sonicFirstAudioAt: number | null;
+  playbackFirstEnqueueAt: number | null;
   backendCompletedAt: number | null;
+}
+
+interface SpeculativeCoachTurn {
+  inkRequestId: string;
+  turnId: string;
+  transcript: string;
+  normalizedTranscript: string;
+  speechEpoch: number;
+  stateVersion: number;
+  eagerEndAt: number;
+  controller: AbortController;
+  events: CoachTurnStreamEvent[];
+  responseText: string;
+  promoted: boolean;
+  routedTurn: RoutedCoachTurn | null;
+  promise: Promise<void>;
+  error: unknown;
 }
 
 interface PendingTimerDurationChange {
@@ -370,6 +399,7 @@ export class RealtimeCoachSession {
   private pendingTimerDurationChange: PendingTimerDurationChange | null = null;
   private selectedSetByExercise = new Map<string, number>();
   private speechEpoch = 0;
+  private inkTurnSequence = 0;
   private latestUserTranscript: string | null = null;
   private pendingEvents: Record<string, unknown>[] = [];
   private responseCreateTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -403,6 +433,10 @@ export class RealtimeCoachSession {
   private cartesiaVoiceId = "";
   private ttsInputBuffer = "";
   private playbackEnqueue: Promise<void> = Promise.resolve();
+  private playbackGeneration = 0;
+  private speculativeTurn: SpeculativeCoachTurn | null = null;
+  private inkReconnectPromise: Promise<void> | null = null;
+  private sonicReconnectPromise: Promise<void> | null = null;
   private cartesiaSttSeconds = 0;
   private cartesiaTtsCharacters = 0;
   private reportedSttSeconds = 0;
@@ -462,6 +496,11 @@ export class RealtimeCoachSession {
     this.pendingTimerDurationChange = null;
     this.selectedSetByExercise.clear();
     this.speechEpoch = 0;
+    this.inkTurnSequence = 0;
+    this.playbackGeneration = 0;
+    this.speculativeTurn = null;
+    this.inkReconnectPromise = null;
+    this.sonicReconnectPromise = null;
     this.latestUserTranscript = null;
     this.contextRefreshPending = false;
     this.exactBufferedShotReply = null;
@@ -728,10 +767,52 @@ export class RealtimeCoachSession {
       onClose: () => {
         if (generation === this.connectionGeneration && this.active) {
           reportNetworkFailure("cartesia-sonic");
-          void this.disconnect("connection_lost");
+          void this.recoverCartesiaSocket("sonic", generation);
         }
       },
     });
+    const routeInkTurn = (event: InkTranscriptEvent) => {
+      if (
+        generation !== this.connectionGeneration ||
+        !event.transcript.trim()
+      ) {
+        return;
+      }
+      const turnSpeechEpoch = this.speechEpoch;
+      const turnSequence = ++this.inkTurnSequence;
+      const speculation = this.takeMatchingSpeculation(event, turnSpeechEpoch);
+      this.transcriptRouteQueue = this.transcriptRouteQueue
+        .then(() => {
+          if (turnSpeechEpoch !== this.speechEpoch) return;
+          return this.routeTranscribedTurn(
+            event.transcript.trim(),
+            `${event.requestId}:${turnSequence}`,
+            generation,
+            speculation,
+          );
+        })
+        .catch((routeError) => {
+          console.error("Failed to route Cartesia transcript:", routeError);
+          if (
+            generation === this.connectionGeneration &&
+            this.active &&
+            turnSpeechEpoch === this.speechEpoch
+          ) {
+            const recovery = "I couldn't finish that. Say it again.";
+            this.conversationSummary = appendConversationTurn(
+              this.conversationSummary,
+              event.transcript.trim(),
+              recovery,
+            );
+            this.callbacks?.onConversationSummary?.(this.conversationSummary);
+            return this.speakDeterministic(
+              recovery,
+              `route-recovery-${event.requestId}`,
+              turnSpeechEpoch,
+            );
+          }
+        });
+    };
     const ink = new CartesiaInkClient({
       accessToken: token,
       encoding: "pcm_s16le",
@@ -746,26 +827,15 @@ export class RealtimeCoachSession {
         "Court Coach",
       ],
       turn: {
-        startThreshold: 0.75,
-        eagerEndThreshold: 0.4,
-        endThreshold: 0.2,
-        endTimeoutMs: 1_200,
+        startThreshold: 0.65,
+        eagerEndThreshold: 0.35,
+        endThreshold: 0.1,
+        endTimeoutMs: 640,
       },
       onTurnStart: () => this.handleCartesiaSpeechStart(generation),
-      onTurnEnd: (event) => {
-        if (generation !== this.connectionGeneration || !event.transcript.trim()) return;
-        this.transcriptRouteQueue = this.transcriptRouteQueue
-          .then(() =>
-            this.routeTranscribedTurn(
-              event.transcript.trim(),
-              `${event.requestId}:${this.speechEpoch}`,
-              generation
-            )
-          )
-          .catch((routeError) => {
-            console.error("Failed to route Cartesia transcript:", routeError);
-          });
-      },
+      onTurnEagerEnd: (event) => this.startCartesiaSpeculation(event, generation),
+      onTurnResume: () => this.cancelCartesiaSpeculation("turn_resumed"),
+      onTurnEnd: routeInkTurn,
       onError: (providerError) => {
         if (generation !== this.connectionGeneration) return;
         console.error("Cartesia Ink error:", providerError);
@@ -774,7 +844,7 @@ export class RealtimeCoachSession {
       onClose: () => {
         if (generation === this.connectionGeneration && this.active) {
           reportNetworkFailure("cartesia-ink");
-          void this.disconnect("connection_lost");
+          void this.recoverCartesiaSocket("ink", generation);
         }
       },
     });
@@ -816,6 +886,41 @@ export class RealtimeCoachSession {
         this.callbacks?.onError(audioError.message);
       }),
     ];
+  }
+
+  private recoverCartesiaSocket(
+    kind: "ink" | "sonic",
+    generation: number
+  ): Promise<void> {
+    const existing =
+      kind === "ink" ? this.inkReconnectPromise : this.sonicReconnectPromise;
+    if (existing) return existing;
+    const reconnect = (async () => {
+      const client = kind === "ink" ? this.inkClient : this.sonicClient;
+      if (!client) return;
+      for (const delayMs of [100, 250, 500]) {
+        if (generation !== this.connectionGeneration || !this.active) return;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        try {
+          await client.connect();
+          if (client.isOpen) {
+            this.callbacks?.onStatus(this.muted ? "muted" : "listening");
+            return;
+          }
+        } catch (error) {
+          console.warn(`Cartesia ${kind} reconnect failed:`, error);
+        }
+      }
+      if (generation === this.connectionGeneration && this.active) {
+        await this.disconnect(`${kind}_connection_lost`);
+      }
+    })().finally(() => {
+      if (kind === "ink") this.inkReconnectPromise = null;
+      else this.sonicReconnectPromise = null;
+    });
+    if (kind === "ink") this.inkReconnectPromise = reconnect;
+    else this.sonicReconnectPromise = reconnect;
+    return reconnect;
   }
 
   updateTimer(timer: TimerState): void {
@@ -1545,10 +1650,28 @@ export class RealtimeCoachSession {
 
   private progressReply(
     scope: "set" | "exercise" | "workout",
-    metric: "progress" | "percentage" | "remaining" | "target" | "totals"
+    metric: "progress" | "percentage" | "remaining" | "target" | "totals",
+    totalsField?: "makes" | "misses" | "attempts"
   ): string {
     const current = this.currentDrill();
     const currentSet = this.currentSetState();
+    if (metric === "progress") {
+      if (scope === "set") {
+        if (!currentSet) return "There isn't a current set.";
+        return currentSet.completed
+          ? `Set ${currentSet.set_number} is complete.`
+          : `Set ${currentSet.set_number} is still in progress.`;
+      }
+      if (scope === "exercise") {
+        if (!current) return "There isn't a current drill.";
+        const total = current.set_results.length;
+        const complete = current.set_results.filter((set) => set.completed).length;
+        return `${complete} of ${total} sets complete in ${current.name ?? "this drill"}.`;
+      }
+      const drills = this.orderedDrills();
+      const complete = drills.filter((drill) => drill.status === "complete").length;
+      return `${complete} of ${drills.length} drills complete in this workout.`;
+    }
     if (metric === "remaining") {
       if (scope === "set") {
         if (!currentSet) return "There isn't a current set.";
@@ -1618,7 +1741,12 @@ export class RealtimeCoachSession {
             : `set ${currentSet?.set_number ?? 1}`;
       return `For ${scopeLabel}, you're ${makes} for ${attempts}. That's ${pct} percent.`;
     }
-    return `${label}: ${makes} for ${attempts}, ${Math.max(0, attempts - makes)} misses/p`;
+    if (totalsField === "makes") return `${label}: ${makes} makes.`;
+    if (totalsField === "misses") {
+      return `${label}: ${Math.max(0, attempts - makes)} misses.`;
+    }
+    if (totalsField === "attempts") return `${label}: ${attempts} attempts.`;
+    return `${label}: ${makes} for ${attempts}, ${Math.max(0, attempts - makes)} misses.`;
   }
 
   private timerStatusReply(): string {
@@ -1779,6 +1907,15 @@ export class RealtimeCoachSession {
           current?.target.minutes != null && current.target.minutes > 0
             ? Math.round(current.target.minutes * 60)
             : null;
+        if (isTimedSet && prescribedSeconds == null) {
+          await this.invokeCoachTool("set_timed_set_duration", {
+            exercise_id: current!.exercise_id,
+            drill_name: current!.drill_name,
+            set_number: current!.set_number,
+            duration_seconds: command.args.durationSeconds,
+            ...requestArgs,
+          });
+        }
         if (
           isTimedSet &&
           prescribedSeconds != null &&
@@ -1820,6 +1957,41 @@ export class RealtimeCoachSession {
         timer_set_number: current?.set_number ?? null,
       });
       return this.timerStartedReply(setDurationSeconds);
+    }
+
+    if (command.kind === "set_prescription") {
+      const current = this.currentDrill();
+      const selected = this.currentSetState();
+      if (!current) return "There isn't a current drill.";
+      const setNumber = command.args.setNumber ?? selected?.set_number;
+      if (
+        setNumber == null ||
+        !current.set_results.some((setResult) => setResult.set_number === setNumber)
+      ) {
+        return "I couldn't find that set in the current drill.";
+      }
+      if (command.args.durationSeconds != null) {
+        return (
+          await this.invokeCoachTool("set_timed_set_duration", {
+            exercise_id: current.exercise_id,
+            drill_name: current.name,
+            set_number: setNumber,
+            duration_seconds: command.args.durationSeconds,
+            ...requestArgs,
+          })
+        ).result;
+      }
+      await this.flushPendingShotSets();
+      return (
+        await this.invokeCoachTool("set_shooting_set_targets", {
+          exercise_id: current.exercise_id,
+          drill_name: current.name,
+          set_number: setNumber,
+          target_makes: command.args.targetMakes,
+          target_attempts: command.args.targetAttempts,
+          ...requestArgs,
+        })
+      ).result;
     }
 
     if (command.kind === "navigation") {
@@ -1882,7 +2054,12 @@ export class RealtimeCoachSession {
 
     if (command.kind === "completion") {
       const current = this.currentDrill();
-      const set = this.currentSetState();
+      const set =
+        command.args.setNumber != null && current
+          ? current.set_results.find(
+              (setResult) => setResult.set_number === command.args.setNumber
+            ) ?? null
+          : this.currentSetState();
       if (command.args.scope === "workout") {
         if (command.args.action === "reopen") return null;
         await this.flushPendingShotSets();
@@ -1900,7 +2077,7 @@ export class RealtimeCoachSession {
           ...requestArgs,
         });
         this.selectedSetByExercise.delete(current.exercise_id);
-        return command.args.action === "complete"
+        return command.args.action === "complete" && result.db_changed
           ? `Set ${set.set_number} complete. ${this.nextWorkReply("set", {
               type: "next",
             })}`
@@ -1919,7 +2096,11 @@ export class RealtimeCoachSession {
     }
 
     if (command.kind === "progress") {
-      return this.progressReply(command.args.scope, command.args.metric);
+      return this.progressReply(
+        command.args.scope,
+        command.args.metric,
+        command.args.totalsField
+      );
     }
     if (command.kind === "list_drills") {
       const names = this.orderedDrills().map(
@@ -1969,7 +2150,8 @@ export class RealtimeCoachSession {
   private async routeTranscribedTurn(
     transcript: string,
     itemId: string | null,
-    generation: number
+    generation: number,
+    speculation: SpeculativeCoachTurn | null = null,
   ): Promise<void> {
     if (!this.active || generation !== this.connectionGeneration) return;
     const turnId = itemId ?? `transcript-${generation}-${Date.now()}`;
@@ -1977,11 +2159,16 @@ export class RealtimeCoachSession {
     const turn: RoutedCoachTurn = {
       itemId: turnId,
       transcript,
-      requestId: `voice-${turnId}`.slice(0, 180),
+      requestId: speculation?.turnId ?? `voice-${turnId}`.slice(0, 180),
       speechEpoch: this.speechEpoch,
+      eagerEndAt: speculation?.eagerEndAt ?? null,
       speechStoppedAt: this.speechStoppedAtByItem.get(turnId) ?? null,
       transcriptCompletedAt: Date.now(),
       routeDecidedAt: null,
+      providerFirstDeltaAt: null,
+      sonicFirstTextAt: null,
+      sonicFirstAudioAt: null,
+      playbackFirstEnqueueAt: null,
       backendCompletedAt: null,
     };
     this.speechStoppedAtByItem.delete(turnId);
@@ -1992,11 +2179,11 @@ export class RealtimeCoachSession {
       .replace(/\s+/g, " ")
       .trim();
     const acceptedDurationChange =
-      /^(?:yes|yeah|yep|sure|do it|change it|change the time|please do)$/.test(
+      /^(?:yes|yeah|yep|sure|ok|okay|sounds good|do it|use it|change it|change the time|please do)$/.test(
         normalizedReply
       )
         ? true
-        : /^(?:no|nope|don't|do not|keep it|leave it|keep the time)$/.test(
+        : /^(?:no|nope|don't|do not|keep it|leave it|keep the time|keep the original)$/.test(
               normalizedReply
             )
           ? false
@@ -2027,7 +2214,11 @@ export class RealtimeCoachSession {
         state: "recognized",
       });
       if (this.cartesiaActive) {
-        await this.requestCartesiaModelTurn(transcript, turn);
+        if (speculation) {
+          await this.promoteCartesiaSpeculation(speculation, turn);
+        } else {
+          await this.requestCartesiaModelTurn(transcript, turn);
+        }
       } else {
         this.requestResponse(
           this.authoritativeTurnInstructions(),
@@ -2039,6 +2230,7 @@ export class RealtimeCoachSession {
       return;
     }
 
+    if (speculation) speculation.controller.abort();
     this.latestUserTranscript = null;
     this.toolBusy = true;
     this.updateStatus();
@@ -2082,9 +2274,10 @@ export class RealtimeCoachSession {
           item_id: itemId,
         });
       }
-      this.conversationSummary = appendConversationSummary(
+      this.conversationSummary = appendConversationTurn(
         this.conversationSummary,
-        output
+        transcript,
+        output,
       );
       this.lastDeterministicReply = output;
       this.callbacks?.onConversationSummary?.(this.conversationSummary);
@@ -2168,6 +2361,8 @@ export class RealtimeCoachSession {
       this.speechStoppedAtByItem.clear();
       this.selectedSetByExercise.clear();
       this.speechEpoch += 1;
+      this.playbackGeneration += 1;
+      this.cancelCartesiaSpeculation("disconnect");
       this.latestUserTranscript = null;
       this.contextRefreshPending = false;
       this.pendingEvents = [];
@@ -2316,7 +2511,13 @@ export class RealtimeCoachSession {
 
   private logVoiceMetric(
     turn: RoutedCoachTurn,
-    stage: "route_decision" | "backend_complete"
+    stage:
+      | "route_decision"
+      | "first_provider_delta"
+      | "first_sonic_text"
+      | "first_sonic_audio"
+      | "first_playback_enqueue"
+      | "backend_complete"
   ): void {
     const now = Date.now();
     const totalRoutes = this.deterministicTurnCount + this.fallbackTurnCount;
@@ -2325,6 +2526,10 @@ export class RealtimeCoachSession {
       JSON.stringify({
         stage,
         turn_id: turn.itemId,
+        eager_end_to_final_ms:
+          turn.eagerEndAt == null
+            ? null
+            : Math.max(0, turn.transcriptCompletedAt - turn.eagerEndAt),
         speech_stop_to_transcript_ms:
           turn.speechStoppedAt == null
             ? null
@@ -2339,6 +2544,22 @@ export class RealtimeCoachSession {
             : Math.max(0, turn.backendCompletedAt - turn.routeDecidedAt),
         backend_to_stage_ms:
           turn.backendCompletedAt == null ? null : Math.max(0, now - turn.backendCompletedAt),
+        final_to_provider_first_delta_ms:
+          turn.providerFirstDeltaAt == null
+            ? null
+            : Math.max(0, turn.providerFirstDeltaAt - turn.transcriptCompletedAt),
+        final_to_sonic_text_ms:
+          turn.sonicFirstTextAt == null
+            ? null
+            : Math.max(0, turn.sonicFirstTextAt - turn.transcriptCompletedAt),
+        final_to_sonic_audio_ms:
+          turn.sonicFirstAudioAt == null
+            ? null
+            : Math.max(0, turn.sonicFirstAudioAt - turn.transcriptCompletedAt),
+        final_to_playback_enqueue_ms:
+          turn.playbackFirstEnqueueAt == null
+            ? null
+            : Math.max(0, turn.playbackFirstEnqueueAt - turn.transcriptCompletedAt),
         deterministic_route_pct:
           totalRoutes === 0
             ? 0
@@ -2349,10 +2570,115 @@ export class RealtimeCoachSession {
     );
   }
 
+  private startCartesiaSpeculation(event: InkTranscriptEvent, generation: number): void {
+    const transcript = event.transcript.trim();
+    if (
+      !transcript ||
+      generation !== this.connectionGeneration ||
+      !this.active ||
+      !isSafeSpeculativeTranscript(transcript) ||
+      parseCoachSpeechIntent(transcript)
+    ) {
+      return;
+    }
+    const dayId = this.dayId;
+    const sessionKey = this.sessionKey;
+    if (!dayId || !sessionKey) return;
+
+    this.cancelCartesiaSpeculation("superseded");
+    const controller = new AbortController();
+    const speculation: SpeculativeCoachTurn = {
+      inkRequestId: event.requestId,
+      turnId: `spec-${event.requestId}-${Date.now()}`.slice(0, 180),
+      transcript,
+      normalizedTranscript: transcript,
+      speechEpoch: this.speechEpoch,
+      stateVersion: this.stateVersion,
+      eagerEndAt: Date.now(),
+      controller,
+      events: [],
+      responseText: "",
+      promoted: false,
+      routedTurn: null,
+      promise: Promise.resolve(),
+      error: null,
+    };
+    speculation.promise = streamCoachTurn({
+      dayId,
+      sessionKey,
+      turnId: speculation.turnId,
+      transcript,
+      stateVersion: speculation.stateVersion,
+      conversationSummary: this.conversationSummary,
+      speculative: true,
+      signal: controller.signal,
+      onEvent: (streamEvent) => {
+        if (
+          controller.signal.aborted ||
+          speculation.speechEpoch !== this.speechEpoch
+        ) {
+          return;
+        }
+        speculation.events.push(streamEvent);
+        if (streamEvent.type === "text_delta") {
+          speculation.responseText += streamEvent.delta;
+        }
+        if (speculation.promoted && speculation.routedTurn) {
+          this.applyCartesiaTurnEvent(
+            streamEvent,
+            speculation.turnId,
+            speculation.speechEpoch,
+            speculation.routedTurn,
+          );
+        }
+      },
+    }).catch((error) => {
+      if (!controller.signal.aborted) speculation.error = error;
+    });
+    this.speculativeTurn = speculation;
+  }
+
+  private cancelCartesiaSpeculation(_reason: string): void {
+    const speculation = this.speculativeTurn;
+    this.speculativeTurn = null;
+    if (speculation && !speculation.promoted) speculation.controller.abort();
+  }
+
+  private takeMatchingSpeculation(
+    event: InkTranscriptEvent,
+    speechEpoch: number
+  ): SpeculativeCoachTurn | null {
+    const speculation = this.speculativeTurn;
+    this.speculativeTurn = null;
+    if (!speculation) return null;
+    const matches = shouldPromoteSpeculation(
+      {
+        inkRequestId: speculation.inkRequestId,
+        transcript: speculation.normalizedTranscript,
+        speechEpoch: speculation.speechEpoch,
+        stateVersion: speculation.stateVersion,
+        aborted: speculation.controller.signal.aborted,
+      },
+      {
+        inkRequestId: event.requestId,
+        transcript: event.transcript,
+        speechEpoch,
+        stateVersion: this.stateVersion,
+      }
+    );
+    if (!matches) {
+      speculation.controller.abort();
+      return null;
+    }
+    return speculation;
+  }
+
   private handleCartesiaSpeechStart(generation: number): void {
     if (generation !== this.connectionGeneration || !this.active) return;
+    this.cancelCartesiaSpeculation("new_speech");
     this.latestUserTranscript = null;
     this.speechEpoch += 1;
+    this.playbackGeneration += 1;
     this.responseQueue = [];
     this.turnAbortController?.abort();
     this.turnAbortController = null;
@@ -2363,36 +2689,70 @@ export class RealtimeCoachSession {
     }
     this.sonicContext = null;
     this.ttsInputBuffer = "";
+    this.playbackEnqueue = Promise.resolve();
     this.generationActive = false;
     this.playbackActive = false;
     void this.duplexAudio?.clearPlaybackAsync().catch(() => undefined);
     this.callbacks?.onStatus(this.muted ? "muted" : "listening");
   }
 
-  private createSonicContext(speechEpoch: number): CartesiaSonicContext {
+  private createSonicContext(
+    speechEpoch: number,
+    turn?: RoutedCoachTurn
+  ): CartesiaSonicContext {
     const sonic = this.sonicClient;
     if (!sonic?.isOpen || !this.cartesiaVoiceId) {
       throw new Error("Coach speech is not connected.");
     }
+    const playbackGeneration = this.playbackGeneration;
     const context = sonic.createContext({
       contextId: `${this.sessionKey ?? "session"}:${speechEpoch}:${Date.now()}`.slice(0, 120),
       voiceId: this.cartesiaVoiceId,
       encoding: "pcm_s16le",
       sampleRate: 24000,
       language: "en",
-      maxBufferDelayMs: 120,
-      generationConfig: { speed: 1 },
+      maxBufferDelayMs: 0,
+      generationConfig: {
+        speed: 1.05,
+        volume: 1.08,
+        emotion: "happy",
+      },
       onChunk: (event) => {
-        if (
-          speechEpoch !== this.speechEpoch ||
-          !this.active ||
-          this.sonicContext?.id !== event.contextId
-        ) {
+        if (!shouldAcceptPlaybackChunk(
+          {
+            speechEpoch: this.speechEpoch,
+            playbackGeneration: this.playbackGeneration,
+            contextId: this.sonicContext?.id ?? null,
+            active: this.active,
+          },
+          { speechEpoch, playbackGeneration, contextId: event.contextId }
+        )) {
           return;
+        }
+        if (turn && turn.sonicFirstAudioAt == null) {
+          turn.sonicFirstAudioAt = Date.now();
+          this.logVoiceMetric(turn, "first_sonic_audio");
         }
         const encoded = bytesToBase64(event.audio);
         this.playbackEnqueue = this.playbackEnqueue
-          .then(() => this.duplexAudio?.enqueuePlaybackAsync(encoded))
+          .then(() => {
+            if (!shouldAcceptPlaybackChunk(
+              {
+                speechEpoch: this.speechEpoch,
+                playbackGeneration: this.playbackGeneration,
+                contextId: this.sonicContext?.id ?? null,
+                active: this.active,
+              },
+              { speechEpoch, playbackGeneration, contextId: event.contextId }
+            )) {
+              return;
+            }
+            if (turn && turn.playbackFirstEnqueueAt == null) {
+              turn.playbackFirstEnqueueAt = Date.now();
+              this.logVoiceMetric(turn, "first_playback_enqueue");
+            }
+            return this.duplexAudio?.enqueuePlaybackAsync(encoded);
+          })
           .then(() => undefined)
           .catch((error) => {
             console.error("Could not enqueue Cartesia speech:", error);
@@ -2414,26 +2774,38 @@ export class RealtimeCoachSession {
     return context;
   }
 
-  private flushSonicText(force: boolean): void {
+  private flushSonicText(force: boolean, turn?: RoutedCoachTurn): void {
     const context = this.sonicContext;
     if (!context) return;
-    const text = this.ttsInputBuffer;
-    if (!text) {
+    if (!this.ttsInputBuffer) {
       if (force) context.finish();
       return;
     }
-    const boundary = /[.!?]\s$/.test(text) || text.length >= 72;
-    if (!force && !boundary) return;
-    this.ttsInputBuffer = "";
-    this.cartesiaTtsCharacters += text.length;
-    if (force) context.finish(text);
-    else context.push(text);
+    const drained = drainSonicTextChunks(this.ttsInputBuffer, force);
+    this.ttsInputBuffer = drained.remainder;
+    const chunks = drained.chunks
+      .map((chunk) => sanitizeCoachSpeechText(chunk))
+      .filter((speech) => speech.trim());
+    if (chunks.length === 0) {
+      if (force) context.finish();
+      return;
+    }
+    if (turn && turn.sonicFirstTextAt == null) {
+      turn.sonicFirstTextAt = Date.now();
+      this.logVoiceMetric(turn, "first_sonic_text");
+    }
+    this.cartesiaTtsCharacters += chunks.reduce((sum, speech) => sum + speech.length, 0);
+    chunks.forEach((speech, index) => {
+      if (force && index === chunks.length - 1) context.finish(speech);
+      else context.push(speech);
+    });
   }
 
   private applyCartesiaTurnEvent(
     event: CoachTurnStreamEvent,
     turnId: string,
-    speechEpoch: number
+    speechEpoch: number,
+    turn?: RoutedCoachTurn,
   ): void {
     if (
       !this.active ||
@@ -2459,13 +2831,37 @@ export class RealtimeCoachSession {
       return;
     }
     if (event.type === "text_delta") {
+      if (turn && turn.providerFirstDeltaAt == null) {
+        turn.providerFirstDeltaAt = Date.now();
+        this.logVoiceMetric(turn, "first_provider_delta");
+      }
       this.ttsInputBuffer += event.delta;
-      this.flushSonicText(false);
+      this.flushSonicText(false, turn);
       return;
     }
     if (event.type === "tool_result") {
       if (event.client_action && typeof event.client_action === "object") {
-        const action = event.client_action as ClientTimerAction;
+        let action = event.client_action as ClientTimerAction;
+        if (
+          action.type === "start_timer" &&
+          (!action.timer_exercise_id || !action.timer_set_number)
+        ) {
+          const current = this.currentSetState();
+          const currentDrill = this.currentDrill();
+          if (
+            current &&
+            currentDrill &&
+            ["ball_handling", "defense", "conditioning"].includes(
+              currentDrill.category ?? ""
+            )
+          ) {
+            action = {
+              ...action,
+              timer_exercise_id: current.exercise_id,
+              timer_set_number: current.set_number,
+            };
+          }
+        }
         if (
           ["start_timer", "pause_timer", "resume_timer", "stop_timer"].includes(action.type)
         ) {
@@ -2479,10 +2875,75 @@ export class RealtimeCoachSession {
     if (event.type === "turn_completed") {
       this.stateFingerprint = event.state_fingerprint;
       this.updateWorkoutState(event.workout_context);
-      this.flushSonicText(true);
+      this.flushSonicText(true, turn);
       return;
     }
     if (event.type === "error") throw new Error(event.error);
+  }
+
+  private async promoteCartesiaSpeculation(
+    speculation: SpeculativeCoachTurn,
+    turn: RoutedCoachTurn
+  ): Promise<void> {
+    const speechEpoch = turn.speechEpoch;
+    if (
+      speculation.controller.signal.aborted ||
+      speechEpoch !== this.speechEpoch ||
+      speculation.stateVersion !== this.stateVersion
+    ) {
+      speculation.controller.abort();
+      await this.requestCartesiaModelTurn(turn.transcript, turn);
+      return;
+    }
+
+    this.turnAbortController?.abort();
+    this.turnAbortController = speculation.controller;
+    this.ttsInputBuffer = "";
+    this.generationActive = true;
+    this.updateStatus();
+    let context: CartesiaSonicContext | null = null;
+    try {
+      context = this.createSonicContext(speechEpoch, turn);
+      speculation.routedTurn = turn;
+      speculation.promoted = true;
+      for (const event of [...speculation.events]) {
+        this.applyCartesiaTurnEvent(event, speculation.turnId, speechEpoch, turn);
+      }
+      await speculation.promise;
+      if (speculation.error) throw speculation.error;
+      if (speechEpoch !== this.speechEpoch) return;
+
+      if (speculation.responseText.trim()) {
+        const spokenResponse = sanitizeCoachSpeechText(speculation.responseText.trim());
+        this.conversationSummary = appendConversationTurn(
+          this.conversationSummary,
+          turn.transcript,
+          spokenResponse,
+        );
+        this.callbacks?.onConversationSummary?.(this.conversationSummary);
+      }
+      turn.backendCompletedAt = Date.now();
+      this.logVoiceMetric(turn, "backend_complete");
+    } catch (error) {
+      const aborted =
+        speculation.controller.signal.aborted ||
+        (error instanceof Error && error.name === "AbortError");
+      if (!aborted && speechEpoch === this.speechEpoch) throw error;
+      try {
+        context?.cancel();
+      } catch {
+        // Already completed.
+      }
+    } finally {
+      if (this.turnAbortController === speculation.controller) {
+        this.turnAbortController = null;
+      }
+      if (speechEpoch === this.speechEpoch) {
+        this.generationActive = false;
+        this.updateStatus();
+      }
+      void this.reportCartesiaUsage(false);
+    }
   }
 
   private async requestCartesiaModelTurn(
@@ -2493,17 +2954,17 @@ export class RealtimeCoachSession {
     const sessionKey = this.sessionKey;
     if (!dayId || !sessionKey) throw new Error("Coach session is not active.");
     const speechEpoch = turn.speechEpoch;
-    await this.flushPendingShotSets();
+    this.generationActive = true;
+    this.updateStatus();
     if (speechEpoch !== this.speechEpoch) return;
     const controller = new AbortController();
     this.turnAbortController?.abort();
     this.turnAbortController = controller;
     this.ttsInputBuffer = "";
-    const context = this.createSonicContext(speechEpoch);
+    let context: CartesiaSonicContext | null = null;
     let responseText = "";
-    this.generationActive = true;
-    this.updateStatus();
     try {
+      context = this.createSonicContext(speechEpoch, turn);
       await streamCoachTurn({
         dayId,
         sessionKey,
@@ -2514,14 +2975,16 @@ export class RealtimeCoachSession {
         signal: controller.signal,
         onEvent: (event) => {
           if (event.type === "text_delta") responseText += event.delta;
-          this.applyCartesiaTurnEvent(event, turn.requestId, speechEpoch);
+          this.applyCartesiaTurnEvent(event, turn.requestId, speechEpoch, turn);
         },
       });
       if (speechEpoch !== this.speechEpoch) return;
       if (responseText.trim()) {
-        this.conversationSummary = appendConversationSummary(
+        const spokenResponse = sanitizeCoachSpeechText(responseText.trim());
+        this.conversationSummary = appendConversationTurn(
           this.conversationSummary,
-          responseText.trim()
+          transcript,
+          spokenResponse,
         );
         this.callbacks?.onConversationSummary?.(this.conversationSummary);
       }
@@ -2531,9 +2994,16 @@ export class RealtimeCoachSession {
       const aborted =
         controller.signal.aborted ||
         (error instanceof Error && error.name === "AbortError");
-      if (!aborted) throw error;
+      if (!aborted) {
+        try {
+          context?.cancel();
+        } catch {
+          // The provider may have already closed the failed context.
+        }
+        throw error;
+      }
       try {
-        context.cancel();
+        context?.cancel();
       } catch {
         // Already completed.
       }
@@ -2613,12 +3083,14 @@ export class RealtimeCoachSession {
     if (speechEpoch !== this.speechEpoch || !this.active) return;
     this.lastDeterministicReply = text;
     if (this.cartesiaActive) {
+      const speech = sanitizeCoachSpeechText(text);
+      if (!speech.trim()) return;
       this.ttsInputBuffer = "";
       this.generationActive = true;
       this.updateStatus();
       const context = this.createSonicContext(speechEpoch);
-      this.cartesiaTtsCharacters += text.length;
-      context.finish(text);
+      this.cartesiaTtsCharacters += speech.length;
+      context.finish(speech);
       return;
     }
     this.requestResponse(`Say exactly: ${JSON.stringify(text)}`, true);

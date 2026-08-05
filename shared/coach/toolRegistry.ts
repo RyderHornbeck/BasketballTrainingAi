@@ -270,13 +270,15 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   }),
   tool({
     name: "start_timer",
-    description: "Start a timer; preserve seconds and minutes exactly.",
+    description:
+      "Start a timer bound to a specific workout set whenever one is active or named; preserve seconds and minutes exactly.",
     capability: "timers",
     execution: "server",
     kind: "mutation",
     realtime: true,
     exactSpeech: true,
     parameters: args({
+      ...setReference,
       minutes: { type: "number", exclusiveMinimum: 0, maximum: 180 },
       seconds: { type: "number", exclusiveMinimum: 0, maximum: 10800 },
       duration_confirmation_token: { type: "string", maxLength: 240 },
@@ -342,7 +344,8 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   }),
   tool({
     name: "search_exercise_catalog",
-    description: "Search active exercises after required add permission.",
+    description:
+      "Search active exercises after required add permission. Result IDs are internal; present names only and never ask the athlete for an ID.",
     capability: "recommendations",
     execution: "server",
     kind: "read_only",
@@ -357,7 +360,8 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   }),
   tool({
     name: "add_workout_exercise",
-    description: "Add one exercise returned by an authorized catalog search.",
+    description:
+      "Add one exercise returned by an authorized catalog search using its exact result name, only after the athlete confirms. Never ask the athlete for a catalog ID.",
     capability: "edits",
     execution: "server",
     kind: "mutation",
@@ -365,10 +369,11 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
     exactSpeech: true,
     parameters: args(
       {
+        exercise_name: { type: "string", minLength: 1, maxLength: 160 },
         catalog_exercise_id: { type: "string" },
         catalog_search_token: { type: "string", maxLength: 240 },
       },
-      ["catalog_exercise_id"]
+      ["exercise_name"]
     ),
   }),
   tool({

@@ -22,6 +22,15 @@ Deno.test("coach voice personas expose four stable server mappings", () => {
     "expected distinct provider voices",
   );
   assert(
+    personas.map((persona) => persona.provider_voice_id).join(",") === [
+      "a5136bf9-224c-4d76-b823-52bd5efcffcc",
+      "228fca29-3a0a-435c-8728-5cb483251068",
+      "6ccbfb76-1fc6-48f7-b71d-91ac6298247b",
+      "f786b574-daa5-4673-aa0c-cbe3e8534c02",
+    ].join(","),
+    "expected the verified American voice roster",
+  );
+  assert(
     personas.every((persona) =>
       persona.provider === "cartesia" &&
       persona.model_id === "sonic-3.5" &&
@@ -37,20 +46,30 @@ Deno.test("coach voice mapping accepts only valid UUID environment overrides", (
     "tyler",
     (key) => key === "CARTESIA_VOICE_TYLER" ? override : undefined,
   );
-  assert(valid.provider_voice_id === override, "expected valid server override");
+  assert(
+    valid.provider_voice_id === override,
+    "expected valid server override",
+  );
 
   const invalid = resolveCoachVoicePersona(
     "tyler",
     () => "../../client-controlled",
   );
-  assert(invalid.provider_voice_id !== "../../client-controlled", "expected safe fallback");
+  assert(
+    invalid.provider_voice_id !== "../../client-controlled",
+    "expected safe fallback",
+  );
 });
 
 Deno.test("unknown coach voice values cannot select provider voice IDs", () => {
   assert(isCoachVoicePersonaId("maya"), "expected known persona");
-  assert(!isCoachVoicePersonaId("provider-voice-id"), "expected unknown rejection");
   assert(
-    resolveCoachVoicePersona("provider-voice-id", () => undefined).id === "tyler",
+    !isCoachVoicePersonaId("provider-voice-id"),
+    "expected unknown rejection",
+  );
+  assert(
+    resolveCoachVoicePersona("provider-voice-id", () => undefined).id ===
+      "tyler",
     "expected stable default",
   );
 });

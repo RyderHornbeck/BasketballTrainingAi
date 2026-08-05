@@ -6,7 +6,7 @@ import { routeAfterSocialAuth } from "@/lib/postAuth";
 import * as AppleAuthentication from "expo-apple-authentication";
 import { Link, router } from "expo-router";
 import { ArrowLeftIcon, GoogleLogoIcon } from "phosphor-react-native";
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -28,14 +28,30 @@ function authErrorMessage(error: unknown, provider: Provider): string {
   if (!(error instanceof Error)) return fallback;
 
   const message = error.message.toLowerCase();
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? String((error as { code?: unknown }).code ?? "").toLowerCase()
+      : "";
   if (message.includes("database error saving new user")) {
-    return "This sign-in can’t be used to create a new Court Coach account. Please use a different account.";
+    return "Court Coach couldn’t finish creating your account. Please try again. If you recently deleted this account, wait 24 hours before recreating it.";
   }
   if (message.includes("not available on this device")) {
     return `${providerName} sign-in is not available on this device.`;
   }
   if (message.includes("rate limit") || message.includes("too many")) {
     return "There have been too many sign-in attempts. Please try again later.";
+  }
+  if (
+    code.includes("bad_oauth") ||
+    code.includes("validation") ||
+    message.includes("audience") ||
+    message.includes("identity token") ||
+    message.includes("nonce")
+  ) {
+    return `We couldn’t verify your ${providerName} sign-in. Please try again.`;
+  }
+  if (message.includes("signup") && message.includes("disabled")) {
+    return "New account creation is temporarily unavailable.";
   }
 
   return fallback;
@@ -46,8 +62,11 @@ export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
   const { signInWithApple, signInWithGoogle, refreshProfile } = useAuth();
   const [loadingProvider, setLoadingProvider] = useState<Provider | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const authInFlightRef = useRef(false);
 
   const authenticate = async (provider: Provider) => {
+    if (authInFlightRef.current) return;
+    authInFlightRef.current = true;
     setError(null);
     setLoadingProvider(provider);
     try {
@@ -57,8 +76,16 @@ export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
       await routeAfterSocialAuth(user.id, refreshProfile);
     } catch (authError) {
       if (isLikelyNetworkError(authError)) reportNetworkFailure(`${provider}-sign-in`);
+      console.error(`${provider} sign-in failed`, {
+        code:
+          typeof authError === "object" && authError !== null && "code" in authError
+            ? String((authError as { code?: unknown }).code ?? "")
+            : "",
+        message: authError instanceof Error ? authError.message : String(authError),
+      });
       setError(authErrorMessage(authError, provider));
     } finally {
+      authInFlightRef.current = false;
       setLoadingProvider(null);
     }
   };

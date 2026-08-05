@@ -17,7 +17,16 @@ import {
 
 export type SonicEncoding = "pcm_f32le" | "pcm_s16le" | "pcm_mulaw" | "pcm_alaw";
 export type SonicSampleRate = 8000 | 16000 | 22050 | 24000 | 44100 | 48000;
-export type SonicEmotion = "neutral" | "calm" | "angry" | "content" | "sad";
+export type SonicEmotion =
+  | "neutral"
+  | "calm"
+  | "content"
+  | "happy"
+  | "excited"
+  | "enthusiastic"
+  | "determined"
+  | "angry"
+  | "sad";
 
 export interface SonicGenerationConfig {
   volume?: number;
@@ -136,6 +145,264 @@ export interface SonicGenerationRequest {
   use_normalized_timestamps?: boolean;
   pronunciation_dict_id?: string;
   generation_config?: SonicGenerationConfig;
+}
+
+export interface SonicTextChunk {
+  chunk: string;
+  remainder: string;
+}
+
+export interface SonicTextChunks {
+  chunks: string[];
+  remainder: string;
+}
+
+export interface SonicAudioCacheKey {
+  finalText: string;
+  voiceId: string;
+  locale: string;
+  codec: SonicEncoding;
+  sampleRate: SonicSampleRate;
+  speed: number;
+  emotion: SonicEmotion;
+  rendererVersion: string;
+}
+
+export interface SonicAudioCacheOptions {
+  maxEntries?: number;
+  maxBytes?: number;
+}
+
+interface SonicAudioCacheEntry {
+  audio: Uint8Array;
+  byteLength: number;
+}
+
+const DEFAULT_SONIC_CACHE_MAX_ENTRIES = 32;
+const DEFAULT_SONIC_CACHE_MAX_BYTES = 8 * 1024 * 1024;
+
+/** Convert model text into plain, unambiguous language before TTS. */
+export function sanitizeCoachSpeechText(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/(\d)\s*\/\s*(\d)/g, "$1 for $2")
+    .replace(/(\d)\s*%/g, "$1 percent")
+    .replace(/(\d)\s*\+\s*(\d)/g, "$1 plus $2")
+    .replace(/(\d)\s*-\s*(\d)/g, "$1 minus $2")
+    .replace(/\s*=\s*/g, " equals ")
+    .replace(/\s*&\s*/g, " and ")
+    .replace(/[•*_#`{}\[\]<>]/g, " ")
+    .replace(/\s*\/\s*/g, " or ")
+    .replace(/\s+/g, " ")
+    .trimStart();
+}
+
+/**
+ * Extracts every complete phrase currently available, then optionally emits
+ * one word-safe fallback chunk. The returned strings are exact slices of the
+ * input so whitespace and punctuation are preserved.
+ */
+export function drainSonicTextChunks(
+  text: string,
+  force: boolean,
+  minimumCharacters = 32,
+  maximumCharacters = 96,
+): SonicTextChunks {
+  if (!text) return { chunks: [], remainder: "" };
+  if (force) return { chunks: [text], remainder: "" };
+
+  const chunks: string[] = [];
+  let consumed = 0;
+  for (const end of completePhraseEnds(text)) {
+    chunks.push(text.slice(consumed, end));
+    consumed = end;
+  }
+
+  let remainder = text.slice(consumed);
+  if (remainder.length >= minimumCharacters) {
+    const fallbackEnd = wordSafeFallbackEnd(
+      remainder,
+      minimumCharacters,
+      Math.max(minimumCharacters, maximumCharacters),
+    );
+    if (fallbackEnd > 0) {
+      chunks.push(remainder.slice(0, fallbackEnd));
+      remainder = remainder.slice(fallbackEnd);
+    }
+  }
+  return { chunks, remainder };
+}
+
+/**
+ * Compatibility wrapper for consumers that pull one chunk at a time. Callers
+ * can loop until `chunk` is empty; `drainSonicTextChunks` is preferred when
+ * all currently eligible phrases should be pushed in one pass.
+ */
+export function takeSonicTextChunk(
+  text: string,
+  force: boolean,
+  minimumCharacters = 32,
+  maximumCharacters = 96,
+): SonicTextChunk {
+  const { chunks, remainder } = drainSonicTextChunks(
+    text,
+    force,
+    minimumCharacters,
+    maximumCharacters,
+  );
+  if (chunks.length === 0) return { chunk: "", remainder };
+  return {
+    chunk: chunks[0],
+    remainder: chunks.slice(1).join("") + remainder,
+  };
+}
+
+/** Builds a collision-safe key from only final audio-rendering inputs. */
+export function buildSonicAudioCacheKey(input: SonicAudioCacheKey): string {
+  return JSON.stringify([
+    input.finalText,
+    input.voiceId,
+    input.locale,
+    input.codec,
+    input.sampleRate,
+    input.speed,
+    input.emotion,
+    input.rendererVersion,
+  ]);
+}
+
+/**
+ * Bounded, in-memory LRU for completed Sonic audio. It deliberately has no
+ * knowledge of turn, interruption, or playback state.
+ */
+export class SonicAudioLruCache {
+  private readonly entries = new Map<string, SonicAudioCacheEntry>();
+  private readonly maxEntries: number;
+  private readonly maxBytes: number;
+  private storedBytes = 0;
+
+  constructor(options: SonicAudioCacheOptions = {}) {
+    this.maxEntries = requirePositiveInteger(
+      options.maxEntries ?? DEFAULT_SONIC_CACHE_MAX_ENTRIES,
+      "maxEntries",
+    );
+    this.maxBytes = requirePositiveInteger(
+      options.maxBytes ?? DEFAULT_SONIC_CACHE_MAX_BYTES,
+      "maxBytes",
+    );
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  get byteLength(): number {
+    return this.storedBytes;
+  }
+
+  get(input: SonicAudioCacheKey): Uint8Array | undefined {
+    const key = buildSonicAudioCacheKey(input);
+    const entry = this.entries.get(key);
+    if (!entry) return undefined;
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return entry.audio.slice();
+  }
+
+  set(input: SonicAudioCacheKey, audio: Uint8Array): void {
+    const key = buildSonicAudioCacheKey(input);
+    const existing = this.entries.get(key);
+    if (existing) {
+      this.entries.delete(key);
+      this.storedBytes -= existing.byteLength;
+    }
+    if (audio.byteLength > this.maxBytes) return;
+
+    const storedAudio = audio.slice();
+    this.entries.set(key, { audio: storedAudio, byteLength: storedAudio.byteLength });
+    this.storedBytes += storedAudio.byteLength;
+    this.evictToBounds();
+  }
+
+  has(input: SonicAudioCacheKey): boolean {
+    return this.entries.has(buildSonicAudioCacheKey(input));
+  }
+
+  clear(): void {
+    this.entries.clear();
+    this.storedBytes = 0;
+  }
+
+  private evictToBounds(): void {
+    while (this.entries.size > this.maxEntries || this.storedBytes > this.maxBytes) {
+      const oldestKey = this.entries.keys().next().value;
+      if (oldestKey === undefined) break;
+      const oldest = this.entries.get(oldestKey);
+      this.entries.delete(oldestKey);
+      this.storedBytes -= oldest?.byteLength ?? 0;
+    }
+  }
+}
+
+function completePhraseEnds(text: string): number[] {
+  const ends: number[] = [];
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (!".!?,;:".includes(character)) continue;
+    if (
+      character === "." &&
+      index > 0 &&
+      index + 1 < text.length &&
+      isDigit(text[index - 1]) &&
+      isDigit(text[index + 1])
+    ) {
+      continue;
+    }
+
+    let end = index + 1;
+    while (end < text.length && isClosingPunctuation(text[end])) end += 1;
+    if (end < text.length && !isWhitespace(text[end])) continue;
+    while (end < text.length && isWhitespace(text[end])) end += 1;
+    ends.push(end);
+    index = end - 1;
+  }
+  return ends;
+}
+
+function wordSafeFallbackEnd(
+  text: string,
+  minimumCharacters: number,
+  maximumCharacters: number,
+): number {
+  const lastCandidate = Math.min(text.length - 1, maximumCharacters);
+  for (let index = lastCandidate; index >= minimumCharacters; index -= 1) {
+    if (isWhitespace(text[index])) {
+      let end = index + 1;
+      while (end < text.length && isWhitespace(text[end])) end += 1;
+      return end;
+    }
+  }
+  return 0;
+}
+
+function isDigit(value: string): boolean {
+  return value >= "0" && value <= "9";
+}
+
+function isWhitespace(value: string): boolean {
+  return /\s/.test(value);
+}
+
+function isClosingPunctuation(value: string): boolean {
+  return value === '"' || value === "'" || value === "\u2019" || value === "\u201d" ||
+    value === ")" || value === "]" || value === "}";
+}
+
+function requirePositiveInteger(value: number, name: string): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new RangeError(`Sonic audio cache ${name} must be a positive integer`);
+  }
+  return value;
 }
 
 export function buildSonicWebSocketUrl(

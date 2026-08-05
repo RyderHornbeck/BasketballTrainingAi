@@ -38,9 +38,7 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+        "android.permission.BLUETOOTH_CONNECT"
       ]
     },
     "web": {
@@ -66,7 +64,13 @@
         }
       ],
       "expo-config-plugin-incall-manager",
-      "expo-audio",
+      [
+        "expo-audio",
+        {
+          "enableBackgroundPlayback": false,
+          "enableBackgroundRecording": false
+        }
+      ],
       "expo-asset",
       "expo-apple-authentication",
       "expo-notifications",
@@ -83,7 +87,8 @@
           "isAccessMediaLocationEnabled": false
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "./plugins/withForegroundOnlyAudio"
     ],
     "extra": {
       "eas": {

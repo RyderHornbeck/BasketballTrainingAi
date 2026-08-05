@@ -45,6 +45,7 @@ export async function completeTimedExerciseSet(
             ...set,
             completed: true,
             force_incomplete: false,
+            duration_seconds_override: Math.round(durationSeconds),
             minutes: durationSeconds / 60,
           }
         : set

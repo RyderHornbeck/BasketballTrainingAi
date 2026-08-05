@@ -1,5 +1,7 @@
 import { Text } from "@/components/Text";
+import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
+import { hasCurrentAIDataConsent } from "@/lib/aiDataConsent";
 import { reportNetworkFailure } from "@/lib/connectivity";
 import { emitWorkoutUpdated } from "@/lib/coachEvents";
 import { actionHaptic } from "@/lib/haptics";
@@ -78,6 +80,7 @@ function TypingBubble({ colors }: { colors: ReturnType<typeof useTheme>["colors"
 
 export default function WorkoutEditAIScreen() {
   const { colors } = useTheme();
+  const { profile } = useAuth();
   const router = useRouter();
   const { dayId } = useLocalSearchParams<{ dayId?: string }>();
   const listRef = useRef<FlatList<ChatMessage>>(null);
@@ -90,7 +93,14 @@ export default function WorkoutEditAIScreen() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!dayId) return;
+    if (!dayId || !profile) return;
+    if (!hasCurrentAIDataConsent(profile)) {
+      router.replace({
+        pathname: "/ai-data-processing",
+        params: { source: "settings" },
+      });
+      return;
+    }
     void Promise.all([
       supabase
         .from("workout_edit_messages")
@@ -114,7 +124,7 @@ export default function WorkoutEditAIScreen() {
           )
       );
     });
-  }, [dayId]);
+  }, [dayId, profile, router]);
 
   useEffect(() => {
     const scrollToLatest = () => {

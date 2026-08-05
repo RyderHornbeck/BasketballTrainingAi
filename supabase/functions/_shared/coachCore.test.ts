@@ -1,4 +1,5 @@
 import {
+  buildCoachTurnDynamicContext,
   buildCompactContextSummary,
   buildRealtimeModelContext,
   buildRealtimeNavigationUpdate,
@@ -6,6 +7,7 @@ import {
   buildWorkoutDrillListSummary,
   buildWorkoutNavigation,
   COACH_SYSTEM_PROMPT,
+  COACH_TURN_STABLE_SYSTEM_PROMPT,
   executeCoachTool,
   getRealtimeTools,
   rankCatalogExercises,
@@ -383,8 +385,14 @@ Deno.test("reopening a completed set preserves its recorded numbers", async () =
   const meta = decodeExerciseLogMeta(String(rows[0]?.notes ?? ""));
   const reopened = meta.set_logs?.find((set) => set.set_number === 1);
   assert(outcome.dbChanged, "reopening should save the set");
-  assert(reopened?.completed === false, "the selected set should be incomplete");
-  assert(reopened?.force_incomplete === true, "reopening should override automatic completion");
+  assert(
+    reopened?.completed === false,
+    "the selected set should be incomplete",
+  );
+  assert(
+    reopened?.force_incomplete === true,
+    "reopening should override automatic completion",
+  );
   assert(
     reopened?.makes === 8 && reopened.attempts === 12,
     "reopening must preserve the saved makes and attempts",
@@ -505,11 +513,18 @@ Deno.test("second-based timer requests stay in seconds", async () => {
     outcome.result === "A 30-second timer has been started.",
     "the timer announcement must preserve seconds",
   );
+  assert(
+    outcome.clientAction?.timer_exercise_id === timedExercise.id &&
+      outcome.clientAction?.timer_set_number === 1,
+    "a second-based timer must remain bound to the timed set it will complete",
+  );
 });
 
 Deno.test("coach can change a timed drill to thirty-second sets", async () => {
   const ctx = contextWithPartialShootingSet();
-  const timedExercise = ctx.exercises.find((exercise) => exercise.id === "finish")!;
+  const timedExercise = ctx.exercises.find((exercise) =>
+    exercise.id === "finish"
+  )!;
   timedExercise.name = "Pound Dribble";
   timedExercise.category = "ball_handling";
   timedExercise.log_type = "minutes";
@@ -795,6 +810,47 @@ Deno.test("normalized realtime context preserves coach knowledge with less dupli
   );
 });
 
+Deno.test("coach turn prompt separates cached policy from bounded dynamic state", () => {
+  const ctx = contextWithPartialShootingSet();
+  const dynamic = buildCoachTurnDynamicContext(
+    ctx,
+    { main_goal: "Improve shooting" },
+    `User: ${"x".repeat(1_500)}`,
+    "Coach Maya",
+    true,
+  );
+  const parsed = JSON.parse(dynamic.slice(dynamic.indexOf("{")));
+
+  assert(
+    COACH_TURN_STABLE_SYSTEM_PROMPT.includes(COACH_SYSTEM_PROMPT),
+    "stable cached prefix should own the shared policy",
+  );
+  assert(
+    !dynamic.includes(COACH_SYSTEM_PROMPT),
+    "dynamic state must not duplicate the stable policy",
+  );
+  assert(
+    dynamic.includes("Request mode: speculative_read_only"),
+    "dynamic state should identify the safe request mode",
+  );
+  assert(
+    parsed.recent_conversation.length === 800,
+    "dynamic conversation history should be tightly bounded",
+  );
+  const conversational = buildCoachTurnDynamicContext(
+    ctx,
+    null,
+    null,
+    "Coach Maya",
+    false,
+    false,
+  );
+  assert(
+    !conversational.includes("Authoritative workout state"),
+    "confidently conversational turns should omit unused workout state",
+  );
+});
+
 Deno.test("saved shooting results report target status and add requires confirmation", async () => {
   const outcome = await executeCoachTool(
     successfulSupabaseMock(),
@@ -827,6 +883,11 @@ Deno.test("saved shooting results report target status and add requires confirma
   assert(
     addTool?.description.includes("only after the athlete confirms"),
     "adding a drill must require confirmation",
+  );
+  assert(
+    addTool?.parameters.required?.includes("exercise_name") &&
+      !addTool.parameters.required?.includes("catalog_exercise_id"),
+    "catalog additions should use the selected drill name rather than asking for an internal ID",
   );
   assert(
     COACH_SYSTEM_PROMPT.includes("requires confirmation before mutation"),

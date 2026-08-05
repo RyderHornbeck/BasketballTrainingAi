@@ -1,7 +1,8 @@
-import { useAudioPlayer } from "expo-audio";
+import { setAudioModeAsync, useAudioPlayer } from "expo-audio";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 type TimerCue = "halfway" | "tenSeconds" | "complete";
+const TIMER_PLAYER_OPTIONS = { keepAudioSessionActive: true } as const;
 
 interface TimerCueState {
   runId: number | null;
@@ -15,9 +16,18 @@ function crossedThreshold(previous: number, current: number, threshold: number):
 }
 
 export function useTimerAudioCues() {
-  const halfwayPlayer = useAudioPlayer(require("../assets/sounds/HalfWayThere.mp3"));
-  const tenSecondsPlayer = useAudioPlayer(require("../assets/sounds/10SecondsLeft.mp3"));
-  const completePlayer = useAudioPlayer(require("../assets/sounds/TimesUp.mp3"));
+  const halfwayPlayer = useAudioPlayer(
+    require("../assets/sounds/HalfWayThere.mp3"),
+    TIMER_PLAYER_OPTIONS
+  );
+  const tenSecondsPlayer = useAudioPlayer(
+    require("../assets/sounds/10SecondsLeft.mp3"),
+    TIMER_PLAYER_OPTIONS
+  );
+  const completePlayer = useAudioPlayer(
+    require("../assets/sounds/TimesUp.mp3"),
+    TIMER_PLAYER_OPTIONS
+  );
   const stateRef = useRef<TimerCueState>({
     runId: null,
     previousRemaining: null,
@@ -45,21 +55,28 @@ export function useTimerAudioCues() {
 
   useEffect(() => {
     disposedRef.current = false;
+    // Timer cues share the iOS audio session with the duplex Cartesia engine.
+    // Keeping recording enabled prevents a cue from changing the category to
+    // playback-only and disabling microphone capture.
+    void setAudioModeAsync({
+      allowsRecording: true,
+      playsInSilentMode: true,
+      interruptionMode: "mixWithOthers",
+      shouldRouteThroughEarpiece: false,
+    }).catch(() => {});
     return () => {
       disposedRef.current = true;
       stopAll();
     };
   }, [stopAll]);
 
-  const beginRun = useCallback(
-    (runId: number, durationSeconds: number) => {
-      stopAll();
-      stateRef.current.runId = runId;
-      stateRef.current.previousRemaining = durationSeconds;
-      stateRef.current.fired = new Set();
-    },
-    [stopAll]
-  );
+  const beginRun = useCallback((runId: number, durationSeconds: number) => {
+    // Do not touch Expo audio players here. Pausing/seeking them while Sonic is
+    // announcing the timer can interrupt the shared iOS audio session.
+    stateRef.current.runId = runId;
+    stateRef.current.previousRemaining = durationSeconds;
+    stateRef.current.fired = new Set();
+  }, []);
 
   const pause = useCallback(() => {
     stopAll();
@@ -102,7 +119,7 @@ export function useTimerAudioCues() {
 
       const previous = state.previousRemaining ?? durationSeconds;
       const current = Math.max(0, remainingSeconds);
-      const cues: Array<[TimerCue, number]> = [
+      const cues: [TimerCue, number][] = [
         ["halfway", durationSeconds / 2],
         ["tenSeconds", 10],
         ["complete", 0],

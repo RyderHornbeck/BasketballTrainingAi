@@ -18,6 +18,7 @@
 
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { hasCurrentAIDataConsent } from "../_shared/aiDataConsent.ts";
 import { isCatalogOnlyVideoId } from "../_shared/exerciseClip.ts";
 import {
   AdaptiveProfile,
@@ -607,6 +608,8 @@ async function maybeApplyGptTweaks(
   context: GenerationContext,
   pool: VideoClip[],
   clipById: Map<string, VideoClip>,
+  supabase: SupabaseClient,
+  userId: string,
 ): Promise<SmartPlan> {
   if (context.generationType !== "extend" || !OPENAI_API_KEY) return plan;
 
@@ -639,6 +642,7 @@ async function maybeApplyGptTweaks(
     .slice(0, 40);
 
   try {
+    if (!(await hasCurrentAIDataConsent(supabase, userId))) return plan;
     const raw = await callOpenAI(
       buildTweakSystemPrompt(),
       buildTweakUserPrompt(plan, notes, alternatives, clipById),
@@ -995,7 +999,16 @@ async function runGeneration(
     });
 
     // 2. Optional GPT-5 tweak pass driven by the user's exercise notes.
-    plan = await maybeApplyGptTweaks(plan, context, pool, clipById);
+    // Deterministic generation remains available after denial; only the
+    // provider-adjacent enhancement requires consent.
+    plan = await maybeApplyGptTweaks(
+      plan,
+      context,
+      pool,
+      clipById,
+      supabase,
+      userId,
+    );
 
     const planInput = {
       startDayNumber: context.startDayNumber,

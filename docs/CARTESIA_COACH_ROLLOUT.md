@@ -9,7 +9,7 @@ retain the previous OpenAI Realtime path during device validation.
 Set these Supabase secrets before deploying the new functions:
 
 - `CARTESIA_API_KEY` — required; remains server-only.
-- `OPENAI_API_KEY` — required by `coach-turn`.
+- `ANTHROPIC_API_KEY` — required by `coach-turn` for Claude Haiku 4.5.
 - `CARTESIA_USD_PER_MILLION_CREDITS` — optional cost-accounting override.
 - `CARTESIA_VOICE_TYLER`, `CARTESIA_VOICE_DEVIN`,
   `CARTESIA_VOICE_MAYA`, and `CARTESIA_VOICE_AVA` — optional provider voice-ID
@@ -38,7 +38,7 @@ Bluetooth headphones, verify:
 
 1. microphone permission, capture, playback, route changes, and echo control;
 2. make/miss, undo, timer, navigation, completion, and workout-edit commands;
-3. Luna/Terra fallback answers and tool confirmations;
+3. streamed Haiku fallback answers and tool confirmations;
 4. immediate barge-in during model generation and queued/current speech;
 5. reconnects, daily-budget behavior, and provider usage rows.
 

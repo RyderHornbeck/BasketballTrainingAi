@@ -294,6 +294,8 @@ test("parses completion and reopen commands at explicit scopes", () => {
     ["reopen this set", { action: "reopen", scope: "set" }],
     ["mark current drill incomplete", { action: "reopen", scope: "exercise" }],
     ["uncomplete the current workout", { action: "reopen", scope: "workout" }],
+    ["complete set two", { action: "complete", scope: "set", setNumber: 2 }],
+    ["mark set 3 incomplete", { action: "reopen", scope: "set", setNumber: 3 }],
   ];
   for (const [phrase, args] of cases) expectIntent(phrase, { kind: "completion", args });
 });
@@ -345,9 +347,9 @@ test("parses targets, totals, and remaining-work queries", () => {
     ["how many attempts are in this set", { metric: "target", scope: "set" }],
     ["what's the goal", { metric: "target", scope: "set" }],
     ["what am I aiming for", { metric: "target", scope: "set" }],
-    ["how many makes do I have in this set", { metric: "totals", scope: "set" }],
-    ["makes so far", { metric: "totals", scope: "exercise" }],
-    ["how many misses in this workout", { metric: "totals", scope: "workout" }],
+    ["how many makes do I have in this set", { metric: "totals", scope: "set", totalsField: "makes" }],
+    ["makes so far", { metric: "totals", scope: "exercise", totalsField: "makes" }],
+    ["how many misses in this workout", { metric: "totals", scope: "workout", totalsField: "misses" }],
   ];
   for (const [phrase, args] of cases) expectIntent(phrase, { kind: "progress", args });
 });
@@ -384,6 +386,29 @@ test("parses repeat, prefixed notes, exact removal, and explicit workout changes
   });
 });
 
+test("parses explicit set duration and shooting target edits", () => {
+  expectIntent("change this set to 30 seconds", {
+    kind: "set_prescription",
+    args: { durationSeconds: 30 },
+  });
+  expectIntent("set set two duration to 45 seconds", {
+    kind: "set_prescription",
+    args: { setNumber: 2, durationSeconds: 45 },
+  });
+  expectIntent("set this set target to 8 makes in 12 attempts", {
+    kind: "set_prescription",
+    args: { targetMakes: 8, targetAttempts: 12 },
+  });
+  expectIntent("change my attempts to 20", {
+    kind: "set_prescription",
+    args: { targetAttempts: 20 },
+  });
+  expectIntent("set target makes to eight", {
+    kind: "set_prescription",
+    args: { targetMakes: 8 },
+  });
+});
+
 test("rejects ambiguous, unsafe, impossible, and compound phrases", () => {
   const rejected = [
     "",
@@ -407,6 +432,9 @@ test("rejects ambiguous, unsafe, impossible, and compound phrases", () => {
     "remove the next drill",
     "make the workout longer",
     "shorten the workout a little",
+    "make it ten",
+    "change it",
+    "set my target to 12 makes in 8 attempts",
     "was that a brick",
     "I made one but it felt bad",
   ];

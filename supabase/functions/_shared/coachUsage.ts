@@ -21,17 +21,30 @@ export const RESPONSES_RATES = {
   "gpt-5.6-terra": { input: 2.5 / 1_000_000, output: 15 / 1_000_000 },
 } as const;
 
+export const ANTHROPIC_RATES = {
+  "claude-haiku-4-5-20251001": {
+    input: 1 / 1_000_000,
+    output: 5 / 1_000_000,
+    cacheWrite: 1.25 / 1_000_000,
+    cacheRead: 0.1 / 1_000_000,
+  },
+} as const;
+
 export function estimateCartesiaCostUsd(input: {
   sttAudioSeconds?: number;
   ttsCharacters?: number;
   usdPerMillionCredits?: number;
 }): number {
-  const credits =
-    Math.max(0, input.sttAudioSeconds ?? 0) * CARTESIA_RATES.ink2CreditsPerAudioSecond +
-    Math.max(0, input.ttsCharacters ?? 0) * CARTESIA_RATES.sonic35CreditsPerCharacter;
+  const credits = Math.max(0, input.sttAudioSeconds ?? 0) *
+      CARTESIA_RATES.ink2CreditsPerAudioSecond +
+    Math.max(0, input.ttsCharacters ?? 0) *
+      CARTESIA_RATES.sonic35CreditsPerCharacter;
   return (
     credits *
-    Math.max(0, input.usdPerMillionCredits ?? CARTESIA_RATES.usdPerMillionCredits) /
+    Math.max(
+      0,
+      input.usdPerMillionCredits ?? CARTESIA_RATES.usdPerMillionCredits,
+    ) /
     1_000_000
   );
 }
@@ -45,6 +58,22 @@ export function estimateResponsesCostUsd(input: {
   return (
     Math.max(0, input.inputTokens ?? 0) * rate.input +
     Math.max(0, input.outputTokens ?? 0) * rate.output
+  );
+}
+
+export function estimateAnthropicCostUsd(input: {
+  model: keyof typeof ANTHROPIC_RATES;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+}): number {
+  const rate = ANTHROPIC_RATES[input.model];
+  return (
+    Math.max(0, input.inputTokens ?? 0) * rate.input +
+    Math.max(0, input.outputTokens ?? 0) * rate.output +
+    Math.max(0, input.cacheCreationInputTokens ?? 0) * rate.cacheWrite +
+    Math.max(0, input.cacheReadInputTokens ?? 0) * rate.cacheRead
   );
 }
 
@@ -93,8 +122,14 @@ export interface UsageTokenBreakdown {
 }
 
 export function estimateRealtimeCostUsd(tokens: UsageTokenBreakdown): number {
-  const uncachedText = Math.max(0, tokens.input_text_tokens - tokens.cached_text_tokens);
-  const uncachedAudio = Math.max(0, tokens.input_audio_tokens - tokens.cached_audio_tokens);
+  const uncachedText = Math.max(
+    0,
+    tokens.input_text_tokens - tokens.cached_text_tokens,
+  );
+  const uncachedAudio = Math.max(
+    0,
+    tokens.input_audio_tokens - tokens.cached_audio_tokens,
+  );
   return (
     uncachedText * REALTIME_MINI_RATES.textInput +
     tokens.cached_text_tokens * REALTIME_MINI_RATES.cachedTextInput +
@@ -168,9 +203,11 @@ export function estimateTtsCostUsd(text: string): number {
   const words = Math.max(1, text.trim().split(/\s+/).filter(Boolean).length);
   const audioMinutes = Math.max(
     TTS_RATES.minimumAudioSeconds / 60,
-    words / TTS_RATES.estimatedWordsPerMinute
+    words / TTS_RATES.estimatedWordsPerMinute,
   );
-  const textTokens = Math.ceil(text.length / TTS_RATES.estimatedCharactersPerToken);
+  const textTokens = Math.ceil(
+    text.length / TTS_RATES.estimatedCharactersPerToken,
+  );
   return (
     audioMinutes * TTS_RATES.audioPerMinute +
     textTokens * TTS_RATES.textInputPerToken

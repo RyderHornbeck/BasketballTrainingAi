@@ -48,6 +48,7 @@ export async function streamCoachTurn(input: {
   transcript: string;
   stateVersion: number;
   conversationSummary?: string;
+  speculative?: boolean;
   signal: AbortSignal;
   onEvent: (event: CoachTurnStreamEvent) => void | Promise<void>;
 }): Promise<void> {
@@ -74,6 +75,7 @@ export async function streamCoachTurn(input: {
       transcript: input.transcript,
       state_version: input.stateVersion,
       conversation_summary: input.conversationSummary,
+      mode: input.speculative === true ? "speculative_read_only" : "standard",
     }),
   });
   if (!response.ok || !response.body) {

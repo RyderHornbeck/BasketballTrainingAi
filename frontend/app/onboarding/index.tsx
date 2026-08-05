@@ -1,8 +1,15 @@
 import { OnboardingStep } from "@/components/OnboardingStep";
 import { SkillSlider } from "@/components/SkillSlider";
+import { AIDataProcessingDisclosure } from "@/components/AIDataProcessingDisclosure";
+import { Button } from "@/components/Button";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { requestOnboardingReviewOnce } from "@/lib/appReview";
+import {
+  clearPendingAIDataConsent,
+  savePendingAIDataConsent,
+  setAIDataConsent,
+} from "@/lib/aiDataConsent";
 import {
   COACH_PROFILES,
   DEFAULT_COACH_VOICE,
@@ -97,7 +104,8 @@ const PRE_SIGNUP_STEP = 13;
 const COACH_INTRO_STEP = 14;
 const COACH_SELECTION_STEP = 15;
 const REVIEW_STEP = 16;
-const PRE_SIGNUP_TOTAL_STEPS = REVIEW_STEP;
+const AI_CONSENT_STEP = 17;
+const PRE_SIGNUP_TOTAL_STEPS = AI_CONSENT_STEP;
 const GENERATION_STEPS = [
   "Calculating your workout length",
   "Reading your goals and skill levels",
@@ -140,7 +148,8 @@ export default function OnboardingScreen() {
   const [error, setError] = useState<string | null>(null);
   const [completedChecklistSteps, setCompletedChecklistSteps] = useState(0);
   const [checklistRun, setChecklistRun] = useState(0);
-  const totalSteps = user ? QUESTION_STEPS : PRE_SIGNUP_TOTAL_STEPS;
+  const totalSteps = user ? QUESTION_STEPS + 1 : PRE_SIGNUP_TOTAL_STEPS;
+  const visibleStep = user && step === AI_CONSENT_STEP ? QUESTION_STEPS + 1 : step;
 
   // Already finished onboarding — don't make them answer again.
   useEffect(() => {
@@ -239,6 +248,10 @@ export default function OnboardingScreen() {
       setStep(step + 1);
       return;
     }
+    if (step === QUESTION_STEPS && user) {
+      setStep(AI_CONSENT_STEP);
+      return;
+    }
     if (step === QUESTION_STEPS && !user) {
       await saveOnboardingDraft(currentDraft());
       setCompletedChecklistSteps(0);
@@ -259,13 +272,23 @@ export default function OnboardingScreen() {
       setStep(REVIEW_STEP);
       return;
     }
-    await handleSubmit();
+    if (step === REVIEW_STEP && !user) {
+      setStep(AI_CONSENT_STEP);
+      return;
+    }
+    if (step === AI_CONSENT_STEP) {
+      await handleSubmit(true);
+    }
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (aiConsentAllowed: boolean) => {
     setSubmitting(true);
     setError(null);
     try {
+      await savePendingAIDataConsent(aiConsentAllowed);
+      if (user) {
+        await setAIDataConsent(aiConsentAllowed, "onboarding");
+      }
       if (user) {
         // Existing authenticated accounts can complete onboarding here.
         // Start their real plan behind the paywall so it can be ready after purchase.
@@ -279,7 +302,10 @@ export default function OnboardingScreen() {
               if (profileError) throw profileError;
             }),
         ]);
-        await clearOnboardingDraft();
+        await Promise.all([
+          clearOnboardingDraft(),
+          clearPendingAIDataConsent(),
+        ]);
         await refreshProfile();
         router.replace({
           pathname: "/paywall",
@@ -304,6 +330,10 @@ export default function OnboardingScreen() {
   };
 
   const handleBack = () => {
+    if (step === AI_CONSENT_STEP && user) {
+      setStep(QUESTION_STEPS);
+      return;
+    }
     if (step > 1) {
       if (step === PRE_SIGNUP_STEP || step === COACH_INTRO_STEP) {
         setCompletedChecklistSteps(0);
@@ -319,14 +349,16 @@ export default function OnboardingScreen() {
     <OnboardingStep
       title={STEP_TITLES[step - 1].title}
       subtitle={STEP_TITLES[step - 1].subtitle}
-      step={step}
+      step={visibleStep}
       totalSteps={totalSteps}
       onNext={handleNext}
       onBack={handleBack}
       nextDisabled={!canGoNext()}
       nextLoading={submitting}
       nextLabel={
-        step === REVIEW_STEP
+        step === AI_CONSENT_STEP
+          ? "Allow AI Processing"
+          : step === REVIEW_STEP
           ? "I rated"
           : step === QUESTION_STEPS && user
             ? "Build My Plan"
@@ -609,6 +641,19 @@ export default function OnboardingScreen() {
           </Text>
         </View>
       )}
+
+      {step === AI_CONSENT_STEP && (
+        <View style={styles.consentSlide}>
+          <AIDataProcessingDisclosure />
+          <Button
+            title="Not Now"
+            variant="outline"
+            onPress={() => void handleSubmit(false)}
+            disabled={submitting}
+            style={styles.consentNotNow}
+          />
+        </View>
+      )}
     </OnboardingStep>
   );
 }
@@ -652,6 +697,11 @@ const STEP_TITLES = [
   {
     title: "Give Court Coach a rating",
     subtitle: "If you’re excited to start training, support Court Coach with a quick rating.",
+  },
+  {
+    title: "AI Data Processing",
+    subtitle:
+      "Choose whether Court Coach may use third-party AI services for coaching and workout features.",
   },
 ];
 
@@ -1062,5 +1112,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     textAlign: "center",
+  },
+  consentSlide: {
+    gap: 18,
+    paddingBottom: 8,
+  },
+  consentNotNow: {
+    width: "100%",
   },
 });

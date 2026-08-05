@@ -34,11 +34,13 @@ export interface NavigationIntentArgs {
 export interface CompletionIntentArgs {
   action: "complete" | "reopen";
   scope: CoachSpeechScope;
+  setNumber?: number;
 }
 
 export interface ProgressIntentArgs {
   metric: "progress" | "percentage" | "remaining" | "target" | "totals";
   scope: CoachSpeechScope;
+  totalsField?: "makes" | "misses" | "attempts";
 }
 
 export interface SaveNoteIntentArgs {
@@ -53,6 +55,13 @@ export interface RemoveDrillIntentArgs {
 export interface AdjustWorkoutIntentArgs {
   action: "extend" | "shorten";
   durationSeconds: number;
+}
+
+export interface SetPrescriptionIntentArgs {
+  setNumber?: number;
+  durationSeconds?: number;
+  targetMakes?: number;
+  targetAttempts?: number;
 }
 
 interface IntentBase<K extends string, A> {
@@ -75,7 +84,8 @@ export type CoachSpeechIntent =
   | IntentBase<"repeat", Record<string, never>>
   | IntentBase<"save_note", SaveNoteIntentArgs>
   | IntentBase<"remove_drill", RemoveDrillIntentArgs>
-  | IntentBase<"adjust_workout", AdjustWorkoutIntentArgs>;
+  | IntentBase<"adjust_workout", AdjustWorkoutIntentArgs>
+  | IntentBase<"set_prescription", SetPrescriptionIntentArgs>;
 
 type Parser = (text: string) => CoachSpeechIntent | null;
 
@@ -619,6 +629,24 @@ export const parseNavigationIntent: Parser = (text) => {
 };
 
 export const parseCompletionIntent: Parser = (text) => {
+  const numberedSet = text.match(
+    new RegExp(
+      `^(?:(?:complete|finish)\\s+set\\s+(${NUMBER})|mark\\s+set\\s+(${NUMBER})\\s+complete|(?:reopen|uncomplete)\\s+set\\s+(${NUMBER})|mark\\s+set\\s+(${NUMBER})\\s+incomplete)$`
+    )
+  );
+  if (numberedSet) {
+    const setNumber = parseSpokenNumber(
+      numberedSet[1] ?? numberedSet[2] ?? numberedSet[3] ?? numberedSet[4]
+    );
+    if (setNumber == null || setNumber < 1) return null;
+    const action: CompletionIntentArgs["action"] =
+      numberedSet[3] || numberedSet[4] ? "reopen" : "complete";
+    return intent(
+      "completion",
+      { action, scope: "set", setNumber },
+      `${action === "complete" ? "Finish" : "Reopen"} set ${setNumber} heard`
+    );
+  }
   const reopen = text.match(
     /^(?:reopen|uncomplete|mark incomplete)(?:\s+this|\s+the current)?\s+(set|drill|exercise|workout)$/
   );
@@ -717,10 +745,20 @@ export const parseProgressIntent: Parser = (text) => {
       /^(makes|misses|attempts|shots)(?:\s+do i have|\s+so far)(?:\s+for|\s+on|\s+in)?\s*(?:this|the current|my)?\s*(set|drill|exercise|workout)?$/
     );
   if (totals) {
+    const noun = totals[1];
     const namedScope = totals[2];
     const scope: CoachSpeechScope =
       namedScope === "set" ? "set" : namedScope === "workout" ? "workout" : "exercise";
-    return intent("progress", { metric: "totals", scope }, `${scope} shot totals heard`);
+    const totalsField: ProgressIntentArgs["totalsField"] = /^makes?/.test(noun)
+      ? "makes"
+      : /^misses?/.test(noun)
+        ? "misses"
+        : "attempts";
+    return intent(
+      "progress",
+      { metric: "totals", scope, totalsField },
+      `${scope} shot totals heard`
+    );
   }
   const percentage = text.match(
     /^(?:(?:whats|what is)(?: my| the)? |show me my )?(?:shooting )?(?:percentage|percent)(?:\s+for|\s+on|\s+in)?\s+(?:this|the current|my|the whole|whole|todays|the)?\s*(set|drill|exercise|workout)(?:\s+so far)?$/
@@ -800,6 +838,95 @@ export const parseAdjustWorkoutIntent: Parser = (text) => {
   );
 };
 
+export const parseSetPrescriptionIntent: Parser = (text) => {
+  const duration = text.match(
+    new RegExp(
+      `^(?:change|set|make)\\s+(?:(?:set\\s+(${NUMBER}))|this\\s+set|the\\s+current\\s+set)(?:s)?(?:\\s+(?:duration|time))?\\s+(?:to|for)\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?)$`
+    )
+  );
+  if (duration) {
+    const setNumber = duration[1] ? parseSpokenNumber(duration[1]) : null;
+    const durationSeconds = parseDuration(duration[2], duration[3]);
+    if (
+      durationSeconds == null ||
+      durationSeconds < 5 ||
+      durationSeconds > 3600 ||
+      (duration[1] && (setNumber == null || setNumber < 1))
+    ) {
+      return null;
+    }
+    return intent(
+      "set_prescription",
+      {
+        setNumber: setNumber ?? undefined,
+        durationSeconds,
+      },
+      `Change set duration to ${formatDurationLabel(durationSeconds)} heard`,
+      0.99
+    );
+  }
+
+  const combinedTarget = text.match(
+    new RegExp(
+      `^(?:set|change)\\s+(?:(?:set\\s+(${NUMBER})\\s+)|(?:this|the current)\\s+set\\s+)?(?:target|goal)\\s+to\\s+(${NUMBER})\\s+makes?\\s+(?:in|for|out of)\\s+(${NUMBER})\\s+(?:attempts?|shots?)$`
+    )
+  );
+  if (combinedTarget) {
+    const setNumber = combinedTarget[1] ? parseSpokenNumber(combinedTarget[1]) : null;
+    const targetMakes = parseSpokenNumber(combinedTarget[2]);
+    const targetAttempts = parseSpokenNumber(combinedTarget[3]);
+    if (
+      targetMakes == null ||
+      targetAttempts == null ||
+      targetAttempts < 1 ||
+      targetMakes > targetAttempts ||
+      targetAttempts > 500 ||
+      (combinedTarget[1] && (setNumber == null || setNumber < 1))
+    ) {
+      return null;
+    }
+    return intent(
+      "set_prescription",
+      {
+        setNumber: setNumber ?? undefined,
+        targetMakes,
+        targetAttempts,
+      },
+      `Change set target to ${targetMakes} in ${targetAttempts} heard`,
+      0.99
+    );
+  }
+
+  const singleTarget = text.match(
+    new RegExp(
+      `^(?:set|change)\\s+(?:(?:set\\s+(${NUMBER})\\s+)|(?:this|the current)\\s+set(?:s)?\\s+|my\\s+)?(target\\s+makes?|target\\s+attempts?|attempts?)\\s+to\\s+(${NUMBER})$`
+    )
+  );
+  if (!singleTarget) return null;
+  const setNumber = singleTarget[1] ? parseSpokenNumber(singleTarget[1]) : null;
+  const value = parseSpokenNumber(singleTarget[3]);
+  if (
+    value == null ||
+    value > 500 ||
+    (/attempt/.test(singleTarget[2]) && value < 1) ||
+    (singleTarget[1] && (setNumber == null || setNumber < 1))
+  ) {
+    return null;
+  }
+  return intent(
+    "set_prescription",
+    {
+      setNumber: setNumber ?? undefined,
+      targetMakes: /makes?/.test(singleTarget[2]) ? value : undefined,
+      targetAttempts: /attempt/.test(singleTarget[2]) ? value : undefined,
+    },
+    /makes?/.test(singleTarget[2])
+      ? `Change target makes to ${value} heard`
+      : `Change target attempts to ${value} heard`,
+    0.99
+  );
+};
+
 export const parseUndoShotIntent: Parser = (text) => {
   if (
     !/^(?:(?:please\s+)?(?:undo|revert|take back|remove|delete)(?:\s+(?:that|it|the|my))?(?:\s+(?:last|latest|previous))?(?:\s+(?:shot|make|miss|result))?|scratch that)$/.test(
@@ -822,6 +949,7 @@ const PARSERS: readonly Parser[] = [
   parseListDrillsIntent,
   parseRepeatIntent,
   parseRemoveDrillIntent,
+  parseSetPrescriptionIntent,
   parseAdjustWorkoutIntent,
 ];
 

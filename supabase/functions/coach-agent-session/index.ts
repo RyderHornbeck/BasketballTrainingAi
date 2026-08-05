@@ -2,8 +2,8 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import {
-  CartesiaAuthError,
   CARTESIA_API_VERSION,
+  CartesiaAuthError,
   mintCartesiaSpeechToken,
 } from "../_shared/cartesiaAuth.ts";
 import {
@@ -18,6 +18,10 @@ import {
   buildCompactContextSummary,
   loadWorkoutContext,
 } from "../_shared/coachCore.ts";
+import {
+  aiDataConsentRequiredBody,
+  hasCurrentAIDataConsent,
+} from "../_shared/aiDataConsent.ts";
 import { COACH_LIMITS } from "../_shared/coachUsage.ts";
 import { corsHeaders } from "../_shared/cors.ts";
 
@@ -67,11 +71,16 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "Missing Authorization header" }, 401);
     }
     const jwt = authHeader.replace(/^Bearer\s+/i, "");
-    const { data: userData, error: userError } = await supabase.auth.getUser(jwt);
+    const { data: userData, error: userError } = await supabase.auth.getUser(
+      jwt,
+    );
     if (userError || !userData?.user) {
       return jsonResponse({ error: "Invalid or expired session" }, 401);
     }
     const userId = userData.user.id;
+    if (!(await hasCurrentAIDataConsent(supabase, userId))) {
+      return jsonResponse(aiDataConsentRequiredBody(), 403);
+    }
     if (!CARTESIA_API_KEY) {
       return jsonResponse({ error: "Voice provider is not configured" }, 500);
     }
@@ -125,7 +134,7 @@ Deno.serve(async (req: Request) => {
       }, 429);
     }
 
-    const [context, profileResult, token] = await Promise.all([
+    const [context, profileResult] = await Promise.all([
       loadWorkoutContext(supabase, userId, body.dayId),
       supabase
         .from("onboarding_answers")
@@ -134,12 +143,20 @@ Deno.serve(async (req: Request) => {
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle(),
-      mintCartesiaSpeechToken(CARTESIA_API_KEY),
     ]);
     if (!context) {
       return jsonResponse({ error: "Workout day not found" }, 404);
     }
     if (profileResult.error) throw profileResult.error;
+    if (!(await hasCurrentAIDataConsent(supabase, userId))) {
+      await supabase
+        .from("coach_sessions")
+        .update({ ended_at: new Date().toISOString() })
+        .eq("id", bootstrap.session_id)
+        .eq("user_id", userId);
+      return jsonResponse(aiDataConsentRequiredBody(), 403);
+    }
+    const token = await mintCartesiaSpeechToken(CARTESIA_API_KEY);
 
     const workoutContext = parseCompactWorkoutContext(
       buildCompactContextSummary(
@@ -193,7 +210,10 @@ Deno.serve(async (req: Request) => {
         status: error.status,
         request_id: error.requestId,
       });
-      return jsonResponse({ error: "Could not authorize voice provider" }, error.status);
+      return jsonResponse(
+        { error: "Could not authorize voice provider" },
+        error.status,
+      );
     }
     console.error("coach-agent-session error:", error);
     return jsonResponse({ error: "Could not start coach session" }, 500);
