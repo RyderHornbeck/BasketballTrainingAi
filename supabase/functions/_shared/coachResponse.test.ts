@@ -1,16 +1,21 @@
 import {
+  assessCoachSpeech,
   buildAnthropicSystemBlocks,
+  buildAnthropicTools,
+  coachToolPreamble,
   consumeAnthropicSse,
   consumeResponsesSse,
   createAbortTimeout,
   inferCoachResponseCapabilities,
-  isConfidentlyToolFreeCoachRequest,
   isCoachMutationRequest,
+  isConfidentlyToolFreeCoachRequest,
   resolveCoachToolContinuation,
+  sanitizeCoachConversationSummary,
   selectCoachResponseModel,
   shouldForceCoachTool,
   validateCoachTurnRequest,
 } from "./coachResponse.ts";
+import { generatedResponseTools } from "./generated/coachTools.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -25,7 +30,10 @@ Deno.test("coach turn validation bounds identity and transcript fields", () => {
     state_version: 4,
   });
   assert(valid.ok, "expected valid coach turn");
-  assert(valid.value.mode === "standard", "omitted mode should remain standard");
+  assert(
+    valid.value.mode === "standard",
+    "omitted mode should remain standard",
+  );
   const invalid = validateCoachTurnRequest({
     day_id: "day-1",
     session_key: "short",
@@ -178,7 +186,10 @@ Deno.test("provider timeout combines deadlines with client cancellation", async 
   const clientDeadline = createAbortTimeout(client.signal, 1_000);
   client.abort();
   assert(clientDeadline.signal.aborted, "client abort should propagate");
-  assert(!clientDeadline.didTimeout(), "client abort is not a provider timeout");
+  assert(
+    !clientDeadline.didTimeout(),
+    "client abort is not a provider timeout",
+  );
   clientDeadline.dispose();
 });
 
@@ -189,7 +200,10 @@ Deno.test("Anthropic caching only applies to a naturally large stable prefix", (
     !("cache_control" in blocks[0]),
     "small voice policy must not be padded just for cache eligibility",
   );
-  const cacheableBlocks = buildAnthropicSystemBlocks("x".repeat(16_384), "dynamic");
+  const cacheableBlocks = buildAnthropicSystemBlocks(
+    "x".repeat(16_384),
+    "dynamic",
+  );
   assert(
     JSON.stringify(cacheableBlocks[0].cache_control) ===
       '{"type":"ephemeral","ttl":"1h"}',
@@ -199,6 +213,26 @@ Deno.test("Anthropic caching only applies to a naturally large stable prefix", (
     !("cache_control" in blocks[1]),
     "dynamic context must remain uncached",
   );
+});
+
+Deno.test("Anthropic adapter preserves every native tool and input schema", () => {
+  const canonical = generatedResponseTools();
+  const anthropic = buildAnthropicTools(canonical);
+  assert(
+    anthropic.length === canonical.length && anthropic.length > 10,
+    "all standard server tools must remain available",
+  );
+  for (const [index, tool] of anthropic.entries()) {
+    assert(
+      tool.name === canonical[index].name &&
+        tool.input_schema === canonical[index].parameters,
+      "Anthropic tools must retain canonical names and schemas",
+    );
+    assert(
+      !("type" in tool) && !("parameters" in tool) && !("strict" in tool),
+      "OpenAI-only tool fields must not enter the Anthropic request",
+    );
+  }
 });
 
 Deno.test("tool continuation honors exact speech and skip-model precedence", () => {
@@ -221,6 +255,74 @@ Deno.test("tool continuation honors exact speech and skip-model precedence", () 
   assert(
     resolveCoachToolContinuation({ continuation: "model" }).type === "model",
     "read-only tool results should continue through the model",
+  );
+  assert(
+    resolveCoachToolContinuation({
+      continuation: "speak_exact",
+      say: "function call equals invoke",
+    }).type === "model",
+    "unsafe exact tool output must never bypass model synthesis",
+  );
+});
+
+Deno.test("catalog search preamble is natural and hides query mechanics", () => {
+  assert(
+    coachToolPreamble("search_exercise_catalog", {
+      query: "search the exercise catalog for V dribble drills",
+    }) === "I'm searching for V dribble.",
+    "search preamble should speak only the compact drill reference",
+  );
+  assert(
+    coachToolPreamble("search_exercise_catalog", {
+      query:
+        "find a very long complicated drill query with many internal filtering words and details",
+    }) === "I'm searching for that drill.",
+    "long internal queries should use a generic athlete-facing preamble",
+  );
+  assert(
+    coachToolPreamble("start_timer", {}) === null,
+    "non-search tools should not narrate internal work",
+  );
+  assert(
+    coachToolPreamble("search_exercise_catalog", {
+      query: "function_call invoke get_progress",
+    }) === "I'm searching for that drill.",
+    "pseudo tool syntax in a query must not enter a preamble",
+  );
+});
+
+Deno.test("speech gate rejects pseudo calls and private reasoning", () => {
+  for (
+    const unsafe of [
+      "function call equals invoke",
+      '<function_calls><invoke name="get_progress"></invoke></function_calls>',
+      'tool_use {"name":"get_progress","input":{}}',
+      'recipient=coach_tools arguments={"view":"progress"}',
+      "Analysis: I should call the workout tool first.",
+      "I need to invoke the function before answering.",
+    ]
+  ) {
+    assert(
+      !assessCoachSpeech(unsafe).ok,
+      `must reject unsafe speech: ${unsafe}`,
+    );
+  }
+  const safe = assessCoachSpeech(
+    "You're three for five, with five shots left.",
+  );
+  assert(
+    safe.ok && safe.text === "You're three for five, with five shots left.",
+    "ordinary athlete-facing speech must remain available",
+  );
+});
+
+Deno.test("contaminated model syntax is removed from conversation memory", () => {
+  const clean = sanitizeCoachConversationSummary(
+    "User: Find V dribble\nCoach: function call = invoke search_exercise_catalog\nUser: yes",
+  );
+  assert(
+    clean === "User: Find V dribble\nUser: yes",
+    "unsafe prior model text should not be sent back to the provider",
   );
 });
 
@@ -262,7 +364,9 @@ Deno.test("Responses SSE parser handles split chunks and tool calls", async () =
 Deno.test("Anthropic SSE parser streams text, tool JSON, and usage", async () => {
   const payload = [
     'event: message_start\ndata: {"type":"message_start","message":{"id":"msg-1","usage":{"input_tokens":12}}}\n\n',
+    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
     'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Ready"}}\n\n',
+    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
     'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-1","name":"get_progress","input":{}}}\n\n',
     'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"set_number\\":"}}\n\n',
     'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"2}"}}\n\n',
@@ -305,4 +409,40 @@ Deno.test("Anthropic SSE parser streams text, tool JSON, and usage", async () =>
   );
   assert(completedOutputTokens === 7, "expected cumulative usage");
   assert(completedStopReason === "tool_use", "expected Anthropic stop reason");
+});
+
+Deno.test("Anthropic SSE parser rejects orphaned text and incomplete tools", async () => {
+  const cases = [
+    [
+      'data: {"type":"message_start","message":{"id":"msg-orphan"}}\n\n',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"function call equals invoke"}}\n\n',
+      'data: {"type":"message_stop"}\n\n',
+    ].join(""),
+    [
+      'data: {"type":"message_start","message":{"id":"msg-partial"}}\n\n',
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"get_progress","input":{}}}\n\n',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{"}}\n\n',
+    ].join(""),
+  ];
+  for (const payload of cases) {
+    let rejected = false;
+    try {
+      await consumeAnthropicSse(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(payload));
+            controller.close();
+          },
+        }),
+        {
+          onTextDelta() {},
+          onFunctionCall() {},
+          onCompleted() {},
+        },
+      );
+    } catch {
+      rejected = true;
+    }
+    assert(rejected, "malformed Anthropic streams must fail closed");
+  }
 });

@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Court Coach",
-    "slug": "basketballtrainerai",
+    "slug": "ryder",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -12,7 +12,7 @@
     },
     "updates": {
       "enabled": true,
-      "url": "https://u.expo.dev/2b536ebc-e798-403b-bc5c-26d472cbaa4f",
+      "url": "https://u.expo.dev/3135ee9b-ba4e-40e4-88b1-5b61a6c98a7f",
       "checkAutomatically": "ON_LOAD",
       "fallbackToCacheTimeout": 0
     },
@@ -24,7 +24,8 @@
         "ITSAppUsesNonExemptEncryption": false,
         "NSMicrophoneUsageDescription": "Court Coach uses the microphone for live coach conversations during workouts.",
         "NSPhotoLibraryAddUsageDescription": "Court Coach saves workout stats images to your Photos library when you tap Download."
-      }
+      },
+      "bitcode": false
     },
     "android": {
       "adaptiveIcon": {
@@ -38,7 +39,29 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_CONNECT"
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.CAMERA",
+        "android.permission.INTERNET",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WAKE_LOCK",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.CAMERA",
+        "android.permission.INTERNET",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WAKE_LOCK",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_MEDIA_IMAGES"
       ]
     },
     "web": {
@@ -92,8 +115,10 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "2b536ebc-e798-403b-bc5c-26d472cbaa4f"
-      }
-    }
+        "projectId": "3135ee9b-ba4e-40e4-88b1-5b61a6c98a7f"
+      },
+      "router": {}
+    },
+    "owner": "ryderhornbeck1s-team"
   }
 }

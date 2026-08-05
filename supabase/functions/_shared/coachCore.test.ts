@@ -263,6 +263,7 @@ function successfulSupabaseMock() {
   const query: Record<string, unknown> = {};
   query.update = () => query;
   query.upsert = () => query;
+  query.delete = () => query;
   query.eq = () => query;
   query.then = (
     resolve: (value: { error: null; data: null }) => unknown,
@@ -276,6 +277,7 @@ function successfulSupabaseMock() {
 function capturingSupabaseMock(rows: Record<string, unknown>[]) {
   const query: Record<string, unknown> = {};
   query.update = () => query;
+  query.delete = () => query;
   query.upsert = (row: Record<string, unknown>) => {
     rows.push(row);
     return query;
@@ -396,6 +398,57 @@ Deno.test("reopening a completed set preserves its recorded numbers", async () =
   assert(
     reopened?.makes === 8 && reopened.attempts === 12,
     "reopening must preserve the saved makes and attempts",
+  );
+});
+
+Deno.test("reopening a whole drill preserves every recorded result", async () => {
+  const ctx = contextWithPartialShootingSet();
+  const shootingLog = ctx.logs.get("shoot");
+  assert(shootingLog, "shooting log fixture is required");
+  shootingLog.completed = true;
+  const rows: Record<string, unknown>[] = [];
+  const outcome = await executeCoachTool(
+    capturingSupabaseMock(rows),
+    "user",
+    "day",
+    ctx,
+    "uncomplete_drill",
+    { exercise_id: "shoot" },
+  );
+
+  const meta = decodeExerciseLogMeta(String(rows[0]?.notes ?? ""));
+  const firstSet = meta.set_logs?.find((set) => set.set_number === 1);
+  assert(outcome.dbChanged, "whole-drill reopening should persist");
+  assert(
+    rows[0]?.makes === 8 && rows[0]?.attempts === 12,
+    "aggregate shooting history must remain unchanged",
+  );
+  assert(
+    firstSet?.makes === 8 &&
+      firstSet.attempts === 12 &&
+      firstSet.completed === false &&
+      firstSet.force_incomplete === true,
+    "set results must be preserved while reopening completion",
+  );
+});
+
+Deno.test("reopen_workout executes without resetting drill history", async () => {
+  const ctx = contextWithPartialShootingSet();
+  ctx.day.completed = true;
+  const outcome = await executeCoachTool(
+    successfulSupabaseMock(),
+    "user",
+    "day",
+    ctx,
+    "reopen_workout",
+    {},
+  );
+
+  assert(outcome.dbChanged, "registered reopen_workout should execute");
+  assert(ctx.day.completed === false, "the workout day should be open");
+  assert(
+    ctx.logs.get("shoot")?.attempts === 12,
+    "reopening the workout must preserve drill history",
   );
 });
 
@@ -605,6 +658,10 @@ Deno.test("coach changes one shooting set target without changing results", asyn
   assert(
     meta.set_logs?.[0].makes === 8 && meta.set_logs?.[0].attempts === 12,
     "existing results must remain unchanged",
+  );
+  assert(
+    changedSet?.makes == null && changedSet?.attempts == null,
+    "changing an untouched set target must not create fake shot results",
   );
 
   const drill = buildWorkoutNavigation(ctx).drills.find(
@@ -822,16 +879,16 @@ Deno.test("coach turn prompt separates cached policy from bounded dynamic state"
   const parsed = JSON.parse(dynamic.slice(dynamic.indexOf("{")));
 
   assert(
-    COACH_TURN_STABLE_SYSTEM_PROMPT.includes(COACH_SYSTEM_PROMPT),
-    "stable cached prefix should own the shared policy",
+    COACH_TURN_STABLE_SYSTEM_PROMPT.includes("Never mention a query"),
+    "stable policy must prevent internal implementation language",
   );
   assert(
     !dynamic.includes(COACH_SYSTEM_PROMPT),
     "dynamic state must not duplicate the stable policy",
   );
   assert(
-    dynamic.includes("Request mode: speculative_read_only"),
-    "dynamic state should identify the safe request mode",
+    !dynamic.includes("Request mode:"),
+    "dynamic state must not expose internal request modes",
   );
   assert(
     parsed.recent_conversation.length === 800,
@@ -892,6 +949,24 @@ Deno.test("saved shooting results report target status and add requires confirma
   assert(
     COACH_SYSTEM_PROMPT.includes("requires confirmation before mutation"),
     "an absent requested drill or change must be confirmed before editing",
+  );
+  assert(
+    COACH_TURN_STABLE_SYSTEM_PROMPT.includes(
+      "search the catalog before offering to add the closest match",
+    ),
+    "unlisted drill requests must search before the add offer",
+  );
+  assert(
+    COACH_TURN_STABLE_SYSTEM_PROMPT.includes(
+      "You can start, pause, resume, and stop timers.",
+    ),
+    "the model must know it can control timers through its tool contract",
+  );
+  assert(
+    COACH_TURN_STABLE_SYSTEM_PROMPT.includes(
+      "Exact make, miss, and incremental shooting commands are handled before a turn reaches you.",
+    ),
+    "the server model must not be instructed to call client-only shot tools",
   );
 });
 

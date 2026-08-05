@@ -150,13 +150,24 @@ test("distinguishes incremental and absolute shot ratios", () => {
 test("parses timer starts, controls, and status", () => {
   const cases: [string, Record<string, unknown>][] = [
     ["start a timer", { action: "start", useSetDefault: true }],
+    ["hey coach can you start a timer", { action: "start", useSetDefault: true }],
     ["start the timer for this set", { action: "start", useSetDefault: true }],
+    ["start the timer for that set", { action: "start", useSetDefault: true }],
     ["start a stopwatch", { action: "start", useSetDefault: true }],
     ["start a 2 minute timer", { action: "start", durationSeconds: 120 }],
+    ["start a 1 minute timer for this set", {
+      action: "start",
+      durationSeconds: 60,
+    }],
+    ["start a 30 second timer for that set", {
+      action: "start",
+      durationSeconds: 30,
+    }],
     ["Start a 5-minute timer.", { action: "start", durationSeconds: 300 }],
     ["Start a five-minute time.", { action: "start", durationSeconds: 300 }],
     ["Start five minutes.", { action: "start", durationSeconds: 300 }],
     ["Yo coach, can you start a 5 minute timer?", { action: "start", durationSeconds: 300 }],
+    ["hey coach can you start atimer", { action: "start", useSetDefault: true }],
     ["Could you fire up a ninety second timer, coach?", {
       action: "start",
       durationSeconds: 90,
@@ -390,6 +401,14 @@ test("parses explicit set duration and shooting target edits", () => {
   expectIntent("change this set to 30 seconds", {
     kind: "set_prescription",
     args: { durationSeconds: 30 },
+  });
+  expectIntent("change that set to 30 seconds", {
+    kind: "set_prescription",
+    args: { durationSeconds: 30 },
+  });
+  expectIntent("change the duration for that set to 45 seconds", {
+    kind: "set_prescription",
+    args: { durationSeconds: 45 },
   });
   expectIntent("set set two duration to 45 seconds", {
     kind: "set_prescription",

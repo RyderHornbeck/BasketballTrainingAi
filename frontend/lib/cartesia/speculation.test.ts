@@ -28,11 +28,14 @@ test("normalizes harmless transcript spacing and casing", () => {
 });
 
 test("never speculates direct mutation commands", () => {
-  equal(isSafeSpeculativeTranscript("what is next?"), true);
-  equal(isSafeSpeculativeTranscript("how should I shoot this?"), true);
+  equal(isSafeSpeculativeTranscript("motivate me"), true);
+  equal(isSafeSpeculativeTranscript("what is next?"), false);
+  equal(isSafeSpeculativeTranscript("how should I shoot this?"), false);
   equal(isSafeSpeculativeTranscript("add a shooting drill"), false);
   equal(isSafeSpeculativeTranscript("please change set two"), false);
   equal(isSafeSpeculativeTranscript("start a timer"), false);
+  equal(isSafeSpeculativeTranscript("hey coach can you start a timer"), false);
+  equal(isSafeSpeculativeTranscript("I want to do V dribbles"), false);
 });
 
 test("promotes only an identical current final turn", () => {

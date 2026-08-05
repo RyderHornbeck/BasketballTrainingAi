@@ -189,14 +189,15 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   }),
   tool({
     name: "set_current_drill",
-    description: "Move to a drill without changing results.",
+    description:
+      "Move to a drill without changing results. Supply either its authoritative exercise_id or the athlete's drill_name reference.",
     capability: "navigation",
     execution: "server",
     kind: "mutation",
     realtime: true,
     flushShots: true,
     exactSpeech: true,
-    parameters: args(drillReference, ["drill_name"]),
+    parameters: args(drillReference),
   }),
   tool({
     name: "skip_drill",

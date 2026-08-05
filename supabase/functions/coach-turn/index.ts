@@ -7,13 +7,16 @@ import {
   loadWorkoutContext,
 } from "../_shared/coachCore.ts";
 import {
+  assessCoachSpeech,
   buildAnthropicSystemBlocks,
+  buildAnthropicTools,
+  coachToolPreamble,
   consumeAnthropicSse,
   createAbortTimeout,
-  inferCoachResponseCapabilities,
   isConfidentlyToolFreeCoachRequest,
-  type ResponsesFunctionCall,
   resolveCoachToolContinuation,
+  type ResponsesFunctionCall,
+  sanitizeCoachConversationSummary,
   selectCoachResponseModel,
   shouldForceCoachTool,
   validateCoachTurnRequest,
@@ -31,8 +34,9 @@ import {
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const MAX_TOOL_ROUNDS = 3;
+const MAX_TOOL_ROUNDS = 4;
 const MAX_TOOL_CALLS = 4;
+const MAX_PROVIDER_FORMAT_RETRIES = 1;
 const ANTHROPIC_TIMEOUT_MS = 15_000;
 
 function defer(promise: Promise<unknown>) {
@@ -40,7 +44,9 @@ function defer(promise: Promise<unknown>) {
     EdgeRuntime?: { waitUntil(promise: Promise<unknown>): void };
   }).EdgeRuntime;
   if (edgeRuntime?.waitUntil) edgeRuntime.waitUntil(promise);
-  else void promise.catch((error) => console.error("deferred coach task failed:", error));
+  else {void promise.catch((error) =>
+      console.error("deferred coach task failed:", error)
+    );}
 }
 
 function jsonResponse(body: unknown, status = 200) {
@@ -101,28 +107,24 @@ Deno.serve(async (req: Request) => {
   ) {
     return jsonResponse({ error: "Coach session is not active." }, 409);
   }
-  if (turn.stateVersion < Number(session.state_version ?? 0)) {
-    return jsonResponse(
-      {
-        error: "Workout state changed before this turn started.",
-        code: "stale_state_version",
-        state_version: Number(session.state_version ?? 0),
-      },
-      409,
-    );
-  }
+  // A read-only refresh from an older client build could advance its local
+  // counter without advancing this session. Rebase that harmlessly stale
+  // request to the server version instead of rejecting the entire spoken turn.
+  turn.stateVersion = Math.max(
+    turn.stateVersion,
+    Number(session.state_version ?? 0),
+  );
 
   const { model } = selectCoachResponseModel(turn.transcript);
-  const responseTools = generatedResponseTools(
-    inferCoachResponseCapabilities(turn.transcript),
-  );
-  const anthropicTools = responseTools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    input_schema: tool.parameters,
-    eager_input_streaming: true,
-  }));
   const speculativeReadOnly = turn.mode === "speculative_read_only";
+  const safeConversationSummary = sanitizeCoachConversationSummary(
+    turn.conversationSummary,
+  );
+  // Final turns must always retain the complete tool contract. Keyword-based
+  // narrowing made natural requests such as "I want to do low pound dribbles"
+  // unable to search the catalog and add the selected drill.
+  const responseTools = speculativeReadOnly ? [] : generatedResponseTools();
+  const anthropicTools = buildAnthropicTools(responseTools);
   const claimPromise = speculativeReadOnly
     ? Promise.resolve({ data: null, error: null })
     : supabase.rpc("claim_coach_agent_turn", {
@@ -177,18 +179,21 @@ Deno.serve(async (req: Request) => {
     initialContext,
     answers ?? null,
     undefined,
-    turn.conversationSummary,
+    safeConversationSummary,
   );
   const initialFingerprint = await sha256(compactContext);
   const confidentlyToolFree = isConfidentlyToolFreeCoachRequest(
     turn.transcript,
-    turn.conversationSummary,
+    safeConversationSummary,
   );
-  const toolFreeTurn = speculativeReadOnly || confidentlyToolFree;
+  // A final turn may have been misclassified from an incomplete transcript.
+  // Keep tools enabled for every standard turn; only the explicitly
+  // speculative request mode is tool-free.
+  const toolFreeTurn = speculativeReadOnly;
   const dynamicContext = buildCoachTurnDynamicContext(
     initialContext,
     answers ?? null,
-    turn.conversationSummary,
+    safeConversationSummary,
     coachName,
     speculativeReadOnly,
     !confidentlyToolFree,
@@ -213,6 +218,7 @@ Deno.serve(async (req: Request) => {
     let outputCharacters = 0;
     let emittedSpeech = false;
     let mutationApplied = false;
+    const announcedPreambles = new Set<string>();
     const usageEvents: Array<Record<string, unknown>> = [];
     try {
       await send({
@@ -224,9 +230,14 @@ Deno.serve(async (req: Request) => {
       });
       for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
         const toolsEnabled = !toolFreeTurn && round < MAX_TOOL_ROUNDS;
-        const forceTool = round === 0 &&
-          shouldForceCoachTool(turn.transcript, turn.conversationSummary);
-        const streamImmediately = toolFreeTurn || !toolsEnabled;
+        // Give the model one chance to clarify an ambiguous request. If it
+        // answers an action request without a native tool block, retry with a
+        // required tool rather than letting it merely claim the action.
+        const requestNeedsTool = round === 0 &&
+          shouldForceCoachTool(
+            turn.transcript,
+            safeConversationSummary,
+          );
         if (!(await hasCurrentAIDataConsent(supabase, userId))) {
           throw new Error(
             "AI data processing permission was withdrawn during this turn.",
@@ -236,83 +247,134 @@ Deno.serve(async (req: Request) => {
           req.signal,
           ANTHROPIC_TIMEOUT_MS,
         );
-        const calls: ResponsesFunctionCall[] = [];
+        let calls: ResponsesFunctionCall[] = [];
         let roundText = "";
         let completedResponseId: string | null = null;
         let roundStopReason: string | null = null;
         try {
-          const anthropicResponse = await fetch(
-            "https://api.anthropic.com/v1/messages",
-            {
-              method: "POST",
-              signal: providerDeadline.signal,
-              headers: {
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "anthropic-beta": "prompt-caching-2024-07-31",
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model,
-                system: buildAnthropicSystemBlocks(
-                  COACH_TURN_STABLE_SYSTEM_PROMPT,
-                  dynamicContext,
-                ),
-                messages,
-                ...(toolsEnabled
-                  ? {
-                    tools: anthropicTools,
-                    tool_choice: {
-                      type: forceTool ? "any" : "auto",
-                      disable_parallel_tool_use: true,
-                    },
-                  }
-                  : {}),
-                stream: true,
-                max_tokens: 300,
-                service_tier: "auto",
-              }),
-            },
-          );
-          if (!anthropicResponse.ok || !anthropicResponse.body) {
-            const detail = await anthropicResponse.text();
-            throw new Error(
-              `Anthropic Messages API failed (${anthropicResponse.status}): ${
-                detail.slice(0, 300)
-              }`,
-            );
-          }
-          await consumeAnthropicSse(anthropicResponse.body, {
-            onTextDelta: (delta) => {
-              roundText += delta;
-              if (streamImmediately) {
-                outputCharacters += delta.length;
-                if (delta.trim()) emittedSpeech = true;
-                return send({
-                  type: "text_delta",
-                  turn_id: turn.turnId,
-                  state_version: nextStateVersion,
-                  delta,
-                });
+          for (
+            let formatAttempt = 0;
+            formatAttempt <= MAX_PROVIDER_FORMAT_RETRIES;
+            formatAttempt += 1
+          ) {
+            calls = [];
+            roundText = "";
+            completedResponseId = null;
+            roundStopReason = null;
+            try {
+              const retryInstruction = formatAttempt === 0
+                ? ""
+                : "\nThe prior response had an invalid output format. Return only natural athlete-facing speech or a native tool_use block. Never write or imitate tool syntax in text.";
+              const anthropicResponse = await fetch(
+                "https://api.anthropic.com/v1/messages",
+                {
+                  method: "POST",
+                  signal: providerDeadline.signal,
+                  headers: {
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "anthropic-beta": "prompt-caching-2024-07-31",
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    model,
+                    system: buildAnthropicSystemBlocks(
+                      COACH_TURN_STABLE_SYSTEM_PROMPT,
+                      `${dynamicContext}${retryInstruction}`,
+                    ),
+                    messages,
+                    ...(toolsEnabled
+                      ? {
+                        tools: anthropicTools,
+                        tool_choice: {
+                          type: formatAttempt > 0 && requestNeedsTool
+                            ? "any"
+                            : "auto",
+                          disable_parallel_tool_use: true,
+                        },
+                      }
+                      : {}),
+                    stream: true,
+                    max_tokens: 300,
+                    service_tier: "auto",
+                  }),
+                },
+              );
+              if (!anthropicResponse.ok || !anthropicResponse.body) {
+                const detail = await anthropicResponse.text();
+                throw new Error(
+                  `Anthropic Messages API failed (${anthropicResponse.status}): ${
+                    detail.slice(0, 300)
+                  }`,
+                );
               }
-            },
-            onFunctionCall: (call) => {
-              calls.push(call);
-            },
-            onCompleted: (responseId, usage) => {
-              completedResponseId = responseId;
-              roundStopReason = typeof usage?.stop_reason === "string"
-                ? usage.stop_reason
-                : null;
-              if (usage) usageEvents.push(usage);
-            },
-          });
-        } catch (error) {
-          if (providerDeadline.didTimeout()) {
-            console.error("Anthropic provider timeout:", error);
-            throw new Error("Anthropic provider request timed out.");
+              await consumeAnthropicSse(anthropicResponse.body, {
+                onTextDelta: (delta) => {
+                  roundText += delta;
+                },
+                onFunctionCall: (call) => {
+                  calls.push(call);
+                },
+                onCompleted: (responseId, usage) => {
+                  completedResponseId = responseId;
+                  roundStopReason = typeof usage?.stop_reason === "string"
+                    ? usage.stop_reason
+                    : null;
+                  if (usage) usageEvents.push(usage);
+                },
+              });
+            } catch (error) {
+              if (providerDeadline.didTimeout()) {
+                console.error("Anthropic provider timeout:", error);
+                throw new Error("Anthropic provider request timed out.");
+              }
+              throw error;
+            }
+
+            let formatError: string | null = null;
+            if (calls.length) {
+              if (roundStopReason !== "tool_use") {
+                formatError = "native tool blocks had a non-tool stop reason";
+              } else {
+                for (const call of calls) {
+                  try {
+                    const input = JSON.parse(call.argumentsJson);
+                    const validated = validateCoachToolArguments(
+                      call.name,
+                      input,
+                    );
+                    if (!call.callId || !validated.ok) {
+                      formatError = "native tool call was malformed";
+                      break;
+                    }
+                  } catch {
+                    formatError = "native tool JSON was malformed";
+                    break;
+                  }
+                }
+              }
+            } else if (roundStopReason === "tool_use") {
+              formatError =
+                "tool use was required but no native tool block arrived";
+            } else {
+              const speech = assessCoachSpeech(roundText);
+              if (speech.ok) {
+                roundText = speech.text;
+                if (requestNeedsTool) {
+                  formatError =
+                    "an action request received text without a native tool block";
+                }
+              } else {
+                formatError = `text was unsafe for speech (${speech.reason})`;
+              }
+            }
+            if (!formatError) break;
+            if (formatAttempt === MAX_PROVIDER_FORMAT_RETRIES) {
+              throw new Error(
+                `Anthropic response format rejected: ${formatError}.`,
+              );
+            }
           }
-          throw error;
         } finally {
           providerDeadline.dispose();
         }
@@ -321,7 +383,7 @@ Deno.serve(async (req: Request) => {
           throw new Error("Coach response reached its output limit.");
         }
         if (calls.length === 0) {
-          if (!streamImmediately && roundText.trim()) {
+          if (roundText.trim()) {
             outputCharacters += roundText.length;
             emittedSpeech = true;
             await send({
@@ -355,6 +417,18 @@ Deno.serve(async (req: Request) => {
           }
           const validated = validateCoachToolArguments(call.name, toolArgs);
           if (!validated.ok) throw new Error(validated.error);
+          const preamble = coachToolPreamble(call.name, validated.value);
+          if (preamble && !announcedPreambles.has(preamble)) {
+            announcedPreambles.add(preamble);
+            emittedSpeech = true;
+            outputCharacters += preamble.length;
+            await send({
+              type: "text_delta",
+              turn_id: turn.turnId,
+              state_version: nextStateVersion,
+              delta: `${preamble} `,
+            });
+          }
           assistantToolUses.push({
             type: "tool_use",
             id: call.callId,
@@ -449,25 +523,18 @@ Deno.serve(async (req: Request) => {
           }
           break;
         }
-        const assistantContent: Array<Record<string, unknown>> = [
-          ...(roundText.trim() ? [{ type: "text", text: roundText }] : []),
-          ...assistantToolUses,
-        ];
+        // Pre-tool model prose is hidden from the athlete and omitted from the
+        // next round so internal query narration cannot leak into speech.
+        const assistantContent: Array<Record<string, unknown>> =
+          assistantToolUses;
         messages.push({ role: "assistant", content: assistantContent });
         messages.push({ role: "user", content: outputs });
       }
 
       if (!emittedSpeech) {
-        const fallback = mutationApplied
-          ? "The change went through, but I couldn't finish the response."
-          : "I couldn't finish that. Try asking again.";
-        outputCharacters += fallback.length;
-        emittedSpeech = true;
-        await send({
-          type: "text_delta",
-          turn_id: turn.turnId,
-          state_version: nextStateVersion,
-          delta: fallback,
+        console.warn("Coach turn completed without a safe spoken response.", {
+          turnId: turn.turnId,
+          mutationApplied,
         });
       }
 

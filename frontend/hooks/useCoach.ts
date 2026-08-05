@@ -18,10 +18,14 @@ import {
 } from "@/lib/realtimeCoach";
 import { useTimerAudioCues } from "@/hooks/useTimerAudioCues";
 import { completeTimedExerciseSet } from "@/lib/timedSetCompletion";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 
 export type CoachStatus = CoachMachineState;
+
+const coachConversationKey = (dayId: string) =>
+  `court-coach:conversation:${dayId}`;
 
 export interface UseCoachResult {
   status: CoachStatus;
@@ -246,6 +250,18 @@ export function useCoach(dayId: string | null): UseCoachResult {
       connectingRef.current = false;
       return;
     }
+    if (!conversationSummaryRef.current) {
+      const savedConversation = await AsyncStorage.getItem(
+        coachConversationKey(dayId),
+      ).catch(() => null);
+      if (
+        savedConversation &&
+        overlayOpenRef.current &&
+        conversationDayIdRef.current === dayId
+      ) {
+        conversationSummaryRef.current = savedConversation.slice(-1_200);
+      }
+    }
     const session = ensureSession();
     try {
       await session.connect(
@@ -273,6 +289,15 @@ export function useCoach(dayId: string | null): UseCoachResult {
           onCommandHeard: showCommandHeard,
           onConversationSummary: (summary) => {
             conversationSummaryRef.current = summary;
+            void AsyncStorage.setItem(
+              coachConversationKey(dayId),
+              summary.slice(-1_200),
+            ).catch((storageError) => {
+              console.warn(
+                "Could not persist coach conversation history:",
+                storageError,
+              );
+            });
           },
           onUsage: (totals) => {
             if (!mountedRef.current) return;

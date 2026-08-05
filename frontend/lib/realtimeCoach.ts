@@ -24,8 +24,8 @@ import { getCoachPersonaId } from "@/lib/coachProfiles";
 import {
   CartesiaInkClient,
   CartesiaSonicClient,
+  gateCoachSpeechText,
   isSafeSpeculativeTranscript,
-  sanitizeCoachSpeechText,
   shouldAcceptPlaybackChunk,
   shouldAcceptTurnEvent,
   shouldPromoteSpeculation,
@@ -304,7 +304,6 @@ const DETERMINISTIC_SHOT_TOOLS = new Set([
   "record_makes",
   "record_misses",
 ]);
-
 function normalizeDrillReference(value: unknown): string {
   return String(value ?? "")
     .toLowerCase()
@@ -432,6 +431,7 @@ export class RealtimeCoachSession {
   private stateFingerprint = "";
   private cartesiaVoiceId = "";
   private ttsInputBuffer = "";
+  private ttsSafetyBlocked = false;
   private playbackEnqueue: Promise<void> = Promise.resolve();
   private playbackGeneration = 0;
   private speculativeTurn: SpeculativeCoachTurn | null = null;
@@ -507,6 +507,8 @@ export class RealtimeCoachSession {
     this.exactCompletedShotReply = null;
     this.stateVersion = 0;
     this.stateFingerprint = "";
+    this.ttsInputBuffer = "";
+    this.ttsSafetyBlocked = false;
     this.cartesiaSttSeconds = 0;
     this.cartesiaTtsCharacters = 0;
     this.reportedSttSeconds = 0;
@@ -798,17 +800,16 @@ export class RealtimeCoachSession {
             this.active &&
             turnSpeechEpoch === this.speechEpoch
           ) {
-            const recovery = "I couldn't finish that. Say it again.";
             this.conversationSummary = appendConversationTurn(
               this.conversationSummary,
               event.transcript.trim(),
-              recovery,
+              "",
             );
             this.callbacks?.onConversationSummary?.(this.conversationSummary);
-            return this.speakDeterministic(
-              recovery,
-              `route-recovery-${event.requestId}`,
-              turnSpeechEpoch,
+            this.callbacks?.onError(
+              routeError instanceof Error
+                ? routeError.message
+                : "Coach request failed.",
             );
           }
         });
@@ -830,7 +831,7 @@ export class RealtimeCoachSession {
         startThreshold: 0.65,
         eagerEndThreshold: 0.35,
         endThreshold: 0.1,
-        endTimeoutMs: 640,
+        endTimeoutMs: 750,
       },
       onTurnStart: () => this.handleCartesiaSpeechStart(generation),
       onTurnEagerEnd: (event) => this.startCartesiaSpeculation(event, generation),
@@ -938,6 +939,7 @@ export class RealtimeCoachSession {
       const { data, error } = await supabase.functions.invoke<{
         client_workout_context?: string | null;
         updated_instructions?: string | null;
+        state_version?: number;
         error?: string;
       }>("coach-tools", {
         body: {
@@ -951,7 +953,9 @@ export class RealtimeCoachSession {
       if (error) throw new Error(await edgeFunctionErrorMessage(error));
       if (data?.error) throw new Error(data.error);
       this.updateWorkoutState(data?.client_workout_context);
-      if (data?.client_workout_context) this.stateVersion += 1;
+      if (typeof data?.state_version === "number") {
+        this.stateVersion = Math.max(this.stateVersion, data.state_version);
+      }
       if (data?.updated_instructions && !this.cartesiaActive) {
         this.sendEvent({
           type: "session.update",
@@ -1159,8 +1163,11 @@ export class RealtimeCoachSession {
         const isTimedSet =
           current &&
           currentDrill &&
-          ["ball_handling", "defense", "conditioning"].includes(
-            currentDrill.category ?? ""
+          (
+            (current.target.minutes ?? currentDrill.target.minutes ?? 0) > 0 ||
+            ["ball_handling", "defense", "conditioning"].includes(
+              currentDrill.category ?? ""
+            )
           );
         if (isTimedSet) {
           timerAction = {
@@ -1899,8 +1906,11 @@ export class RealtimeCoachSession {
         const isTimedSet = Boolean(
           current &&
             currentDrill &&
-            ["ball_handling", "defense", "conditioning"].includes(
-              currentDrill.category ?? ""
+            (
+              (current.target.minutes ?? currentDrill.target.minutes ?? 0) > 0 ||
+              ["ball_handling", "defense", "conditioning"].includes(
+                currentDrill.category ?? ""
+              )
             )
         );
         const prescribedSeconds =
@@ -2408,6 +2418,7 @@ export class RealtimeCoachSession {
       this.cartesiaActive = false;
       this.cartesiaVoiceId = "";
       this.ttsInputBuffer = "";
+      this.ttsSafetyBlocked = false;
       this.playbackEnqueue = Promise.resolve();
 
       try {
@@ -2689,6 +2700,7 @@ export class RealtimeCoachSession {
     }
     this.sonicContext = null;
     this.ttsInputBuffer = "";
+    this.ttsSafetyBlocked = false;
     this.playbackEnqueue = Promise.resolve();
     this.generationActive = false;
     this.playbackActive = false;
@@ -2706,7 +2718,9 @@ export class RealtimeCoachSession {
     }
     const playbackGeneration = this.playbackGeneration;
     const context = sonic.createContext({
-      contextId: `${this.sessionKey ?? "session"}:${speechEpoch}:${Date.now()}`.slice(0, 120),
+      contextId: `${
+        this.sessionKey ?? "session"
+      }:${speechEpoch}:${playbackGeneration}:${Date.now()}`.slice(0, 120),
       voiceId: this.cartesiaVoiceId,
       encoding: "pcm_s16le",
       sampleRate: 24000,
@@ -2776,15 +2790,30 @@ export class RealtimeCoachSession {
 
   private flushSonicText(force: boolean, turn?: RoutedCoachTurn): void {
     const context = this.sonicContext;
+    const speechEpoch = turn?.speechEpoch ?? this.speechEpoch;
+    if (this.ttsSafetyBlocked) {
+      return;
+    }
     if (!context) return;
     if (!this.ttsInputBuffer) {
       if (force) context.finish();
       return;
     }
+    const bufferedGate = gateCoachSpeechText(this.ttsInputBuffer, force);
+    if (bufferedGate.status === "hold") return;
+    if (bufferedGate.status === "unsafe") {
+      this.blockUnsafeSpeech(speechEpoch);
+      return;
+    }
     const drained = drainSonicTextChunks(this.ttsInputBuffer, force);
     this.ttsInputBuffer = drained.remainder;
-    const chunks = drained.chunks
-      .map((chunk) => sanitizeCoachSpeechText(chunk))
+    const gatedChunks = drained.chunks.map((chunk) => gateCoachSpeechText(chunk, true));
+    if (gatedChunks.some((result) => result.status !== "safe")) {
+      this.blockUnsafeSpeech(speechEpoch);
+      return;
+    }
+    const chunks = gatedChunks
+      .map((result) => result.speech)
       .filter((speech) => speech.trim());
     if (chunks.length === 0) {
       if (force) context.finish();
@@ -2799,6 +2828,22 @@ export class RealtimeCoachSession {
       if (force && index === chunks.length - 1) context.finish(speech);
       else context.push(speech);
     });
+  }
+
+  private blockUnsafeSpeech(speechEpoch: number): void {
+    if (this.ttsSafetyBlocked || speechEpoch !== this.speechEpoch) return;
+    this.ttsSafetyBlocked = true;
+    this.ttsInputBuffer = "";
+    this.playbackGeneration += 1;
+    try {
+      this.sonicContext?.cancel();
+    } catch {
+      // The provider may already have completed the unsafe context.
+    }
+    this.sonicContext = null;
+    this.playbackEnqueue = Promise.resolve();
+    void this.duplexAudio?.clearPlaybackAsync().catch(() => undefined);
+    console.warn("Suppressed unsafe internal syntax from coach speech.");
   }
 
   private applyCartesiaTurnEvent(
@@ -2851,8 +2896,11 @@ export class RealtimeCoachSession {
           if (
             current &&
             currentDrill &&
-            ["ball_handling", "defense", "conditioning"].includes(
-              currentDrill.category ?? ""
+            (
+              (current.target.minutes ?? currentDrill.target.minutes ?? 0) > 0 ||
+              ["ball_handling", "defense", "conditioning"].includes(
+                currentDrill.category ?? ""
+              )
             )
           ) {
             action = {
@@ -2899,6 +2947,7 @@ export class RealtimeCoachSession {
     this.turnAbortController?.abort();
     this.turnAbortController = speculation.controller;
     this.ttsInputBuffer = "";
+    this.ttsSafetyBlocked = false;
     this.generationActive = true;
     this.updateStatus();
     let context: CartesiaSonicContext | null = null;
@@ -2914,13 +2963,15 @@ export class RealtimeCoachSession {
       if (speechEpoch !== this.speechEpoch) return;
 
       if (speculation.responseText.trim()) {
-        const spokenResponse = sanitizeCoachSpeechText(speculation.responseText.trim());
-        this.conversationSummary = appendConversationTurn(
-          this.conversationSummary,
-          turn.transcript,
-          spokenResponse,
-        );
-        this.callbacks?.onConversationSummary?.(this.conversationSummary);
+        const responseGate = gateCoachSpeechText(speculation.responseText.trim(), true);
+        if (responseGate.status === "safe") {
+          this.conversationSummary = appendConversationTurn(
+            this.conversationSummary,
+            turn.transcript,
+            responseGate.speech,
+          );
+          this.callbacks?.onConversationSummary?.(this.conversationSummary);
+        }
       }
       turn.backendCompletedAt = Date.now();
       this.logVoiceMetric(turn, "backend_complete");
@@ -2961,6 +3012,7 @@ export class RealtimeCoachSession {
     this.turnAbortController?.abort();
     this.turnAbortController = controller;
     this.ttsInputBuffer = "";
+    this.ttsSafetyBlocked = false;
     let context: CartesiaSonicContext | null = null;
     let responseText = "";
     try {
@@ -2980,13 +3032,15 @@ export class RealtimeCoachSession {
       });
       if (speechEpoch !== this.speechEpoch) return;
       if (responseText.trim()) {
-        const spokenResponse = sanitizeCoachSpeechText(responseText.trim());
-        this.conversationSummary = appendConversationTurn(
-          this.conversationSummary,
-          transcript,
-          spokenResponse,
-        );
-        this.callbacks?.onConversationSummary?.(this.conversationSummary);
+        const responseGate = gateCoachSpeechText(responseText.trim(), true);
+        if (responseGate.status === "safe") {
+          this.conversationSummary = appendConversationTurn(
+            this.conversationSummary,
+            transcript,
+            responseGate.speech,
+          );
+          this.callbacks?.onConversationSummary?.(this.conversationSummary);
+        }
       }
       turn.backendCompletedAt = Date.now();
       this.logVoiceMetric(turn, "backend_complete");
@@ -3083,9 +3137,12 @@ export class RealtimeCoachSession {
     if (speechEpoch !== this.speechEpoch || !this.active) return;
     this.lastDeterministicReply = text;
     if (this.cartesiaActive) {
-      const speech = sanitizeCoachSpeechText(text);
+      const speechGate = gateCoachSpeechText(text, true);
+      if (speechGate.status !== "safe") return;
+      const speech = speechGate.speech;
       if (!speech.trim()) return;
       this.ttsInputBuffer = "";
+      this.ttsSafetyBlocked = false;
       this.generationActive = true;
       this.updateStatus();
       const context = this.createSonicContext(speechEpoch);

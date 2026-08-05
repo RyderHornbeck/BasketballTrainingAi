@@ -181,6 +181,11 @@ interface SonicAudioCacheEntry {
 const DEFAULT_SONIC_CACHE_MAX_ENTRIES = 32;
 const DEFAULT_SONIC_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 
+export type CoachSpeechSafetyResult =
+  | { status: "safe"; speech: string }
+  | { status: "hold"; speech: "" }
+  | { status: "unsafe"; speech: "" };
+
 /** Convert model text into plain, unambiguous language before TTS. */
 export function sanitizeCoachSpeechText(text: string): string {
   return text
@@ -195,6 +200,51 @@ export function sanitizeCoachSpeechText(text: string): string {
     .replace(/\s*\/\s*/g, " or ")
     .replace(/\s+/g, " ")
     .trimStart();
+}
+
+/**
+ * Final boundary for text headed to a speech provider. This intentionally
+ * checks the unsanitized text first: stripping braces and tags can turn tool
+ * payloads into plausible-sounding words.
+ */
+export function gateCoachSpeechText(
+  text: string,
+  final: boolean,
+): CoachSpeechSafetyResult {
+  const trimmed = text.trim();
+  if (!trimmed) return { status: "safe", speech: "" };
+  const normalized = trimmed.replace(/\\"/g, '"').replace(/\\'/g, "'");
+
+  if (containsInternalSpeechSyntax(normalized)) {
+    return { status: "unsafe", speech: "" };
+  }
+  // A JSON object can arrive over several text deltas. Do not release an
+  // innocent-looking prefix before its quoted keys and tool intent arrive.
+  if (/^\s*\{/.test(normalized)) {
+    return final
+      ? { status: "unsafe", speech: "" }
+      : { status: "hold", speech: "" };
+  }
+  if (!final && /(?:^|\n)\s*(?:data|event)\s*:\s*$/i.test(normalized)) {
+    return { status: "hold", speech: "" };
+  }
+  return { status: "safe", speech: sanitizeCoachSpeechText(text) };
+}
+
+function containsInternalSpeechSyntax(text: string): boolean {
+  return [
+    /```/,
+    /<\/?\s*(?:tool|tool_use|tool_call|function|function_call)\b/i,
+    /(?:^|\n)\s*(?:data|event)\s*:\s*(?:\{|\[|\[DONE\]|response\.|content_block_|message_)/i,
+    /\[\s*DONE\s*\]/i,
+    /(?:^|\s)(?:assistant|model)\s+to\s*=/i,
+    /\bfunction[\s_-]*call\b\s*(?:=|:|\binvoke\b)/i,
+    /\btool[\s_-]*(?:call|use|result|name)\b\s*(?:=|:)/i,
+    /\b(?:invoke|recipient|arguments?|parameters?)\s*(?:=|:)/i,
+    /\b(?:function_call|tool_calls?|tool_use|call_id|arguments_json|partial_json|input_schema)\b\s*[:=]/i,
+    /["'](?:type|name|arguments|tool_name|call_id|function_call|tool_calls?|input)["']\s*:/i,
+    /\b[A-Za-z][\w.-]*_[A-Za-z][\w.-]*\s*\(\s*(?:\{|["']|$)/,
+  ].some((pattern) => pattern.test(text));
 }
 
 /**

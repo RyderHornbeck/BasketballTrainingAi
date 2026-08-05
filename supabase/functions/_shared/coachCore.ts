@@ -7,7 +7,6 @@ import {
   applyAttemptsOverride,
   applyMinutesOverride,
   buildSetPlan,
-  clearSetLogs,
   decodeExerciseLogMeta,
   encodeExerciseLogMeta,
   getCurrentSetNumber,
@@ -129,8 +128,8 @@ TOOL SPEECH
 - Never mention catalogs, tools, databases, IDs, or internal state.
 
 MISSING WORKOUT DRILL
-- If the athlete requests a drill not in the workout, ask only: "[X] isn't in this workout. Do you want me to add it?" Stop without searching or editing.
-- After a clear yes, search for a matching drill, add it, and do not ask for confirmation again.
+- For a requested drill outside the workout, search for the closest match, then ask: "[X] isn't in this workout. Do you want me to add it?" Do not edit yet.
+- After yes, add the offered catalog result without another confirmation.
 - Never speak/request catalog IDs. Show names; after a choice, re-search its name and add it.
 
 STATE
@@ -149,7 +148,7 @@ NAVIGATION AND EDITS
 - Put natural references in drill_name: first/last, number, next/previous, go back, or Nth from end. Omit exercise_id unless state supplies it; never discuss IDs. Resolve this/that/current/it to current; ask only for ambiguous matches.
 - Multi-action requests require all tools in dependency order, awaiting each result. Example: navigate to "last drill," then set each requested shooting set. Use each returned state silently; do not re-fetch unless asked for a fresh check or state is ambiguous.
 - List with list_workout_drills. Add by catalog search then add after permission; remove with remove_workout_exercise; save notes with save_note. Name edits afterward.
-- Any first request involving a drill/type/change not in the workout—including "add," "can I do/start," or "make/change my workout"—requires confirmation before mutation. Check drills; one match=use it, several=ask which, none ask only: "[X] isn't in this workout. Do you want me to add it/make that change?" Stop without searching or editing. A clear yes confirms; then search/edit immediately without asking again.
+- Any first request involving a drill/type/change not in the workout—including "add," "can I do/start," or "make/change my workout"—requires confirmation before mutation. Check drills; one match=use it, several=ask which, none search the catalog and offer the closest matching name before asking: "[X] isn't in this workout. Do you want me to add it/make that change?" A clear yes confirms; then add/edit immediately without asking again.
 
 SHOT TRACKING
 - set_shooting_set_targets changes one set's shot targets, never results.
@@ -177,17 +176,21 @@ COMPLETION, TIME, OUTPUT
 - set_set_completion completes/reopens one set, including timed sets. complete_drill requires explicit whole-drill completion; uncomplete_drill reopens it. "Can I skip?" is skip, not completion.
 - Honor an explicit request to go back and reopen an earlier completed set: call set_set_completion with completed=false; never claim past sets cannot be reopened.
 - Workout completion requires totals.remaining_drills=0; a last-position drill or null next_exercise is insufficient because earlier drills may remain. finish_workout only on explicit done.
-- extend_workout/shorten_workout change time. start_timer targets the named/current timed set and includes its reference; omit duration for saved time. Preserve seconds/minutes. After success say "A X-minute/second timer has been started." Ask duration for untimed drills.
+- extend_workout/shorten_workout change time. start_timer targets the named/current timed set and includes its reference; omit duration for saved time. Preserve seconds/minutes. After success say "A X-minute/second timer has been started." Ask duration for untimed drills. set_timed_set_duration applies to any drill configured with minute-based sets.
 `;
 
-// Kept deliberately small: voice turns need a fast first token, not the large
-// legacy Realtime policy. Dynamic workout facts are supplied in a later block.
-export const COACH_TURN_STABLE_SYSTEM_PROMPT = `You are Court Coach, a live basketball coach.
-Be direct: one or two natural sentences, no filler, praise, acknowledgements, or closings.
-The client already handles exact shots, timers, navigation, completion, and simple progress. Handle only the unmatched request.
-Use a tool for any workout fact, catalog result, recommendation, or change. Do not claim a fact or mutation before its tool succeeds.
-After a list or search, begin "Here are". For a completed obvious change, say "Done."
-In speculative read-only mode, tools are unavailable: never claim an action or state change occurred.`;
+// Keep the proven, detailed coaching policy in the cacheable prefix. Workout
+// facts remain in the bounded dynamic block supplied for each turn.
+export const COACH_TURN_STABLE_SYSTEM_PROMPT = `${COACH_SYSTEM_PROMPT}
+
+ANTHROPIC TOOL CONTRACT
+- Use the supplied native tool blocks for every workout action or state lookup. Never write a tool call, function call, JSON, arguments, query, or tool name as ordinary text.
+- Never mention a query, command, tool, catalog, database, request mode, parameter, ID, or internal process.
+- Exact make, miss, and incremental shooting commands are handled before a turn reaches you. Do not attempt the client-only record_make, record_miss, record_makes, record_misses, add_shooting_result, or set_shooting_total actions. If an unmatched shooting result reaches you, use an available server action only when the athlete supplied unambiguous cumulative makes and attempts; otherwise ask for those actual totals.
+- You can start, pause, resume, and stop timers. Never tell the athlete to operate a timer themselves.
+- For a drill absent from the workout, search the catalog before offering to add the closest match, then after a clear yes search again and add the best exact result.
+- Do not claim a workout fact or completed change until its tool succeeds.
+- Speak only natural athlete-facing language after tool results.`;
 
 const DRILL_REFERENCE_PROPERTIES = {
   exercise_id: {
@@ -449,13 +452,12 @@ const REALTIME_TOOL_DEFS = [
   {
     name: "set_current_drill",
     description:
-      "Switch the active workout drill without completing or skipping any other drills. Use the exact exercise_id from workout context and the drill's exact name. The server will resolve the name if the ID is stale or malformed.",
+      "Switch the active workout drill without completing or skipping any other drills. Supply either the exact exercise_id from workout context or the athlete's drill_name reference.",
     parameters: {
       type: "object",
       properties: {
         ...DRILL_REFERENCE_PROPERTIES,
       },
-      required: ["drill_name"],
     },
   },
   {
@@ -904,11 +906,7 @@ function effectivePlanForExercise(ex: ExerciseRow, log?: LogRow) {
 }
 
 function isTimedExercise(ex: ExerciseRow): boolean {
-  return (
-    ex.log_type === "minutes" &&
-    (ex.category === "ball_handling" || ex.category === "defense" ||
-      ex.category === "conditioning")
-  );
+  return ex.log_type === "minutes";
 }
 
 export function buildContextSummary(
@@ -1761,11 +1759,11 @@ export function buildCoachTurnDynamicContext(
   profile: Record<string, unknown> | null,
   conversationSummary: string | null | undefined,
   coachName: string,
-  speculativeReadOnly = false,
+  _speculativeReadOnly = false,
   includeWorkoutState = true,
 ): string {
-  const identity = `Your name is ${coachName}. If asked, introduce yourself by that name.
-Request mode: ${speculativeReadOnly ? "speculative_read_only" : "standard"}.`;
+  const identity =
+    `Your name is ${coachName}. If asked, introduce yourself by that name.`;
   if (!includeWorkoutState) return identity;
   return `${identity}
 Authoritative workout state follows. Use it silently and prefer newer state from tool results:
@@ -2656,9 +2654,18 @@ export async function executeCoachTool(
       const ex = ctx.exercises.find((e) => e.id === exerciseId);
       if (!ex) return { result: "Error: exercise not found", dbChanged: false };
 
-      const plan = buildSetPlan(ex);
+      const plan = effectivePlanForExercise(ex, existing);
       const meta = decodeExerciseLogMeta(existing?.notes ?? null);
-      const cleared = clearSetLogs(plan);
+      const reopened = hydrateSetLogs(
+        buildSetPlan(ex),
+        meta,
+        existing ?? undefined,
+      ).map((set) => ({
+        ...set,
+        completed: false,
+        force_incomplete: true,
+      }));
+      const totals = aggregateSetLogs(reopened, plan);
 
       const { error } = await supabase.from("exercise_logs").upsert(
         {
@@ -2666,12 +2673,12 @@ export async function executeCoachTool(
           day_id: dayId,
           user_id: userId,
           completed: false,
-          makes: null,
-          attempts: null,
-          minutes_completed: null,
+          makes: existing?.makes ?? null,
+          attempts: existing?.attempts ?? null,
+          minutes_completed: existing?.minutes_completed ?? null,
           difficulty: existing?.difficulty ?? null,
           notes: encodeExerciseLogMeta({
-            set_logs: cleared,
+            set_logs: totals.set_logs,
             user_notes: meta.user_notes ?? null,
             per_set_attempts_override: meta.per_set_attempts_override ?? null,
             per_set_minutes_override: meta.per_set_minutes_override ?? null,
@@ -2700,7 +2707,38 @@ export async function executeCoachTool(
       return {
         result: `Marked "${
           ex?.name ?? "drill"
-        }" as not complete. You can run it again.`,
+        }" as not complete without resetting its results.`,
+        dbChanged: true,
+      };
+    }
+
+    case "reopen_workout": {
+      if (!ctx.day.completed) {
+        return { result: "Workout is already open.", dbChanged: false };
+      }
+      const { error: dayError } = await supabase
+        .from("workout_days")
+        .update({
+          completed: false,
+          completion_kind: null,
+          finalized_at: null,
+        })
+        .eq("id", dayId)
+        .eq("user_id", userId);
+      if (dayError) {
+        return { result: `Error: ${dayError.message}`, dbChanged: false };
+      }
+      const { error: logError } = await supabase
+        .from("workout_day_logs")
+        .delete()
+        .eq("day_id", dayId)
+        .eq("user_id", userId);
+      if (logError) {
+        return { result: `Error: ${logError.message}`, dbChanged: false };
+      }
+      ctx.day.completed = false;
+      return {
+        result: "Workout reopened without resetting any drill results.",
         dbChanged: true,
       };
     }
@@ -2821,18 +2859,25 @@ export async function executeCoachTool(
         };
       }
 
-      const hasObservedResults = currentSet.makes != null ||
-        currentSet.completed;
       setLogs = updateSetLog(setLogs, plan, setNumber, {
         target_makes_override: nextMakes,
         target_attempts_override: nextAttempts,
-        attempts: hasObservedResults ? currentSet.attempts : nextAttempts,
+        attempts: currentSet.makes == null && !currentSet.completed
+          ? null
+          : currentSet.attempts,
         completed: currentSet.completed &&
           (currentSet.attempts ?? 0) >= nextAttempts,
       });
       const totals = aggregateSetLogs(setLogs, plan);
+      const persistedSetLogs = totals.set_logs.map((set) =>
+        set.set_number === setNumber &&
+          currentSet.makes == null &&
+          !currentSet.completed
+          ? { ...set, attempts: null }
+          : set
+      );
       const notes = encodeExerciseLogMeta({
-        set_logs: totals.set_logs,
+        set_logs: persistedSetLogs,
         user_notes: meta.user_notes ?? null,
         per_set_attempts_override: meta.per_set_attempts_override ?? null,
         per_set_minutes_override: meta.per_set_minutes_override ?? null,
@@ -2871,8 +2916,7 @@ export async function executeCoachTool(
       const ex = ctx.exercises.find((exercise) => exercise.id === exerciseId);
       if (!ex || !isTimedExercise(ex)) {
         return {
-          result:
-            "Only ball-handling, defense, and conditioning set times can be changed.",
+          result: "That drill does not use timed sets.",
           dbChanged: false,
         };
       }

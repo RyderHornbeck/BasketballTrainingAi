@@ -223,9 +223,49 @@ export function resolveCoachToolContinuation(
     typeof response.say === "string" &&
     response.say.trim()
   ) {
-    return { type: "speak_exact", speech: response.say.trim() };
+    const speech = assessCoachSpeech(response.say);
+    if (speech.ok) return { type: "speak_exact", speech: speech.text };
   }
   return { type: "model" };
+}
+
+/** Athlete-facing progress audio for slow read tools; never expose tool syntax. */
+export function coachToolPreamble(
+  toolName: string,
+  args: Record<string, unknown>,
+): string | null {
+  if (toolName !== "search_exercise_catalog") return null;
+  const raw = typeof args.query === "string" ? args.query : "";
+  const subject = raw
+    .replace(
+      /\b(?:search|find|look|show|query|catalog|exercise|drill)s?\b/gi,
+      " ",
+    )
+    .replace(/\b(?:for|me|please|the|a|an|called|named)\b/gi, " ")
+    .replace(/[^a-z0-9' -]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const safeSubject =
+    subject && subject.split(" ").length <= 7 && subject.length <= 60
+      ? subject
+      : "that drill";
+  const speech = assessCoachSpeech(`I'm searching for ${safeSubject}.`);
+  return speech.ok ? speech.text : "I'm searching for that drill.";
+}
+
+/** Convert canonical/OpenAI-style tools to Anthropic's native tool contract. */
+export function buildAnthropicTools(
+  tools: ReadonlyArray<{
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  }>,
+): Array<Record<string, unknown>> {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.parameters,
+  }));
 }
 
 export function buildAnthropicSystemBlocks(
@@ -253,12 +293,16 @@ export function createAbortTimeout(
   const controller = new AbortController();
   let timedOut = false;
   const abortFromParent = () =>
-    controller.abort(parentSignal.reason ?? new DOMException("Aborted", "AbortError"));
+    controller.abort(
+      parentSignal.reason ?? new DOMException("Aborted", "AbortError"),
+    );
   if (parentSignal.aborted) abortFromParent();
   else parentSignal.addEventListener("abort", abortFromParent, { once: true });
   const timer = setTimeout(() => {
     timedOut = true;
-    controller.abort(new DOMException("Provider request timed out", "TimeoutError"));
+    controller.abort(
+      new DOMException("Provider request timed out", "TimeoutError"),
+    );
   }, timeoutMs);
   return {
     signal: controller.signal,
@@ -296,6 +340,49 @@ export interface ResponsesStreamHandlers {
 }
 
 export interface AnthropicStreamHandlers extends ResponsesStreamHandlers {}
+
+export type CoachSpeechAssessment =
+  | { ok: true; text: string }
+  | { ok: false; reason: "empty" | "internal_syntax" | "reasoning" };
+
+/**
+ * Reject provider text that is not safe to hand directly to speech synthesis.
+ * This is intentionally structural rather than tool-name based so newly added
+ * tools receive the same protection.
+ */
+export function assessCoachSpeech(text: string): CoachSpeechAssessment {
+  const candidate = text.trim();
+  if (!candidate) return { ok: false, reason: "empty" };
+  if (
+    /```|<\/?[a-z][^>]*>|\{[\s\S]*["'][^"']+["']\s*:|(?:^|\s)(?:function[\s_-]*calls?|tool[\s_-]*(?:call|use)|input[\s_-]*json|function[\s_-]*result)(?:\s|$)|\b(?:invoke|recipient)\b|\b(?:arguments?|parameters?)\s*(?:=|:)|(?:^|\s)(?:function_call|tool_use|input_json_delta)(?:\s|$)/i
+      .test(candidate)
+  ) {
+    return { ok: false, reason: "internal_syntax" };
+  }
+  if (
+    /<\/?(?:analysis|thinking|reasoning)\b|(?:^|\n)\s*(?:analysis|reasoning|thought process)\s*:|\b(?:the user (?:asks|wants)|i (?:need|should|will) (?:to )?(?:call|invoke|use) (?:a |the )?(?:tool|function))\b/i
+      .test(candidate)
+  ) {
+    return { ok: false, reason: "reasoning" };
+  }
+  return { ok: true, text: candidate };
+}
+
+/** Prevent a previously rejected model utterance from contaminating later turns. */
+export function sanitizeCoachConversationSummary(
+  summary: string | null | undefined,
+): string | undefined {
+  if (!summary) return undefined;
+  const clean = summary
+    .split(/\r?\n/)
+    .filter((line) => {
+      const coachText = line.replace(/^\s*(?:assistant|coach)\s*:\s*/i, "");
+      return assessCoachSpeech(coachText).ok;
+    })
+    .join("\n")
+    .trim();
+  return clean || undefined;
+}
 
 /** Parse OpenAI's SSE response without assuming network chunk boundaries. */
 export async function consumeResponsesSse(
@@ -363,9 +450,12 @@ export async function consumeAnthropicSse(
     number,
     { callId: string; name: string; initialInput: unknown; partialJson: string }
   >();
+  const blockTypes = new Map<number, string>();
   let buffer = "";
   let messageId: string | null = null;
   let usage: Record<string, unknown> = {};
+  let messageStarted = false;
+  let messageStopped = false;
 
   const processEvent = async (block: string) => {
     const data = block
@@ -383,6 +473,10 @@ export async function consumeAnthropicSse(
       );
     }
     if (event.type === "message_start") {
+      if (messageStarted) {
+        throw new Error("Anthropic stream contained duplicate message_start.");
+      }
+      messageStarted = true;
       messageId = typeof event.message?.id === "string"
         ? event.message.id
         : null;
@@ -391,42 +485,78 @@ export async function consumeAnthropicSse(
       }
       return;
     }
-    if (
-      event.type === "content_block_start" &&
-      event.content_block?.type === "tool_use"
-    ) {
-      toolBlocks.set(Number(event.index), {
-        callId: String(event.content_block.id ?? ""),
-        name: String(event.content_block.name ?? ""),
-        initialInput: event.content_block.input ?? {},
-        partialJson: "",
-      });
+    if (event.type === "content_block_start") {
+      const index = Number(event.index);
+      const blockType = typeof event.content_block?.type === "string"
+        ? event.content_block.type
+        : "";
+      if (!Number.isSafeInteger(index) || !blockType || blockTypes.has(index)) {
+        throw new Error("Anthropic stream contained an invalid content block.");
+      }
+      blockTypes.set(index, blockType);
+      if (blockType === "tool_use") {
+        const callId = typeof event.content_block?.id === "string"
+          ? event.content_block.id
+          : "";
+        const name = typeof event.content_block?.name === "string"
+          ? event.content_block.name
+          : "";
+        if (!callId || !name) {
+          throw new Error("Anthropic tool block omitted its ID or name.");
+        }
+        toolBlocks.set(index, {
+          callId,
+          name,
+          initialInput: event.content_block.input ?? {},
+          partialJson: "",
+        });
+      }
       return;
     }
     if (event.type === "content_block_delta") {
+      const index = Number(event.index);
+      const blockType = blockTypes.get(index);
       if (
         event.delta?.type === "text_delta" &&
         typeof event.delta.text === "string"
       ) {
+        if (blockType !== "text") {
+          throw new Error(
+            "Anthropic text delta did not belong to a text block.",
+          );
+        }
         await handlers.onTextDelta(event.delta.text);
       } else if (
         event.delta?.type === "input_json_delta" &&
         typeof event.delta.partial_json === "string"
       ) {
-        const tool = toolBlocks.get(Number(event.index));
-        if (tool) tool.partialJson += event.delta.partial_json;
+        const tool = toolBlocks.get(index);
+        if (!tool || blockType !== "tool_use") {
+          throw new Error("Anthropic tool JSON delta had no open tool block.");
+        }
+        tool.partialJson += event.delta.partial_json;
       }
       return;
     }
     if (event.type === "content_block_stop") {
-      const tool = toolBlocks.get(Number(event.index));
-      if (!tool) return;
-      toolBlocks.delete(Number(event.index));
-      await handlers.onFunctionCall({
-        callId: tool.callId,
-        name: tool.name,
-        argumentsJson: tool.partialJson || JSON.stringify(tool.initialInput),
-      });
+      const index = Number(event.index);
+      const blockType = blockTypes.get(index);
+      if (!blockType) {
+        throw new Error("Anthropic stopped an unknown content block.");
+      }
+      blockTypes.delete(index);
+      const tool = toolBlocks.get(index);
+      if (blockType === "tool_use") {
+        if (!tool) {
+          throw new Error("Anthropic tool block was not initialized.");
+        }
+        toolBlocks.delete(index);
+        await handlers.onFunctionCall({
+          callId: tool.callId,
+          name: tool.name,
+          argumentsJson: tool.partialJson || JSON.stringify(tool.initialInput),
+        });
+      }
       return;
     }
     if (event.type === "message_delta") {
@@ -439,6 +569,14 @@ export async function consumeAnthropicSse(
       return;
     }
     if (event.type === "message_stop") {
+      if (
+        !messageStarted || messageStopped || blockTypes.size || toolBlocks.size
+      ) {
+        throw new Error(
+          "Anthropic stream ended with incomplete content blocks.",
+        );
+      }
+      messageStopped = true;
       await handlers.onCompleted(messageId, usage);
     }
   };
@@ -453,4 +591,9 @@ export async function consumeAnthropicSse(
   }
   buffer += decoder.decode();
   if (buffer.trim()) await processEvent(buffer);
+  if (
+    !messageStarted || !messageStopped || blockTypes.size || toolBlocks.size
+  ) {
+    throw new Error("Anthropic stream ended before message_stop.");
+  }
 }

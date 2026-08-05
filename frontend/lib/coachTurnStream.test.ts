@@ -1,5 +1,7 @@
-import { consumeNdjsonStream } from "./coachTurnNdjson";
-import type { CoachTurnStreamEvent } from "./coachTurnStream";
+import {
+  consumeCoachTurnNdjsonStream as consumeNdjsonStream,
+  type CoachTurnStreamEvent,
+} from "./coachTurnEvents";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -17,7 +19,7 @@ function chunkedStream(chunks: string[]): ReadableStream<Uint8Array> {
 
 async function testChunkBoundariesAndFinalLine(): Promise<void> {
   const events: CoachTurnStreamEvent[] = [];
-  await consumeNdjsonStream<CoachTurnStreamEvent>(
+  await consumeNdjsonStream(
     chunkedStream([
       '{"type":"turn_started","turn_id":"turn-1","model":"luna",',
       '"state_version":1,"state_fingerprint":"a"}\n',
@@ -37,7 +39,7 @@ async function testChunkBoundariesAndFinalLine(): Promise<void> {
 
 async function testAsyncOrdering(): Promise<void> {
   const seen: string[] = [];
-  await consumeNdjsonStream<CoachTurnStreamEvent>(
+  await consumeNdjsonStream(
     chunkedStream([
       '{"type":"text_delta","turn_id":"turn-1","state_version":1,"delta":"one"}\n',
       '{"type":"text_delta","turn_id":"turn-1","state_version":1,"delta":"two"}\n',
@@ -51,11 +53,29 @@ async function testAsyncOrdering(): Promise<void> {
   assert(seen.join(",") === "one,two", "stream callbacks must complete in wire order");
 }
 
+async function testRejectsNonContractEvents(): Promise<void> {
+  for (const payload of [
+    '{"type":"text_delta","turn_id":"turn-1","state_version":1,"delta":{"arguments":"{}"}}\n',
+    '{"type":"function_call","turn_id":"turn-1","state_version":1,"arguments":"{}"}\n',
+    'data: {"type":"text_delta","delta":"internal"}\n',
+  ]) {
+    let rejected = false;
+    try {
+      await consumeNdjsonStream(chunkedStream([payload]), () => undefined);
+    } catch {
+      rejected = true;
+    }
+    assert(rejected, `invalid stream payload must be rejected: ${payload}`);
+  }
+}
+
 void (async () => {
   await testChunkBoundariesAndFinalLine();
   console.log("✓ parses NDJSON across chunks and final lines");
   await testAsyncOrdering();
   console.log("✓ preserves asynchronous event ordering");
+  await testRejectsNonContractEvents();
+  console.log("✓ rejects SSE, tool-call, and malformed delta events");
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

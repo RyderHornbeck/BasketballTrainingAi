@@ -165,9 +165,7 @@ Deno.serve(async (req: Request) => {
           say: cached.local_confirmation ?? cached.result,
           continuation: cached.skip_model_response
             ? "none"
-            : COACH_READ_ONLY_TOOLS.has(body.tool_name)
-              ? "model"
-              : "speak_exact",
+            : "model",
           client_action: cached.client_action,
           db_changed: cached.db_changed,
           local_confirmation: cached.local_confirmation,
@@ -281,9 +279,7 @@ Deno.serve(async (req: Request) => {
       say: outcome.localConfirmation ?? outcome.result,
       continuation: outcome.skipModelResponse
         ? "none"
-        : toolKind === "read_only"
-          ? "model"
-          : "speak_exact",
+        : "model",
       client_action: outcome.clientAction ?? null,
       db_changed: outcome.dbChanged,
       local_confirmation: outcome.localConfirmation ?? null,

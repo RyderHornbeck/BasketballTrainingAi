@@ -19,9 +19,10 @@ export function normalizeSpeculativeTranscript(transcript: string): string {
 
 export function isSafeSpeculativeTranscript(transcript: string): boolean {
   const normalized = normalizeSpeculativeTranscript(transcript);
-  return !/^(?:please\s+)?(?:add|remove|delete|change|set|start|stop|pause|resume|complete|finish|reopen|skip|go|move|save|record|mark)\b/.test(
-    normalized
-  );
+  // Speculation is opt-in, not a mutation deny-list. Any workout request can
+  // require tools even if it does not begin with an imperative verb.
+  return /^(?:(?:hey|hi|hello|thanks|thank you|bye|goodbye)[!. ]*|(?:what(?:'s| is) your name|who are you)[?.! ]*|(?:motivate me|encourage me|give me (?:some )?(?:motivation|encouragement)|tell me (?:a )?(?:joke|fun fact)|how (?:do|can) i (?:improve|shoot|(?:improve )?(?:my )?dribbl(?:e|ing)|finish|defend)|(?:give me|share) (?:a )?(?:shooting|dribbling|finishing|defense) tip)[?.! ]*)$/i
+    .test(normalized);
 }
 
 export function shouldPromoteSpeculation(

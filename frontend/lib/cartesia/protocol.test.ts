@@ -16,6 +16,7 @@ import {
   buildSonicGenerationRequest,
   buildSonicWebSocketUrl,
   drainSonicTextChunks,
+  gateCoachSpeechText,
   parseSonicServerEvent,
   sanitizeCoachSpeechText,
   takeSonicTextChunk,
@@ -290,6 +291,42 @@ test("sanitizes model text into natural spoken language", () => {
   assert.equal(
     sanitizeCoachSpeechText("Option A / Option B"),
     "Option A or Option B",
+  );
+});
+
+test("holds split JSON and suppresses internal tool syntax before speech", () => {
+  assert.equal(gateCoachSpeechText("{", false).status, "hold");
+  assert.equal(
+    gateCoachSpeechText("function call = invoke search_exercise_catalog", true).status,
+    "unsafe",
+  );
+  assert.equal(
+    gateCoachSpeechText('{"name":"record_make","arguments":{"makes":1}}', false).status,
+    "unsafe",
+  );
+  assert.equal(
+    gateCoachSpeechText('data: {"type":"response.output_text.delta"}', true).status,
+    "unsafe",
+  );
+  assert.equal(
+    gateCoachSpeechText('record_make({"exercise_id":"abc","makes":1})', true).status,
+    "unsafe",
+  );
+  assert.equal(
+    gateCoachSpeechText('<tool_use name="get_progress">', true).status,
+    "unsafe",
+  );
+});
+
+test("speech safety gate preserves normal basketball coaching language", () => {
+  const result = gateCoachSpeechText(
+    "Great work—you're 4/6. Keep your off hand quiet, call out switch, and attack the gap.",
+    true,
+  );
+  assert.equal(result.status, "safe");
+  assert.equal(
+    result.speech,
+    "Great work—you're 4 for 6. Keep your off hand quiet, call out switch, and attack the gap.",
   );
 });
 

@@ -228,6 +228,7 @@ export function normalizeCoachSpeech(transcript: string | null | undefined): str
     .replace(/\bwork[\s-]+out\b/g, "workout")
     .replace(/\bcount[\s-]+down\b/g, "countdown")
     .replace(/\bstop[\s-]+watch\b/g, "stopwatch")
+    .replace(/\b(?:a|the)\s*timer\b/g, "timer")
     .replace(/\bair[\s-]?ball(?:ed)?\b/g, (value) =>
       /ed$/.test(value) ? "airballed" : "airball"
     )
@@ -415,10 +416,10 @@ function formatDurationLabel(seconds: number): string {
 export const parseTimerIntent: Parser = (text) => {
   const explicitPatterns: RegExp[] = [
     new RegExp(
-      `^(?:start|begin|run|set)(?:\\s+(?:a|the))?\\s+(?:timer|time|countdown|stopwatch)(?:\\s+for)?\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)$`
+      `^(?:start|begin|run|set)(?:\\s+(?:a|the))?\\s+(?:timer|time|countdown|stopwatch)(?:\\s+for)?\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)(?:\\s+for\\s+(?:this|that|the current)\\s+set)?$`
     ),
     new RegExp(
-      `^(?:start|begin|run|set)(?:\\s+me)?(?:\\s+a)?\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\\s+(?:timer|time|countdown|stopwatch)$`
+      `^(?:start|begin|run|set)(?:\\s+me)?(?:\\s+a)?\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\\s+(?:timer|time|countdown|stopwatch)(?:\\s+for\\s+(?:this|that|the current)\\s+set)?$`
     ),
     new RegExp(
       `^(?:give me|i need|make)(?:\\s+a)?\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\\s+(?:timer|time|countdown)$`
@@ -482,7 +483,7 @@ export const parseTimerIntent: Parser = (text) => {
   }
 
   if (
-    /^(?:start|begin|run)(?:\s+(?:a|the))?\s+(?:timer|time|countdown|stopwatch)(?:\s+for\s+(?:this|the current)\s+set)?$|^(?:start|begin|run)(?:\s+the)?\s+set\s+(?:timer|countdown)$/.test(
+    /^(?:start|begin|run)(?:\s+(?:a|the))?\s+(?:timer|time|countdown|stopwatch)(?:\s+for\s+(?:this|that|the current)\s+set)?$|^(?:start|begin|run)(?:\s+the)?\s+set\s+(?:timer|countdown)$/.test(
       text
     )
   ) {
@@ -839,11 +840,17 @@ export const parseAdjustWorkoutIntent: Parser = (text) => {
 };
 
 export const parseSetPrescriptionIntent: Parser = (text) => {
-  const duration = text.match(
+  const duration =
+    text.match(
     new RegExp(
-      `^(?:change|set|make)\\s+(?:(?:set\\s+(${NUMBER}))|this\\s+set|the\\s+current\\s+set)(?:s)?(?:\\s+(?:duration|time))?\\s+(?:to|for)\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?)$`
+      `^(?:change|set|make)\\s+(?:(?:set\\s+(${NUMBER}))|(?:this|that|the current)\\s+set)(?:s)?(?:\\s+(?:duration|time))?\\s+(?:to|for)\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?)$`
     )
-  );
+    ) ??
+    text.match(
+      new RegExp(
+        `^(?:change|set)\\s+(?:the\\s+)?(?:duration|time)(?:\\s+(?:for|of))?\\s+(?:(?:set\\s+(${NUMBER}))|(?:this|that|the current)\\s+set)\\s+to\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?)$`
+      )
+    );
   if (duration) {
     const setNumber = duration[1] ? parseSpokenNumber(duration[1]) : null;
     const durationSeconds = parseDuration(duration[2], duration[3]);

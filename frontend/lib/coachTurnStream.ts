@@ -1,44 +1,18 @@
 import { supabase } from "@/lib/supabase";
-import { consumeNdjsonStream as consumeNdjson } from "./coachTurnNdjson";
-
-export type CoachTurnStreamEvent =
-  | {
-      type: "turn_started";
-      turn_id: string;
-      model: string;
-      state_version: number;
-      state_fingerprint: string;
-    }
-  | {
-      type: "text_delta";
-      turn_id: string;
-      state_version: number;
-      delta: string;
-    }
-  | {
-      type: "tool_result";
-      turn_id: string;
-      call_id: string;
-      name: string;
-      state_version: number;
-      db_changed: boolean;
-      client_action?: unknown;
-      workout_context?: string | null;
-    }
-  | {
-      type: "turn_completed";
-      turn_id: string;
-      state_version: number;
-      state_fingerprint: string;
-      workout_context?: string | null;
-    }
-  | { type: "error"; turn_id: string; error: string };
+import {
+  consumeCoachTurnNdjsonStream,
+  type CoachTurnStreamEvent,
+} from "./coachTurnEvents";
+export {
+  parseCoachTurnStreamEvent,
+  type CoachTurnStreamEvent,
+} from "./coachTurnEvents";
 
 export async function consumeNdjsonStream(
   stream: ReadableStream<Uint8Array>,
   onEvent: (event: CoachTurnStreamEvent) => void | Promise<void>
 ): Promise<void> {
-  await consumeNdjson<CoachTurnStreamEvent>(stream, onEvent);
+  await consumeCoachTurnNdjsonStream(stream, onEvent);
 }
 
 export async function streamCoachTurn(input: {
