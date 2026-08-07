@@ -249,6 +249,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
     setError(null);
     if (coachTranscriptTimerRef.current) clearTimeout(coachTranscriptTimerRef.current);
     if (coachTypingTimerRef.current) clearTimeout(coachTypingTimerRef.current);
+    coachTypingTimerRef.current = null;
     coachTranscriptTargetRef.current = "";
     coachTranscriptShownWordCountRef.current = 0;
     userTranscriptRef.current = "";
@@ -306,6 +307,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
             if (!isContinuation) {
               if (coachTranscriptTimerRef.current) clearTimeout(coachTranscriptTimerRef.current);
               if (coachTypingTimerRef.current) clearTimeout(coachTypingTimerRef.current);
+              coachTypingTimerRef.current = null;
               coachTranscriptTargetRef.current = "";
               coachTranscriptShownWordCountRef.current = 0;
               setCoachTranscriptFadeVersion(0);
