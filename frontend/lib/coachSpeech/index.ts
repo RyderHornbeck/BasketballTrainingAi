@@ -18,6 +18,10 @@ export interface TimerDurationConfirmationArgs {
   accepted: boolean;
 }
 
+export interface SpeechControlIntentArgs {
+  action: "stop_speaking";
+}
+
 export type NavigationTarget =
   | { type: "current" | "next" | "previous" | "first" | "last" }
   | { type: "ordinal"; ordinal: number }
@@ -77,6 +81,7 @@ export type CoachSpeechIntent =
   | IntentBase<"undo_shot", Record<string, never>>
   | IntentBase<"timer", TimerIntentArgs>
   | IntentBase<"timer_duration_confirmation", TimerDurationConfirmationArgs>
+  | IntentBase<"speech_control", SpeechControlIntentArgs>
   | IntentBase<"navigation", NavigationIntentArgs>
   | IntentBase<"completion", CompletionIntentArgs>
   | IntentBase<"progress", ProgressIntentArgs>
@@ -657,7 +662,7 @@ export const parseCompletionIntent: Parser = (text) => {
     return intent("completion", { action: "reopen", scope }, `Reopen current ${scope} heard`);
   }
   const marked = text.match(
-    /^mark(?:\s+this|\s+(?:the\s+)?current)?\s+(set|drill|exercise|workout)\s+(complete|incomplete)$/
+    /^mark(?:\s+(?:this|that|the|current)|\s+the\s+current)?\s+(set|drill|exercise|workout)\s+(complete|incomplete)$/
   );
   if (marked) {
     const scope: CoachSpeechScope =
@@ -672,7 +677,7 @@ export const parseCompletionIntent: Parser = (text) => {
   }
 
   const complete = text.match(
-    /^(?:(?:im|i am)\s+(?:finished|done)\s+with(?:\s+this|\s+the current)?|(?:mark|finish|complete)(?:\s+this|\s+the current)?)\s+(set|drill|exercise|workout)$/
+    /^(?:(?:im|i am)\s+(?:finished|done)\s+with(?:\s+(?:this|that|the|current)|\s+the current)?|(?:mark|finish|complete)(?:\s+(?:this|that|the|current)|\s+the current)?)\s+(set|drill|exercise|workout)$/
   );
   if (complete) {
     const scope: CoachSpeechScope =
@@ -784,6 +789,13 @@ export const parseProgressIntent: Parser = (text) => {
 export const parseRepeatIntent: Parser = (text) =>
   /^(?:repeat|repeat that|say that again|what did you say)$/.test(text)
     ? intent("repeat", {}, "Repeat heard")
+    : null;
+
+export const parseSpeechControlIntent: Parser = (text) =>
+  /^(?:stop talking|stop speaking|stop (?:talking|speaking) coach|be quiet|quiet please|shh|hush)$/.test(
+    text
+  )
+    ? intent("speech_control", { action: "stop_speaking" }, "Stop coach speech heard", 0.99)
     : null;
 
 export const parseListDrillsIntent: Parser = (text) =>
@@ -947,6 +959,7 @@ export const parseUndoShotIntent: Parser = (text) => {
 
 const PARSERS: readonly Parser[] = [
   parseSaveNoteIntent,
+  parseSpeechControlIntent,
   parseUndoShotIntent,
   parseShotIntent,
   parseTimerIntent,

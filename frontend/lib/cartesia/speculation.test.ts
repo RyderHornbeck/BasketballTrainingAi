@@ -1,4 +1,5 @@
 import {
+  isLikelyPlaybackEcho,
   isSafeSpeculativeTranscript,
   normalizeSpeculativeTranscript,
   shouldPromoteSpeculation,
@@ -47,6 +48,23 @@ test("promotes only an identical current final turn", () => {
       stateVersion: 9,
     }),
     true
+  );
+});
+
+test("suppresses substantial assistant echo but permits a user interruption", () => {
+  equal(
+    isLikelyPlaybackEcho(
+      "Moved to form shooting, set one of three",
+      "Moved to Form Shooting, set 1 of 3. The previous drill was left unchanged.",
+    ),
+    true,
+  );
+  equal(
+    isLikelyPlaybackEcho(
+      "stop the timer now",
+      "Moved to Form Shooting, set 1 of 3.",
+    ),
+    false,
   );
 });
 

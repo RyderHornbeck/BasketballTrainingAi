@@ -200,6 +200,15 @@ test("parses timer starts, controls, and status", () => {
   for (const [phrase, args] of cases) expectIntent(phrase, { kind: "timer", args });
 });
 
+test("stops Coach speech without treating it as a timer command", () => {
+  for (const phrase of ["stop talking", "stop speaking", "be quiet", "shh"]) {
+    expectIntent(phrase, {
+      kind: "speech_control",
+      args: { action: "stop_speaking" },
+    });
+  }
+});
+
 test("keeps navigation queries separate from movement", () => {
   expectIntent("what's next", {
     kind: "navigation",
@@ -300,6 +309,9 @@ test("parses completion and reopen commands at explicit scopes", () => {
   const cases: [string, Record<string, unknown>][] = [
     ["I'm finished with this set", { action: "complete", scope: "set" }],
     ["mark this set complete", { action: "complete", scope: "set" }],
+    ["mark that set complete", { action: "complete", scope: "set" }],
+    ["mark the set complete", { action: "complete", scope: "set" }],
+    ["complete that set", { action: "complete", scope: "set" }],
     ["finish the current drill", { action: "complete", scope: "exercise" }],
     ["complete this workout", { action: "complete", scope: "workout" }],
     ["reopen this set", { action: "reopen", scope: "set" }],

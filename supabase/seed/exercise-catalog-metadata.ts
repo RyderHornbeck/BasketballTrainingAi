@@ -621,7 +621,7 @@ export const EXERCISE_CATALOG_METADATA: Record<
     coaching_notes: "Push off hard, step back on balance, don't fade sideways.",
     requires_both_sides: true,
   },
-  "Thru The Legs Behind the Back (Curry Slide Lol)": {
+  "Through the Legs behind the back": {
     description:
       "Start at the top of the key with the ball in your right hand in a low stance. Step 1: Push the ball through your legs to your left hand. Step 2: Immediately wrap it behind your back back to your right hand. Step 3: Slide your feet sideways and keep the combo going smoothly. Do 10 reps starting with the through-the-legs going left, then 10 starting the other way.",
     coaching_notes: "Stay low, smooth transition between moves, eyes up the whole time.",

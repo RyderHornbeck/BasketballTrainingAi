@@ -136,7 +136,7 @@ STATE
 - Read authoritative state, including client-handled omitted turns. drills has order, status, results, totals, targets, sides, and explanation; current_set has progress, target, and remaining. Never recalculate or swap them; "X for Y" uses progress. A delta update replaces only listed drills and removed IDs; retain all others.
 - Use exact set values for any current, named, previous, next, complete, or incomplete drill. Never claim another drill's results are unavailable. An absent/null side_label means no side; otherwise preserve it and resolve "left-side set" by that label.
 - For fresh progress, position, sequence, next action, makes, misses, attempts, or completion, call get_workout_position once. Use its drill_position; never infer it. Misses are same-set/drill attempts minus makes.
-- Shooting-only excludes finishing; overall shooting includes both. TIMED SET RULE (ball_handling/defense/conditioning): always include exact set duration when describing these drills. For "let's start," navigation, or a set, give status and duration, then end exactly "Do you want me to start the timer?" If a requested timer differs, ask to change the set first. Save changes with set_timed_set_duration. Never mention video.
+- Shooting-only excludes finishing; overall shooting includes both. TIMED SET RULE: only minute-based ball_handling, defense, and conditioning drills get a duration or timer question. Never ask timers for shooting/finishing or makes/attempts for timed drills.
 
 COACHING AND RECOMMENDATIONS
 - Judge shooting against its makes target. Below target needs work; never agree that a below-target result is good. At/below half is significantly low. Be candid.
@@ -161,7 +161,7 @@ SHOT TRACKING
 - Trust spoken numbers; correct any completed set directly with set_shooting_total and keep it completed.
 - Explicit incremental "2 for 3" calls add_shooting_result once. Never invent a denominator. Absolute cumulative "I'm 6 for 10" calls set_shooting_total. Single make/miss wording never uses numeric-result tools.
 - Keep partial sets current. On "what's next?" below target attempts, get position and give exact remaining shots/makes; advance only on explicit move/finish.
-- When persisting, save only the athlete's actual cumulative makes and actual cumulative attempts. Never save the prescribed target makes, target attempts, remaining numbers, or substitutes; ask if actuals are unknown. completed=true only for explicit early finish; reaching target attempts auto-saves.
+- For reported shooting results, save only the athlete's actual cumulative makes and actual cumulative attempts. Never save the prescribed target makes, target attempts, remaining numbers, or substitutes. Explicit set completion keeps current progress; do not ask for makes or attempts. Ask only for an ambiguous set or timer.
 - After save: "Set saved. You shot X for Y. Next up: ..." Use the post-save current_set without inference. Announce another set of the same drill before another exercise. Never skip a set.
 
 
@@ -348,7 +348,7 @@ const REALTIME_TOOL_DEFS = [
   {
     name: "set_set_completion",
     description:
-      "Mark one specific set complete or incomplete without changing every set in the drill. Use for timed and ball-handling sets.",
+      "Mark one specific set complete or incomplete without changing every set in the drill. Use for any drill category; completing a shooting or finishing set keeps its existing recorded progress.",
     parameters: {
       type: "object",
       properties: {
@@ -926,7 +926,9 @@ function effectivePlanForExercise(ex: ExerciseRow, log?: LogRow) {
 }
 
 function isTimedExercise(ex: ExerciseRow): boolean {
-  return ex.log_type === "minutes";
+  return ex.log_type === "minutes" &&
+    ex.category !== "shooting" &&
+    ex.category !== "finishing";
 }
 
 export function buildContextSummary(
@@ -2260,16 +2262,6 @@ export async function executeCoachTool(
       );
       const current = setLogs.find((set) => set.set_number === requestedSet);
       const completed = args.completed;
-
-      if (
-        completed && plan.logType === "makes_attempts" && current?.makes == null
-      ) {
-        return {
-          result:
-            `Tell me the makes and attempts for set ${requestedSet} so I can complete it.`,
-          dbChanged: false,
-        };
-      }
 
       setLogs = updateSetLog(setLogs, plan, requestedSet, {
         completed,

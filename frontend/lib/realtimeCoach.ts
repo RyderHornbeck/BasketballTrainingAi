@@ -26,6 +26,7 @@ import {
   CartesiaSonicClient,
   buildInkKeyterms,
   gateCoachSpeechText,
+  isLikelyPlaybackEcho,
   isSafeSpeculativeTranscript,
   shouldAcceptPlaybackChunk,
   shouldAcceptTurnEvent,
@@ -506,7 +507,7 @@ export class RealtimeCoachSession {
     | { text: string; speechEpoch: number; retried: boolean }
     | null = null;
   private sonicAudioEnqueuedEpoch: number | null = null;
-  private suppressInkInputUntilMs = 0;
+  private deferredBargeInRequestIds = new Set<string>();
   private playbackGeneration = 0;
   private speculativeTurn: SpeculativeCoachTurn | null = null;
   private inkReconnectPromise: Promise<void> | null = null;
@@ -583,7 +584,7 @@ export class RealtimeCoachSession {
     this.stateFingerprint = "";
     this.ttsInputBuffer = "";
     this.ttsSafetyBlocked = false;
-    this.suppressInkInputUntilMs = 0;
+    this.deferredBargeInRequestIds.clear();
     this.cartesiaSttSeconds = 0;
     this.cartesiaTtsCharacters = 0;
     this.reportedSttSeconds = 0;
@@ -839,7 +840,13 @@ export class RealtimeCoachSession {
       onError: (providerError) => {
         if (generation !== this.connectionGeneration) return;
         console.error("Cartesia Sonic error:", providerError);
-        this.callbacks?.onError(providerError.message);
+        // A Sonic context can report a provider error while the persistent
+        // socket remains usable. Its context-level handler retries speech
+        // before audio is queued, so surfacing this as a session failure
+        // incorrectly flips the coach UI to "Tap to retry."
+        if (!this.sonicClient?.isOpen) {
+          void this.recoverCartesiaSocket("sonic", generation);
+        }
       },
       onClose: () => {
         if (generation === this.connectionGeneration && this.active) {
@@ -866,6 +873,28 @@ export class RealtimeCoachSession {
         !event.transcript.trim()
       ) {
         return;
+      }
+      const isDeferredBargeIn = this.deferredBargeInRequestIds.delete(
+        event.requestId,
+      );
+      if (
+        isDeferredBargeIn &&
+        isLikelyPlaybackEcho(
+          event.transcript,
+          this.replayableSonicSpeech?.text,
+        )
+      ) {
+        console.info("[coach_ink_turn]", {
+          stage: "suppressed_playback_echo",
+          request_id: event.requestId,
+          transcript_characters: event.transcript.trim().length,
+        });
+        return;
+      }
+      if (isDeferredBargeIn) {
+        // A real user interruption is committed only after Ink's final
+        // transcript proves it was not Coach playback.
+        this.handleCartesiaSpeechStart(generation);
       }
       logInkLifecycle("end", event.requestId, event.transcript);
       const turnSpeechEpoch = this.speechEpoch;
@@ -922,6 +951,12 @@ export class RealtimeCoachSession {
       },
       onTurnStart: (event) => {
         logInkLifecycle("start", event.requestId);
+        if (this.playbackActive || this.generationActive) {
+          // Do not cut Coach off merely because its own output leaked into
+          // the microphone. A real barge-in is accepted on final transcript.
+          this.deferredBargeInRequestIds.add(event.requestId);
+          return;
+        }
         this.handleCartesiaSpeechStart(generation);
       },
       onTurnEagerEnd: (event) => {
@@ -936,7 +971,12 @@ export class RealtimeCoachSession {
       onError: (providerError) => {
         if (generation !== this.connectionGeneration) return;
         console.error("Cartesia Ink error:", providerError);
-        this.callbacks?.onError(providerError.message);
+        // Ink can emit a non-terminal provider error before the socket's
+        // close event. Keep the active session listening and let the close
+        // handler reconnect only if the transport actually goes away.
+        if (!this.inkClient?.isOpen) {
+          void this.recoverCartesiaSocket("ink", generation);
+        }
       },
       onClose: () => {
         if (generation === this.connectionGeneration && this.active) {
@@ -962,7 +1002,6 @@ export class RealtimeCoachSession {
           generation === this.connectionGeneration &&
           this.active &&
           !this.muted &&
-          Date.now() >= this.suppressInkInputUntilMs &&
           this.inkClient?.isOpen
         ) {
           this.cartesiaSttSeconds += event.frames / event.sampleRate;
@@ -972,9 +1011,6 @@ export class RealtimeCoachSession {
       duplexAudio.addPlaybackStateListener((event) => {
         if (generation !== this.connectionGeneration) return;
         this.playbackActive = event.state === "playing";
-        this.suppressInkInputUntilMs = this.playbackActive
-          ? Number.MAX_SAFE_INTEGER
-          : Date.now() + 250;
         this.updateStatus();
         if (!this.playbackActive) {
           this.flushPendingContextRefresh();
@@ -1013,7 +1049,12 @@ export class RealtimeCoachSession {
         }
       }
       if (generation === this.connectionGeneration && this.active) {
-        await this.disconnect(`${kind}_connection_lost`);
+        // Cartesia credentials are intentionally short-lived. A failed
+        // socket recovery can therefore be an expired token, and reconnecting
+        // this client would reuse that expired credential. End the transport
+        // as a normal connection loss so useCoach creates a fresh session and
+        // obtains a new provider token.
+        await this.disconnect("connection_lost");
       }
     })().finally(() => {
       if (kind === "ink") this.inkReconnectPromise = null;
@@ -1918,6 +1959,12 @@ export class RealtimeCoachSession {
     turn: RoutedCoachTurn
   ): Promise<string | null> {
     const requestArgs = { client_request_id: turn.requestId };
+    if (command.kind === "speech_control") {
+      // This must stop only Coach audio. It is deliberately separate from
+      // timer controls, so "stop talking" can never pause the workout timer.
+      this.handleCartesiaSpeechStart(this.connectionGeneration);
+      return "";
+    }
     if (command.kind === "timer_duration_confirmation") {
       const pending = this.pendingTimerDurationChange;
       this.pendingTimerDurationChange = null;
@@ -2341,6 +2388,28 @@ export class RealtimeCoachSession {
     }
 
     if (speculation) speculation.controller.abort();
+    if (command.kind === "speech_control") {
+      // Ink already interrupted playback when this turn began. Consume the
+      // final command here with no model turn, timer action, or spoken
+      // acknowledgement, so "stop talking" cannot fall through to
+      // pause_timer.
+      this.latestUserTranscript = null;
+      if (itemId && command.safeToDelete) {
+        this.sendEvent({
+          type: "conversation.item.delete",
+          item_id: itemId,
+        });
+      }
+      this.callbacks?.onCommandHeard?.({
+        turnId,
+        label: command.heardLabel,
+        state: "recognized",
+      });
+      // This return happens before the command route's normal finally block,
+      // so explicitly replace the prior thinking/speaking status.
+      this.updateStatus();
+      return;
+    }
     this.latestUserTranscript = null;
     this.toolBusy = true;
     this.updateStatus();
@@ -2850,12 +2919,6 @@ export class RealtimeCoachSession {
           this.logVoiceMetric(turn, "first_sonic_audio");
         }
         const encoded = bytesToBase64(event.audio);
-        // Native voice processing is the first line of echo defense. Keep
-        // output audio out of Ink entirely while playback state catches up.
-        this.suppressInkInputUntilMs = Math.max(
-          this.suppressInkInputUntilMs,
-          Date.now() + 350,
-        );
         this.playbackEnqueue = this.playbackEnqueue
           .then(() => {
             if (!shouldAcceptPlaybackChunk(

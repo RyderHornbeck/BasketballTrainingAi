@@ -254,8 +254,6 @@ export function coachToolPreamble(
   }
 
   const preambles: Record<string, string> = {
-    set_current_drill: "I'm moving you there.",
-    skip_drill: "I'm moving you to the next drill.",
     set_set_completion: "I'm making that change.",
     complete_drill: "I'm marking that drill complete.",
     uncomplete_drill: "I'm reopening that drill.",

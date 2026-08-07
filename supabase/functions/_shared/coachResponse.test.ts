@@ -302,6 +302,11 @@ Deno.test("catalog search preamble is natural and hides query mechanics", () => 
     "read tools should remain silent",
   );
   assert(
+    coachToolPreamble("set_current_drill", {}) === null &&
+      coachToolPreamble("skip_drill", {}) === null,
+    "navigation must reserve its single athlete-facing response for the completed move",
+  );
+  assert(
     coachToolPreamble("search_exercise_catalog", {
       query: "function_call invoke get_progress",
     }) === "I'm searching for that drill.",

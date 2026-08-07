@@ -38,3 +38,34 @@ export function shouldPromoteSpeculation(
       normalizeSpeculativeTranscript(finalTurn.transcript)
   );
 }
+
+/** Ignore a final Ink transcript only when it is a substantial excerpt of Coach's own speech. */
+export function isLikelyPlaybackEcho(
+  transcript: string,
+  coachSpeech: string | null | undefined,
+): boolean {
+  const echoNumbers: Record<string, string> = {
+    one: "1",
+    two: "2",
+    three: "3",
+    four: "4",
+    five: "5",
+    six: "6",
+    seven: "7",
+    eight: "8",
+    nine: "9",
+    ten: "10",
+  };
+  const normalizeEchoText = (value: string) => normalizeSpeculativeTranscript(value)
+    .replace(
+      /\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/g,
+      (word) => echoNumbers[word] ?? word,
+    )
+    .replace(/[^a-z0-9' ]/g, "")
+    .trim();
+  const heard = normalizeEchoText(transcript);
+  const spoken = normalizeEchoText(coachSpeech ?? "");
+  const heardWords = heard.split(" ").filter(Boolean);
+  if (heardWords.length < 3 || heard.length < 12 || !spoken) return false;
+  return spoken.includes(heard) || heard.includes(spoken);
+}

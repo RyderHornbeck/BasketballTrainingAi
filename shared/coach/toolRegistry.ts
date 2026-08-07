@@ -212,7 +212,8 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   }),
   tool({
     name: "set_set_completion",
-    description: "Complete or reopen exactly one set.",
+    description:
+      "Complete or reopen exactly one set. Explicit completion keeps existing shooting or finishing progress and does not require new makes or attempts.",
     capability: "completion",
     execution: "server",
     kind: "mutation",

@@ -401,6 +401,33 @@ Deno.test("reopening a completed set preserves its recorded numbers", async () =
   );
 });
 
+Deno.test("explicit set completion does not require shooting results", async () => {
+  const ctx = contextWithPartialShootingSet();
+  const rows: Record<string, unknown>[] = [];
+  const outcome = await executeCoachTool(
+    capturingSupabaseMock(rows),
+    "user",
+    "day",
+    ctx,
+    "set_set_completion",
+    {
+      exercise_id: "finish",
+      drill_name: "Finishing",
+      set_number: 1,
+      completed: true,
+    },
+  );
+
+  const meta = decodeExerciseLogMeta(String(rows[0]?.notes ?? ""));
+  const completed = meta.set_logs?.find((set) => set.set_number === 1);
+  assert(outcome.dbChanged, "an explicit finish request must complete the set");
+  assert(completed?.completed === true, "the selected set must be marked complete");
+  assert(
+    !outcome.result.includes("Tell me the makes and attempts"),
+    "explicit completion must not require a shooting follow-up",
+  );
+});
+
 Deno.test("reopening a whole drill preserves every recorded result", async () => {
   const ctx = contextWithPartialShootingSet();
   const shootingLog = ctx.logs.get("shoot");
