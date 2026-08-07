@@ -817,6 +817,21 @@ Deno.test("workout kickoff asks Haiku to report the current drill without tools"
   );
 });
 
+Deno.test("timed drills offer their saved timer but shooting and finishing do not", () => {
+  assert(
+    COACH_SYSTEM_PROMPT.includes(
+      'ask: "Would you like me to start the [X]-minute set timer?"',
+    ) &&
+      COACH_SYSTEM_PROMPT.includes(
+        "Never ask or offer timers for shooting/finishing",
+      ) &&
+      COACH_SYSTEM_PROMPT.includes(
+        "never say a timer is running, almost done, paused",
+      ),
+    "timer offers must apply only to eligible timed drills",
+  );
+});
+
 Deno.test("normalized realtime context preserves coach knowledge with less duplication", () => {
   const ctx = contextWithPartialShootingSet();
   const legacy = buildCompactContextSummary(ctx, {
