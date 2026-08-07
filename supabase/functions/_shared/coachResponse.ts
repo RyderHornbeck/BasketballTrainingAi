@@ -229,28 +229,60 @@ export function resolveCoachToolContinuation(
   return { type: "model" };
 }
 
-/** Athlete-facing progress audio for slow read tools; never expose tool syntax. */
+/** Athlete-facing progress audio before slow tools; never expose tool syntax. */
 export function coachToolPreamble(
   toolName: string,
   args: Record<string, unknown>,
 ): string | null {
-  if (toolName !== "search_exercise_catalog") return null;
-  const raw = typeof args.query === "string" ? args.query : "";
-  const subject = raw
-    .replace(
-      /\b(?:search|find|look|show|query|catalog|exercise|drill)s?\b/gi,
-      " ",
-    )
-    .replace(/\b(?:for|me|please|the|a|an|called|named)\b/gi, " ")
-    .replace(/[^a-z0-9' -]/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const safeSubject =
-    subject && subject.split(" ").length <= 7 && subject.length <= 60
-      ? subject
-      : "that drill";
-  const speech = assessCoachSpeech(`I'm searching for ${safeSubject}.`);
-  return speech.ok ? speech.text : "I'm searching for that drill.";
+  if (toolName === "search_exercise_catalog") {
+    const raw = typeof args.query === "string" ? args.query : "";
+    const subject = raw
+      .replace(
+        /\b(?:search|find|look|show|query|catalog|exercise|drill)s?\b/gi,
+        " ",
+      )
+      .replace(/\b(?:for|me|please|the|a|an|called|named)\b/gi, " ")
+      .replace(/[^a-z0-9' -]/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const safeSubject =
+      subject && subject.split(" ").length <= 7 && subject.length <= 60
+        ? subject
+        : "that drill";
+    const speech = assessCoachSpeech(`I'm searching for ${safeSubject}.`);
+    return speech.ok ? speech.text : "I'm searching for that drill.";
+  }
+
+  const preambles: Record<string, string> = {
+    set_current_drill: "I'm moving you there.",
+    skip_drill: "I'm moving you to the next drill.",
+    set_set_completion: "I'm making that change.",
+    complete_drill: "I'm marking that drill complete.",
+    uncomplete_drill: "I'm reopening that drill.",
+    finish_workout: "I'm finishing your workout.",
+    start_timer: "I'm starting the timer.",
+    pause_timer: "I'm pausing the timer.",
+    resume_timer: "I'm resuming the timer.",
+    stop_timer: "I'm stopping the timer.",
+    set_timed_set_duration: "I'm changing that set time.",
+    set_shooting_set_targets: "I'm changing those targets.",
+    add_workout_exercise: "I'm adding that drill.",
+    remove_workout_exercise: "I'm removing that drill.",
+    save_note: "I'm saving that note.",
+  };
+  return preambles[toolName] ?? null;
+}
+
+/** Return a safe exact confirmation for an already-applied tool action. */
+export function successfulCoachToolConfirmation(
+  result: unknown,
+): string | null {
+  if (!result || typeof result !== "object") return null;
+  const toolResult = result as Record<string, unknown>;
+  if (!toolResult.db_changed && !toolResult.client_action) return null;
+  if (typeof toolResult.result !== "string") return null;
+  const speech = assessCoachSpeech(toolResult.result);
+  return speech.ok && !/^error\b/i.test(speech.text) ? speech.text : null;
 }
 
 /** Convert canonical/OpenAI-style tools to Anthropic's native tool contract. */
@@ -272,17 +304,63 @@ export function buildAnthropicSystemBlocks(
   stablePolicy: string,
   dynamicContext: string,
 ): Array<Record<string, unknown>> {
-  // Haiku's 1-hour cache only pays off once this stable prefix naturally
-  // reaches its minimum size. Never pad the low-latency voice policy.
-  const cacheable = stablePolicy.length >= 16_384;
   return [
     {
       type: "text",
       text: stablePolicy,
-      ...(cacheable ? { cache_control: { type: "ephemeral", ttl: "1h" } } : {}),
+      // Tools precede system in Anthropic's prompt prefix. This explicit
+      // breakpoint caches the complete stable tools → policy prefix.
+      cache_control: { type: "ephemeral" },
     },
     { type: "text", text: dynamicContext },
   ];
+}
+
+/**
+ * Reconstruct the persisted, ordered coach dialogue as Anthropic messages and
+ * append the newest user input. The newest input remains the only new message
+ * on the next request, allowing top-level automatic prompt caching to advance
+ * over the prior dialogue.
+ */
+export function buildAnthropicConversationMessages(
+  history: string | null | undefined,
+  newestUserInput: string,
+): Array<Record<string, unknown>> {
+  const messages: Array<Record<string, unknown>> = [];
+  const turns = String(history ?? "")
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^\s*(User|Coach)\s*:\s*(.*)$/i);
+      return match
+        ? {
+          role: match[1].toLowerCase() === "user" ? "user" : "assistant",
+          content: match[2].trim(),
+        }
+        : null;
+    })
+    .filter((turn): turn is { role: "user" | "assistant"; content: string } =>
+      Boolean(turn?.content)
+    );
+
+  for (const turn of turns) {
+    const previous = messages.at(-1);
+    if (previous?.role === turn.role && typeof previous.content === "string") {
+      previous.content = `${previous.content}\n${turn.content}`;
+    } else {
+      messages.push({ role: turn.role, content: turn.content });
+    }
+  }
+
+  const newest = newestUserInput.trim();
+  if (newest) {
+    const previous = messages.at(-1);
+    if (previous?.role === "user" && typeof previous.content === "string") {
+      previous.content = `${previous.content}\n${newest}`;
+    } else {
+      messages.push({ role: "user", content: newest });
+    }
+  }
+  return messages;
 }
 
 /** Combine client cancellation with a provider deadline without leaking timers. */

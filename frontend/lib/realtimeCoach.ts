@@ -24,6 +24,7 @@ import { getCoachPersonaId } from "@/lib/coachProfiles";
 import {
   CartesiaInkClient,
   CartesiaSonicClient,
+  buildInkKeyterms,
   gateCoachSpeechText,
   isSafeSpeculativeTranscript,
   shouldAcceptPlaybackChunk,
@@ -42,6 +43,74 @@ import {
   startVoiceCallAudio,
   stopVoiceCallAudio,
 } from "@/lib/webrtcAudio";
+
+// Ink-2 has no free-form transcription prompt. Keyterms are its documented
+// connection-level accuracy control; keep this focused vocabulary below
+// Cartesia's 100-term / 1,200-character limit.
+export const COACH_INK_KEYTERMS = [
+  "Court Coach",
+  "ball handling",
+  "form shooting",
+  "mid-range",
+  "three-point",
+  "free throw",
+  "finishing",
+  "layup",
+  "dribbling",
+  "crossover",
+  "behind the back",
+  "between the legs",
+  "pound dribble",
+  "V dribble",
+  "Curry slide",
+  "hesitation",
+  "euro step",
+  "floater",
+  "make",
+  "made",
+  "miss",
+  "missed",
+  "yes",
+  "no",
+  "yeah",
+  "yep",
+  "nah",
+  "nope",
+  "okay",
+  "sure",
+  "coach",
+  "hey coach",
+  "what's next",
+  "what is next",
+  "next",
+  "again",
+  "this",
+  "that",
+  "current",
+  "another",
+  "done",
+  "brick",
+  "airball",
+  "swish",
+  "timer",
+  "countdown",
+  "seconds",
+  "minutes",
+  "start",
+  "pause",
+  "resume",
+  "stop",
+  "skip",
+  "reopen",
+  "set",
+  "drill",
+  "workout",
+  "attempts",
+  "targets",
+  "percentage",
+  "right side",
+  "left side",
+] as const;
 
 async function edgeFunctionErrorMessage(error: {
   message: string;
@@ -433,6 +502,11 @@ export class RealtimeCoachSession {
   private ttsInputBuffer = "";
   private ttsSafetyBlocked = false;
   private playbackEnqueue: Promise<void> = Promise.resolve();
+  private replayableSonicSpeech:
+    | { text: string; speechEpoch: number; retried: boolean }
+    | null = null;
+  private sonicAudioEnqueuedEpoch: number | null = null;
+  private suppressInkInputUntilMs = 0;
   private playbackGeneration = 0;
   private speculativeTurn: SpeculativeCoachTurn | null = null;
   private inkReconnectPromise: Promise<void> | null = null;
@@ -509,6 +583,7 @@ export class RealtimeCoachSession {
     this.stateFingerprint = "";
     this.ttsInputBuffer = "";
     this.ttsSafetyBlocked = false;
+    this.suppressInkInputUntilMs = 0;
     this.cartesiaSttSeconds = 0;
     this.cartesiaTtsCharacters = 0;
     this.reportedSttSeconds = 0;
@@ -773,6 +848,18 @@ export class RealtimeCoachSession {
         }
       },
     });
+    const logInkLifecycle = (
+      stage: "start" | "eager_end" | "resume" | "end",
+      requestId: string,
+      transcript?: string,
+    ) => {
+      console.info("[coach_ink_turn]", {
+        stage,
+        request_id: requestId,
+        transcript_characters: transcript?.trim().length ?? 0,
+        speech_epoch: this.speechEpoch,
+      });
+    };
     const routeInkTurn = (event: InkTranscriptEvent) => {
       if (
         generation !== this.connectionGeneration ||
@@ -780,6 +867,7 @@ export class RealtimeCoachSession {
       ) {
         return;
       }
+      logInkLifecycle("end", event.requestId, event.transcript);
       const turnSpeechEpoch = this.speechEpoch;
       const turnSequence = ++this.inkTurnSequence;
       const speculation = this.takeMatchingSpeculation(event, turnSpeechEpoch);
@@ -818,24 +906,32 @@ export class RealtimeCoachSession {
       accessToken: token,
       encoding: "pcm_s16le",
       sampleRate: 24000,
-      keyterms: [
-        "make",
-        "miss",
-        "brick",
-        "airball",
-        "swish",
-        "ball handling",
-        "Court Coach",
-      ],
+      keyterms: buildInkKeyterms(
+        COACH_INK_KEYTERMS,
+        this.orderedDrills()
+          .map((drill) => drill.name ?? "")
+          .filter(Boolean),
+      ),
       turn: {
         startThreshold: 0.65,
-        eagerEndThreshold: 0.35,
-        endThreshold: 0.1,
-        endTimeoutMs: 750,
+        eagerEndThreshold: 0.4,
+        endThreshold: 0.15,
+        // Fast final transcripts without the previous 750 ms cutoff. Ink's
+        // semantic end signal can finalize sooner; this is only its backstop.
+        endTimeoutMs: 1100,
       },
-      onTurnStart: () => this.handleCartesiaSpeechStart(generation),
-      onTurnEagerEnd: (event) => this.startCartesiaSpeculation(event, generation),
-      onTurnResume: () => this.cancelCartesiaSpeculation("turn_resumed"),
+      onTurnStart: (event) => {
+        logInkLifecycle("start", event.requestId);
+        this.handleCartesiaSpeechStart(generation);
+      },
+      onTurnEagerEnd: (event) => {
+        logInkLifecycle("eager_end", event.requestId, event.transcript);
+        this.startCartesiaSpeculation(event, generation);
+      },
+      onTurnResume: (event) => {
+        logInkLifecycle("resume", event.requestId);
+        this.cancelCartesiaSpeculation("turn_resumed");
+      },
       onTurnEnd: routeInkTurn,
       onError: (providerError) => {
         if (generation !== this.connectionGeneration) return;
@@ -866,6 +962,7 @@ export class RealtimeCoachSession {
           generation === this.connectionGeneration &&
           this.active &&
           !this.muted &&
+          Date.now() >= this.suppressInkInputUntilMs &&
           this.inkClient?.isOpen
         ) {
           this.cartesiaSttSeconds += event.frames / event.sampleRate;
@@ -875,6 +972,9 @@ export class RealtimeCoachSession {
       duplexAudio.addPlaybackStateListener((event) => {
         if (generation !== this.connectionGeneration) return;
         this.playbackActive = event.state === "playing";
+        this.suppressInkInputUntilMs = this.playbackActive
+          ? Number.MAX_SAFE_INTEGER
+          : Date.now() + 250;
         this.updateStatus();
         if (!this.playbackActive) {
           this.flushPendingContextRefresh();
@@ -2702,6 +2802,8 @@ export class RealtimeCoachSession {
     this.ttsInputBuffer = "";
     this.ttsSafetyBlocked = false;
     this.playbackEnqueue = Promise.resolve();
+    this.replayableSonicSpeech = null;
+    this.sonicAudioEnqueuedEpoch = null;
     this.generationActive = false;
     this.playbackActive = false;
     void this.duplexAudio?.clearPlaybackAsync().catch(() => undefined);
@@ -2748,6 +2850,12 @@ export class RealtimeCoachSession {
           this.logVoiceMetric(turn, "first_sonic_audio");
         }
         const encoded = bytesToBase64(event.audio);
+        // Native voice processing is the first line of echo defense. Keep
+        // output audio out of Ink entirely while playback state catches up.
+        this.suppressInkInputUntilMs = Math.max(
+          this.suppressInkInputUntilMs,
+          Date.now() + 350,
+        );
         this.playbackEnqueue = this.playbackEnqueue
           .then(() => {
             if (!shouldAcceptPlaybackChunk(
@@ -2765,11 +2873,17 @@ export class RealtimeCoachSession {
               turn.playbackFirstEnqueueAt = Date.now();
               this.logVoiceMetric(turn, "first_playback_enqueue");
             }
+            this.sonicAudioEnqueuedEpoch = speechEpoch;
             return this.duplexAudio?.enqueuePlaybackAsync(encoded);
           })
           .then(() => undefined)
           .catch((error) => {
-            console.error("Could not enqueue Cartesia speech:", error);
+            console.error("Could not enqueue Cartesia speech:", {
+              context_id: event.contextId,
+              speech_epoch: speechEpoch,
+              error,
+            });
+            reportNetworkFailure("cartesia-playback");
           });
       },
       onDone: () => {
@@ -2780,12 +2894,51 @@ export class RealtimeCoachSession {
       onError: (error) => {
         if (speechEpoch !== this.speechEpoch) return;
         this.generationActive = false;
-        this.callbacks?.onError(error.message);
+        console.error("Cartesia Sonic context error:", {
+          speech_epoch: speechEpoch,
+          context_id: this.sonicContext?.id ?? null,
+          audio_enqueued: this.sonicAudioEnqueuedEpoch === speechEpoch,
+          error: error.message,
+        });
+        this.retrySonicSpeechBeforeAudio(speechEpoch);
         this.updateStatus();
       },
     });
     this.sonicContext = context;
     return context;
+  }
+
+  private retrySonicSpeechBeforeAudio(speechEpoch: number): void {
+    const replay = this.replayableSonicSpeech;
+    if (
+      !replay ||
+      replay.speechEpoch !== speechEpoch ||
+      replay.retried ||
+      this.sonicAudioEnqueuedEpoch === speechEpoch ||
+      !this.active ||
+      this.ttsSafetyBlocked
+    ) {
+      return;
+    }
+    replay.retried = true;
+    try {
+      this.sonicContext?.cancel();
+    } catch {
+      // The failed context may already be closed.
+    }
+    this.sonicContext = null;
+    try {
+      const retryContext = this.createSonicContext(speechEpoch);
+      this.generationActive = true;
+      retryContext.finish(replay.text);
+      console.warn("Retrying Cartesia Sonic speech before first audio.", {
+        speech_epoch: speechEpoch,
+        characters: replay.text.length,
+      });
+    } catch (retryError) {
+      console.error("Could not recreate Cartesia Sonic context:", retryError);
+      void this.recoverCartesiaSocket("sonic", this.connectionGeneration);
+    }
   }
 
   private flushSonicText(force: boolean, turn?: RoutedCoachTurn): void {
@@ -2819,6 +2972,16 @@ export class RealtimeCoachSession {
       if (force) context.finish();
       return;
     }
+    const spoken = chunks.join("");
+    if (this.replayableSonicSpeech?.speechEpoch === speechEpoch) {
+      this.replayableSonicSpeech.text += spoken;
+    } else {
+      this.replayableSonicSpeech = {
+        text: spoken,
+        speechEpoch,
+        retried: false,
+      };
+    }
     if (turn && turn.sonicFirstTextAt == null) {
       turn.sonicFirstTextAt = Date.now();
       this.logVoiceMetric(turn, "first_sonic_text");
@@ -2842,6 +3005,7 @@ export class RealtimeCoachSession {
     }
     this.sonicContext = null;
     this.playbackEnqueue = Promise.resolve();
+    this.replayableSonicSpeech = null;
     void this.duplexAudio?.clearPlaybackAsync().catch(() => undefined);
     console.warn("Suppressed unsafe internal syntax from coach speech.");
   }
@@ -2948,6 +3112,8 @@ export class RealtimeCoachSession {
     this.turnAbortController = speculation.controller;
     this.ttsInputBuffer = "";
     this.ttsSafetyBlocked = false;
+    this.replayableSonicSpeech = null;
+    this.sonicAudioEnqueuedEpoch = null;
     this.generationActive = true;
     this.updateStatus();
     let context: CartesiaSonicContext | null = null;
@@ -3013,6 +3179,8 @@ export class RealtimeCoachSession {
     this.turnAbortController = controller;
     this.ttsInputBuffer = "";
     this.ttsSafetyBlocked = false;
+    this.replayableSonicSpeech = null;
+    this.sonicAudioEnqueuedEpoch = null;
     let context: CartesiaSonicContext | null = null;
     let responseText = "";
     try {
@@ -3146,6 +3314,12 @@ export class RealtimeCoachSession {
       this.generationActive = true;
       this.updateStatus();
       const context = this.createSonicContext(speechEpoch);
+      this.replayableSonicSpeech = {
+        text: speech,
+        speechEpoch,
+        retried: false,
+      };
+      this.sonicAudioEnqueuedEpoch = null;
       this.cartesiaTtsCharacters += speech.length;
       context.finish(speech);
       return;

@@ -1,5 +1,6 @@
 import {
   assessCoachSpeech,
+  buildAnthropicConversationMessages,
   buildAnthropicSystemBlocks,
   buildAnthropicTools,
   coachToolPreamble,
@@ -12,9 +13,11 @@ import {
   resolveCoachToolContinuation,
   sanitizeCoachConversationSummary,
   selectCoachResponseModel,
+  successfulCoachToolConfirmation,
   shouldForceCoachTool,
   validateCoachTurnRequest,
 } from "./coachResponse.ts";
+import { COACH_TURN_STABLE_SYSTEM_PROMPT } from "./coachCore.ts";
 import { generatedResponseTools } from "./generated/coachTools.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -193,25 +196,32 @@ Deno.test("provider timeout combines deadlines with client cancellation", async 
   clientDeadline.dispose();
 });
 
-Deno.test("Anthropic caching only applies to a naturally large stable prefix", () => {
+Deno.test("Anthropic caching marks the stable prefix and preserves ordered history", () => {
   const blocks = buildAnthropicSystemBlocks("stable", "dynamic");
   assert(blocks.length === 2, "expected stable and dynamic system blocks");
   assert(
-    !("cache_control" in blocks[0]),
-    "small voice policy must not be padded just for cache eligibility",
-  );
-  const cacheableBlocks = buildAnthropicSystemBlocks(
-    "x".repeat(16_384),
-    "dynamic",
-  );
-  assert(
-    JSON.stringify(cacheableBlocks[0].cache_control) ===
-      '{"type":"ephemeral","ttl":"1h"}',
-    "naturally large stable prefix should use the one-hour cache",
+    JSON.stringify(blocks[0].cache_control) === '{"type":"ephemeral"}',
+    "the stable tools and system prefix must have an explicit cache breakpoint",
   );
   assert(
     !("cache_control" in blocks[1]),
-    "dynamic context must remain uncached",
+    "the changing workout context must remain outside the explicit breakpoint",
+  );
+  const stablePrefixCharacters =
+    COACH_TURN_STABLE_SYSTEM_PROMPT.length +
+    JSON.stringify(buildAnthropicTools(generatedResponseTools())).length;
+  assert(
+    stablePrefixCharacters >= 16_384,
+    "the stable tools and system prefix must comfortably exceed Haiku's 4K-token cache minimum",
+  );
+  const messages = buildAnthropicConversationMessages(
+    "User: Start the timer\nCoach: A timer is ready.\nUser: yes",
+    "Start it now",
+  );
+  assert(
+    JSON.stringify(messages) ===
+      '[{"role":"user","content":"Start the timer"},{"role":"assistant","content":"A timer is ready."},{"role":"user","content":"yes\\nStart it now"}]',
+    "prior messages must retain their order and only the newest user input is appended",
   );
 });
 
@@ -280,14 +290,46 @@ Deno.test("catalog search preamble is natural and hides query mechanics", () => 
     "long internal queries should use a generic athlete-facing preamble",
   );
   assert(
-    coachToolPreamble("start_timer", {}) === null,
-    "non-search tools should not narrate internal work",
+    coachToolPreamble("start_timer", {}) === "I'm starting the timer.",
+    "timer mutations should have a short athlete-facing preamble",
+  );
+  assert(
+    coachToolPreamble("add_workout_exercise", {}) === "I'm adding that drill.",
+    "drill additions should have a short athlete-facing preamble",
+  );
+  assert(
+    coachToolPreamble("get_progress", {}) === null,
+    "read tools should remain silent",
   );
   assert(
     coachToolPreamble("search_exercise_catalog", {
       query: "function_call invoke get_progress",
     }) === "I'm searching for that drill.",
     "pseudo tool syntax in a query must not enter a preamble",
+  );
+});
+
+Deno.test("completed tool actions retain a safe exact confirmation", () => {
+  assert(
+    successfulCoachToolConfirmation({
+      result: "A 1-minute timer has been started.",
+      client_action: { type: "start_timer" },
+    }) === "A 1-minute timer has been started.",
+    "client timer actions should have a usable degraded-success confirmation",
+  );
+  assert(
+    successfulCoachToolConfirmation({
+      result: 'Added V dribbles.',
+      db_changed: true,
+    }) === "Added V dribbles.",
+    "committed drill additions should have a usable degraded-success confirmation",
+  );
+  assert(
+    successfulCoachToolConfirmation({
+      result: "Error: failed to add drill",
+      db_changed: true,
+    }) === null,
+    "error-shaped results must never be spoken as a success",
   );
 });
 

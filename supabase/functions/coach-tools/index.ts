@@ -25,6 +25,22 @@ const COACH_NAME_BY_VOICE: Record<string, string> = {
   marin: "Coach Maya",
   shimmer: "Coach Ava",
 };
+// These actions have complete athlete-facing results and never require a
+// follow-up tool. Returning them exactly removes a fragile second LLM request
+// after a timer control or committed workout change.
+const EXACT_CONFIRMATION_TOOLS = new Set([
+  "start_timer",
+  "pause_timer",
+  "resume_timer",
+  "stop_timer",
+  "add_workout_exercise",
+  "remove_workout_exercise",
+  "save_note",
+  "set_set_completion",
+  "complete_drill",
+  "uncomplete_drill",
+  "finish_workout",
+]);
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -268,6 +284,9 @@ Deno.serve(async (req: Request) => {
       ? await loadWorkoutContext(supabase, userId, body.day_id)
       : ctx;
     const toolKind = COACH_READ_ONLY_TOOLS.has(body.tool_name) ? "read_only" : "mutation";
+    const speakExact = !outcome.skipModelResponse &&
+      EXACT_CONFIRMATION_TOOLS.has(body.tool_name) &&
+      !outcome.result.startsWith("Error:");
     const contextJson = refreshedContext
       ? buildCompactContextSummary(refreshedContext, answers ?? null, undefined)
       : null;
@@ -279,6 +298,8 @@ Deno.serve(async (req: Request) => {
       say: outcome.localConfirmation ?? outcome.result,
       continuation: outcome.skipModelResponse
         ? "none"
+        : speakExact
+        ? "speak_exact"
         : "model",
       client_action: outcome.clientAction ?? null,
       db_changed: outcome.dbChanged,

@@ -357,7 +357,7 @@ export default function OnboardingScreen() {
       nextLoading={submitting}
       nextLabel={
         step === AI_CONSENT_STEP
-          ? "Allow AI Processing"
+          ? "Agree and Continue"
           : step === REVIEW_STEP
           ? "I rated"
           : step === QUESTION_STEPS && user
@@ -699,9 +699,9 @@ const STEP_TITLES = [
     subtitle: "If you’re excited to start training, support Court Coach with a quick rating.",
   },
   {
-    title: "AI Data Processing",
+    title: "Data and Privacy",
     subtitle:
-      "Choose whether Court Coach may use third-party AI services for coaching and workout features.",
+      "Review how Court Coach uses data when you choose AI-powered features.",
   },
 ];
 

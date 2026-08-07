@@ -8,6 +8,7 @@ import {
 } from "../_shared/coachCore.ts";
 import {
   assessCoachSpeech,
+  buildAnthropicConversationMessages,
   buildAnthropicSystemBlocks,
   buildAnthropicTools,
   coachToolPreamble,
@@ -18,6 +19,7 @@ import {
   type ResponsesFunctionCall,
   sanitizeCoachConversationSummary,
   selectCoachResponseModel,
+  successfulCoachToolConfirmation,
   shouldForceCoachTool,
   validateCoachTurnRequest,
 } from "../_shared/coachResponse.ts";
@@ -193,7 +195,7 @@ Deno.serve(async (req: Request) => {
   const dynamicContext = buildCoachTurnDynamicContext(
     initialContext,
     answers ?? null,
-    safeConversationSummary,
+    undefined,
     coachName,
     speculativeReadOnly,
     !confidentlyToolFree,
@@ -210,14 +212,20 @@ Deno.serve(async (req: Request) => {
 
   const run = async () => {
     let previousResponseId: string | null = null;
-    const messages: Array<Record<string, unknown>> = [
-      { role: "user", content: turn.transcript },
-    ];
+    // Preserve prior user/assistant messages in order. New tool exchanges are
+    // appended below; none of the existing prefix is rewritten.
+    const messages = buildAnthropicConversationMessages(
+      safeConversationSummary,
+      turn.transcript,
+    );
     let nextStateVersion = turn.stateVersion;
     let totalToolCalls = 0;
     let outputCharacters = 0;
     let emittedSpeech = false;
     let mutationApplied = false;
+    let lastSuccessfulToolConfirmation: string | null = null;
+    let lastSuccessfulToolName: string | null = null;
+    let lastToolWorkoutContext: string | null = null;
     const announcedPreambles = new Set<string>();
     const usageEvents: Array<Record<string, unknown>> = [];
     try {
@@ -283,6 +291,9 @@ Deno.serve(async (req: Request) => {
                       `${dynamicContext}${retryInstruction}`,
                     ),
                     messages,
+                    // Anthropic moves this breakpoint through the growing
+                    // message history, so earlier turns become cache reads.
+                    cache_control: { type: "ephemeral" },
                     ...(toolsEnabled
                       ? {
                         tools: anthropicTools,
@@ -320,7 +331,18 @@ Deno.serve(async (req: Request) => {
                   roundStopReason = typeof usage?.stop_reason === "string"
                     ? usage.stop_reason
                     : null;
-                  if (usage) usageEvents.push(usage);
+                  if (usage) {
+                    usageEvents.push(usage);
+                    console.info("Anthropic prompt cache usage", {
+                      input_tokens: Number(usage.input_tokens ?? 0),
+                      cache_creation_input_tokens: Number(
+                        usage.cache_creation_input_tokens ?? 0,
+                      ),
+                      cache_read_input_tokens: Number(
+                        usage.cache_read_input_tokens ?? 0,
+                      ),
+                    });
+                  }
                 },
               });
             } catch (error) {
@@ -469,6 +491,19 @@ Deno.serve(async (req: Request) => {
           }
           mutationApplied = mutationApplied ||
             Boolean(toolResult.db_changed || toolResult.client_action);
+          if (toolResult.db_changed || toolResult.client_action) {
+            const confirmation = successfulCoachToolConfirmation(toolResult);
+            if (confirmation) {
+              lastSuccessfulToolConfirmation = confirmation;
+              lastSuccessfulToolName = call.name;
+            }
+            console.info("coach-turn tool succeeded", {
+              turn_id: turn.turnId,
+              tool_name: call.name,
+              db_changed: Boolean(toolResult.db_changed),
+              has_client_action: Boolean(toolResult.client_action),
+            });
+          }
           const continuation = resolveCoachToolContinuation(toolResult);
           if (continuation.type === "none") {
             modelResponseSkipped = true;
@@ -496,6 +531,9 @@ Deno.serve(async (req: Request) => {
             client_action: toolResult.client_action ?? null,
             workout_context: toolResult.client_workout_context ?? null,
           });
+          if (typeof toolResult.client_workout_context === "string") {
+            lastToolWorkoutContext = toolResult.client_workout_context;
+          }
           outputs.push({
             type: "tool_result",
             tool_use_id: call.callId,
@@ -610,9 +648,8 @@ Deno.serve(async (req: Request) => {
               }),
               p_metadata: {
                 ...usage,
-                prompt_cache_ttl: "1h",
-                stable_prefix_cache_eligible:
-                  COACH_TURN_STABLE_SYSTEM_PROMPT.length >= 16_384,
+                prompt_cache_ttl: "5m",
+                stable_prefix_cache_breakpoint: true,
               },
             });
           }
@@ -623,7 +660,7 @@ Deno.serve(async (req: Request) => {
         (error instanceof DOMException && error.name === "AbortError");
       const providerTimedOut = error instanceof Error &&
         error.message === "Anthropic provider request timed out.";
-      if (claimedTurn) {
+      if (claimedTurn && !(!aborted && lastSuccessfulToolConfirmation)) {
         await supabase
           .from("coach_agent_turns")
           .update({
@@ -637,8 +674,49 @@ Deno.serve(async (req: Request) => {
           })
           .eq("id", claimedTurn.id);
       }
+      // A mutation/tool action may have already succeeded when the optional
+      // post-tool model narration times out or fails validation. Preserve that
+      // durable success instead of turning it into a misleading retry.
+      if (!aborted && lastSuccessfulToolConfirmation) {
+        console.warn("coach-turn completed with tool fallback", {
+          turn_id: turn.turnId,
+          tool_name: lastSuccessfulToolName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        outputCharacters += lastSuccessfulToolConfirmation.length;
+        emittedSpeech = true;
+        await send({
+          type: "text_delta",
+          turn_id: turn.turnId,
+          state_version: nextStateVersion,
+          delta: ` ${lastSuccessfulToolConfirmation}`,
+        });
+        if (claimedTurn) {
+          await supabase
+            .from("coach_agent_turns")
+            .update({
+              status: "completed",
+              state_version: nextStateVersion,
+              output_chars: outputCharacters,
+              completed_at: new Date().toISOString(),
+            })
+            .eq("id", claimedTurn.id);
+        }
+        await send({
+          type: "turn_completed",
+          turn_id: turn.turnId,
+          state_version: nextStateVersion,
+          state_fingerprint: initialFingerprint,
+          workout_context: lastToolWorkoutContext,
+        });
+        return;
+      }
       if (!aborted) {
-        console.error("coach-turn error:", error);
+        console.error("coach-turn error:", {
+          turn_id: turn.turnId,
+          mutation_applied: mutationApplied,
+          error,
+        });
         await send({
           type: "error",
           turn_id: turn.turnId,

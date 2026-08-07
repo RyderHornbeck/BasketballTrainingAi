@@ -1,5 +1,6 @@
 import {
   INITIAL_INK_TURN_STATE,
+  buildInkKeyterms,
   buildInkWebSocketUrl,
   parseInkServerEvent,
   transitionInkTurn,
@@ -80,6 +81,17 @@ test("builds an Ink-2 short-lived-token URL", () => {
   );
 });
 
+test("bounds Ink keyterms while keeping preferred terms first", () => {
+  const terms = buildInkKeyterms(
+    ["Court Coach", "Free Throw", "court coach"],
+    Array.from({ length: 120 }, (_, index) => `drill ${index}`),
+  );
+  assert.deepEqual(terms.slice(0, 2), ["Court Coach", "Free Throw"]);
+  assert.equal(terms.filter((term) => term.toLowerCase() === "court coach").length, 1);
+  assert.equal(terms.length <= 100, true);
+  assert.equal(terms.join("").length <= 1_200, true);
+});
+
 test("parses all Ink lifecycle event shapes", () => {
   assert.equal(parseInkServerEvent('{"type":"turn.start","request_id":"r"}').type, "turn.start");
   assert.equal(
@@ -112,6 +124,25 @@ test("deduplicates repeated final events within an Ink turn", () => {
   assert.equal(firstFinal.deliverFinal, true);
   assert.equal(duplicateFinal.deliverFinal, false);
   assert.equal(firstFinal.state.turnEpoch, 1);
+});
+
+test("routes an Ink final only for its active turn", () => {
+  const orphan = parseInkServerEvent('{"type":"turn.end","transcript":"orphan","request_id":"r"}');
+  const started = transitionInkTurn(
+    INITIAL_INK_TURN_STATE,
+    parseInkServerEvent('{"type":"turn.start","request_id":"active"}'),
+  );
+  const stale = transitionInkTurn(
+    started.state,
+    parseInkServerEvent('{"type":"turn.end","transcript":"stale","request_id":"old"}'),
+  );
+  assert.equal(
+    transitionInkTurn(INITIAL_INK_TURN_STATE, orphan).deliverFinal,
+    false,
+    "an orphan final must not create a coach request",
+  );
+  assert.equal(stale.deliverFinal, false, "a different Ink request must not finalize the active turn");
+  assert.equal(stale.state.active, true, "a stale final must leave the active turn intact");
 });
 
 test("decodes base64 audio without Node Buffer or atob", () => {

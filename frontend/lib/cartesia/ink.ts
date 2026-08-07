@@ -90,6 +90,7 @@ export interface InkTurnState {
   turnEpoch: number;
   active: boolean;
   finalDelivered: boolean;
+  requestId: string | null;
 }
 
 export interface InkTurnTransition {
@@ -97,10 +98,31 @@ export interface InkTurnTransition {
   deliverFinal: boolean;
 }
 
+/** Keep documented Ink keyterms within provider limits and preserve priority. */
+export function buildInkKeyterms(
+  preferred: readonly string[],
+  contextual: readonly string[] = [],
+): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  let characters = 0;
+  for (const raw of [...preferred, ...contextual]) {
+    const term = raw.trim().replace(/\s+/g, " ");
+    const key = term.toLocaleLowerCase();
+    if (!term || seen.has(key) || result.length >= 100) continue;
+    if (characters + term.length > 1_200) continue;
+    result.push(term);
+    seen.add(key);
+    characters += term.length;
+  }
+  return result;
+}
+
 export const INITIAL_INK_TURN_STATE: InkTurnState = {
   turnEpoch: 0,
   active: false,
   finalDelivered: false,
+  requestId: null,
 };
 
 export function buildInkWebSocketUrl(options: Pick<
@@ -156,18 +178,30 @@ export function transitionInkTurn(
 ): InkTurnTransition {
   if (event.type === "turn.start") {
     return {
-      state: { turnEpoch: state.turnEpoch + 1, active: true, finalDelivered: false },
+      state: {
+        turnEpoch: state.turnEpoch + 1,
+        active: true,
+        finalDelivered: false,
+        requestId: event.requestId,
+      },
       deliverFinal: false,
     };
   }
   if (event.type !== "turn.end") return { state, deliverFinal: false };
-  if (state.finalDelivered && !state.active) return { state, deliverFinal: false };
+  if (
+    !state.active ||
+    state.finalDelivered ||
+    state.requestId !== event.requestId
+  ) {
+    return { state, deliverFinal: false };
+  }
 
   return {
     state: {
-      turnEpoch: state.active ? state.turnEpoch : state.turnEpoch + 1,
+      turnEpoch: state.turnEpoch,
       active: false,
       finalDelivered: true,
+      requestId: state.requestId,
     },
     deliverFinal: true,
   };

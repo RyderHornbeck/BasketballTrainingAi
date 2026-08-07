@@ -4,7 +4,6 @@ import { Text } from "@/components/Text";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import {
-  hasCurrentAIDataConsent,
   setAIDataConsent,
   type AIDataConsentSource,
 } from "@/lib/aiDataConsent";
@@ -23,7 +22,6 @@ export default function AIDataProcessingScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ source?: string }>();
   const [savingChoice, setSavingChoice] = useState<"allow" | "deny" | null>(null);
-  const currentlyAllowed = hasCurrentAIDataConsent(profile);
   const source: AIDataConsentSource =
     params.source === "coach_gate" ? "coach_gate" : "settings";
 
@@ -73,29 +71,14 @@ export default function AIDataProcessingScreen() {
         >
           <ArrowLeftIcon size={22} color={colors.text} weight="bold" />
         </Pressable>
-        <Text style={[styles.headerTitle, { color: colors.text }]}>Privacy</Text>
         <View style={styles.headerSpacer} />
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={[styles.title, { color: colors.text }]}>AI Data Processing</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Data and Privacy</Text>
         <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-          Choose whether Court Coach may use third-party AI services for voice coaching,
-          workout generation, and AI workout editing.
+          Review how Court Coach uses data when you choose AI-powered features.
         </Text>
-        <View
-          style={[
-            styles.status,
-            {
-              backgroundColor: currentlyAllowed ? colors.accentMuted : colors.card,
-              borderColor: currentlyAllowed ? colors.accent : colors.border,
-            },
-          ]}
-        >
-          <Text style={[styles.statusText, { color: currentlyAllowed ? colors.accent : colors.text }]}>
-            AI processing is currently {currentlyAllowed ? "allowed" : "not allowed"}.
-          </Text>
-        </View>
         <AIDataProcessingDisclosure />
       </ScrollView>
 
@@ -109,7 +92,7 @@ export default function AIDataProcessingScreen() {
           style={styles.button}
         />
         <Button
-          title="Allow AI Processing"
+          title="Agree and Continue"
           onPress={() => void saveChoice(true)}
           loading={savingChoice === "allow"}
           disabled={savingChoice !== null}
@@ -136,14 +119,8 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     justifyContent: "center",
   },
-  headerTitle: {
-    flex: 1,
-    fontSize: 17,
-    fontWeight: "800",
-    textAlign: "center",
-  },
   headerSpacer: {
-    width: 44,
+    flex: 1,
   },
   content: {
     paddingHorizontal: 20,
@@ -161,18 +138,6 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     marginTop: 8,
     marginBottom: 16,
-  },
-  status: {
-    borderWidth: 1,
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 18,
-  },
-  statusText: {
-    fontSize: 13,
-    lineHeight: 19,
-    fontWeight: "700",
   },
   footer: {
     borderTopWidth: StyleSheet.hairlineWidth,
