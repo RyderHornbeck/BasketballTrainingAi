@@ -37,6 +37,8 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
   const insets = useSafeAreaInsets();
   const [pulse] = useState(() => new Animated.Value(1));
   const [thinkingStep, setThinkingStep] = useState(0);
+  const [userTranscriptOpacity] = useState(() => new Animated.Value(1));
+  const [coachTranscriptOpacity] = useState(() => new Animated.Value(1));
 
   const {
     status,
@@ -44,10 +46,10 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     timerRunning,
     elapsedSeconds,
     timerDurationSeconds,
-    commandHeard,
+    userTranscript,
+    coachTranscript,
+    coachTranscriptFadeVersion,
     dailyBudget,
-    connectedProvider,
-    providerFallbackReason,
     startSession,
     stopSession,
     toggleMute,
@@ -65,6 +67,8 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
       : 0;
   // Never round a non-zero spend back up to "100% left".
   const remainingBudgetPercent = Math.floor(remainingBudgetProgress * 100);
+  const hasUserTranscript = Boolean(userTranscript);
+  const hasCoachTranscript = Boolean(coachTranscript);
 
   useEffect(() => {
     void activateKeepAwakeAsync("coach-overlay");
@@ -94,6 +98,35 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     }, 170);
     return () => clearInterval(interval);
   }, [status]);
+
+  useEffect(() => {
+    if (hasUserTranscript) userTranscriptOpacity.setValue(1);
+  }, [hasUserTranscript, userTranscriptOpacity]);
+
+  useEffect(() => {
+    if (hasCoachTranscript) coachTranscriptOpacity.setValue(1);
+  }, [hasCoachTranscript, coachTranscriptOpacity]);
+
+  useEffect(() => {
+    if (!coachTranscript || coachTranscriptFadeVersion === 0) return;
+    Animated.parallel([
+      Animated.timing(userTranscriptOpacity, {
+        toValue: 0,
+        duration: 250,
+        useNativeDriver: true,
+      }),
+      Animated.timing(coachTranscriptOpacity, {
+        toValue: 0,
+        duration: 250,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [
+    coachTranscript,
+    coachTranscriptFadeVersion,
+    coachTranscriptOpacity,
+    userTranscriptOpacity,
+  ]);
 
   const handleClose = () => {
     void stopSession();
@@ -163,13 +196,6 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
                 {dayTitle}
               </Text>
             ) : null}
-            {connectedProvider ? (
-              <Text style={[styles.subtitle, { color: colors.textSecondary }]} numberOfLines={1}>
-                {connectedProvider === "assembly_inworld"
-                  ? "Voice: AssemblyAI + Inworld"
-                  : "Voice: Cartesia"}
-              </Text>
-            ) : null}
           </View>
 
           <Pressable
@@ -216,38 +242,27 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
             </Text>
           </View>
         ) : null}
-        {providerFallbackReason ? (
-          <Text style={[styles.providerWarning, { color: colors.danger }]}>
-            AssemblyAI + Inworld could not connect. Using Cartesia instead.{" "}
-            {providerFallbackReason}
-          </Text>
-        ) : null}
-
         <View style={styles.center}>
-          <View style={styles.heardSlot} pointerEvents="none">
-            {commandHeard ? (
-              <View
-                style={[
-                  styles.heardPill,
-                  {
-                    backgroundColor: colors.card,
-                    borderColor:
-                      commandHeard.state === "failed" ? colors.danger : colors.border,
-                  },
-                ]}
-              >
+          <View style={styles.transcriptSlot} pointerEvents="none">
+            {userTranscript ? (
+              <Animated.View style={{ opacity: userTranscriptOpacity }}>
                 <Text
-                  style={[
-                    styles.heardText,
-                    {
-                      color:
-                        commandHeard.state === "failed" ? colors.danger : colors.accent,
-                    },
-                  ]}
+                  style={[styles.transcriptLine, { color: colors.textSecondary }]}
+                  numberOfLines={2}
                 >
-                  {commandHeard.label}
+                  {userTranscript}
                 </Text>
-              </View>
+              </Animated.View>
+            ) : null}
+            {coachTranscript ? (
+              <Animated.View style={{ opacity: coachTranscriptOpacity }}>
+                <Text
+                  style={[styles.transcriptLine, { color: colors.text }]}
+                  numberOfLines={4}
+                >
+                  {coachTranscript}
+                </Text>
+              </Animated.View>
             ) : null}
           </View>
           <Text style={[styles.statusLabel, { color: colors.text }]}>{statusLabel}</Text>
@@ -405,24 +420,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 32,
   },
-  heardSlot: {
+  transcriptSlot: {
     position: "absolute",
     top: 24,
     left: 24,
     right: 24,
-    alignItems: "center",
-    justifyContent: "center",
+    gap: 10,
   },
-  heardPill: {
-    maxWidth: 300,
-    borderWidth: 1,
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-  },
-  heardText: {
-    fontSize: 13,
-    fontWeight: "700",
+  transcriptLine: {
+    fontSize: 15,
+    lineHeight: 22,
     textAlign: "center",
   },
   statusLabel: {

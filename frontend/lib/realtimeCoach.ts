@@ -40,7 +40,6 @@ import {
   InworldTtsClient,
 } from "@/lib/assemblyInworld";
 import {
-  loadDeveloperCoachVoiceProvider,
   type CoachVoiceProvider,
 } from "@/lib/coachVoiceProvider";
 import {
@@ -174,6 +173,9 @@ export interface RealtimeCoachCallbacks {
   onError: (message: string) => void;
   onTimerAction: (action: ClientTimerAction) => void;
   onCommandHeard?: (event: RecognizedCoachCommand) => void;
+  onUserTranscript?: (text: string) => void;
+  onCoachTranscript?: (text: string) => void;
+  onCoachPlaybackFinished?: () => void;
   onConversationSummary?: (summary: string) => void;
   onUsage?: (totals: ReturnType<ReturnType<typeof createUsageTracker>["snapshot"]>) => void;
   onBudgetUpdate?: (spentUsd: number, budgetUsd: number) => void;
@@ -609,7 +611,9 @@ export class RealtimeCoachSession {
   private inworldVoiceId = "";
   private inworldContextId: string | null = null;
   private assemblySpeechStartDeferred = false;
+  private assemblyEchoGuardUntil = 0;
   private lastAssemblyCoachSpeech: string | null = null;
+  private streamedCoachTranscript = "";
   private inkClient: CartesiaInkClient | null = null;
   private sonicClient: CartesiaSonicClient | null = null;
   private sonicContext: CartesiaSonicContext | null = null;
@@ -634,6 +638,10 @@ export class RealtimeCoachSession {
   private sonicReconnectPromise: Promise<void> | null = null;
   private cartesiaSttSeconds = 0;
   private cartesiaTtsCharacters = 0;
+  private assemblySessionStartedAt = 0;
+  private inworldTtsCharacters = 0;
+  private reportedAssemblySessionSeconds = 0;
+  private reportedInworldTtsCharacters = 0;
   private reportedSttSeconds = 0;
   private reportedTtsCharacters = 0;
   private providerUsageSequence = 0;
@@ -707,18 +715,25 @@ export class RealtimeCoachSession {
     this.deferredBargeInRequestIds.clear();
     this.cartesiaSttSeconds = 0;
     this.cartesiaTtsCharacters = 0;
+    this.assemblySessionStartedAt = 0;
+    this.inworldTtsCharacters = 0;
+    this.reportedAssemblySessionSeconds = 0;
+    this.reportedInworldTtsCharacters = 0;
     this.reportedSttSeconds = 0;
     this.reportedTtsCharacters = 0;
     this.providerUsageSequence = 0;
     this.providerUsagePromise = null;
     this.shotUndoStack = [];
     this.assemblySpeechStartDeferred = false;
+    this.assemblyEchoGuardUntil = 0;
     this.lastAssemblyCoachSpeech = null;
     this.usageTracker = createUsageTracker(this.model);
     callbacks.onStatus("connecting");
 
     try {
-      this.voiceProvider = await loadDeveloperCoachVoiceProvider();
+      // AssemblyAI + Inworld is the sole user-selectable voice route. The
+      // Cartesia implementation remains only as a startup-failure fallback.
+      this.voiceProvider = "assembly_inworld";
       if (this.voiceProvider === "assembly_inworld") {
         try {
         await this.connectAssemblyInworld(generation);
@@ -1107,7 +1122,11 @@ export class RealtimeCoachSession {
       onTurnStart: (event) => {
         logInkLifecycle("start", event.requestId);
         this.inkAudioGate?.providerTurnStarted();
-        if (this.playbackActive || this.generationActive) {
+        if (
+          this.playbackActive ||
+          this.generationActive ||
+          Date.now() < this.assemblyEchoGuardUntil
+        ) {
           // Do not cut Coach off merely because its own output leaked into
           // the microphone. A real barge-in is accepted on final transcript.
           this.deferredBargeInRequestIds.add(event.requestId);
@@ -1274,18 +1293,14 @@ export class RealtimeCoachSession {
         this.handleAssemblySpeechStart(generation);
       },
       onPartial: (transcript) => {
-        if (
-          this.assemblySpeechStartDeferred &&
-          !isLikelyPlaybackEcho(transcript, this.lastAssemblyCoachSpeech)
-        ) {
+        if (this.assemblySpeechStartDeferred) {
+          if (isLikelyPlaybackEcho(transcript, this.lastAssemblyCoachSpeech)) {
+            return;
+          }
           this.assemblySpeechStartDeferred = false;
           this.handleAssemblySpeechStart(generation);
         }
-        this.callbacks?.onCommandHeard?.({
-          turnId: `assembly-partial-${Date.now()}`,
-          label: `Heard: ${transcript}`.slice(0, 90),
-          state: "recognized",
-        });
+        this.callbacks?.onUserTranscript?.(transcript);
       },
       onTurn: (turn) => {
         if (this.assemblySpeechStartDeferred) {
@@ -1342,6 +1357,9 @@ export class RealtimeCoachSession {
         this.generationActive = false;
         this.updateStatus();
       },
+      onBilledCharacters: (count) => {
+        this.inworldTtsCharacters += count;
+      },
       onError: (providerError) => {
         console.error("Inworld TTS error:", providerError);
         if (generation === this.connectionGeneration) this.callbacks?.onError(providerError.message);
@@ -1376,6 +1394,7 @@ export class RealtimeCoachSession {
       return;
     }
     this.assemblyInworldActive = true;
+    this.assemblySessionStartedAt = Date.now();
     this.inkAudioGate = new InkAudioGate();
     this.duplexSubscriptions = [
       duplexAudio.addAudioInputListener((event) => {
@@ -1393,6 +1412,13 @@ export class RealtimeCoachSession {
       duplexAudio.addPlaybackStateListener((event) => {
         if (generation !== this.connectionGeneration) return;
         this.playbackActive = event.state === "playing";
+        if (event.reason === "completed" && !this.generationActive) {
+          // The native queue is empty, but far-field microphone capture can
+          // still receive the speaker's final syllables. Hold speech-start
+          // handling until Assembly provides a transcript we can compare.
+          this.assemblyEchoGuardUntil = Date.now() + 750;
+          this.callbacks?.onCoachPlaybackFinished?.();
+        }
         this.updateStatus();
       }),
       duplexAudio.addErrorListener((audioError) => {
@@ -2706,6 +2732,9 @@ export class RealtimeCoachSession {
     };
     this.speechStoppedAtByItem.delete(turnId);
     this.routedTurns.set(turnId, turn);
+    // Always show the athlete's actual words, including when the local router
+    // consumes the command before it reaches Haiku.
+    this.callbacks?.onUserTranscript?.(transcript);
     const normalizedReply = transcript
       .toLowerCase()
       .replace(/[^\w\s']/g, " ")
@@ -2741,11 +2770,6 @@ export class RealtimeCoachSession {
       this.fallbackTurnCount += 1;
       this.logVoiceMetric(turn, "route_decision");
       this.latestUserTranscript = transcript;
-      this.callbacks?.onCommandHeard?.({
-        turnId,
-        label: `Heard: ${transcript}`.slice(0, 90),
-        state: "recognized",
-      });
       if (this.cartesiaActive) {
         if (speculation) {
           await this.promoteCartesiaSpeculation(speculation, turn);
@@ -2840,6 +2864,7 @@ export class RealtimeCoachSession {
       );
       this.lastDeterministicReply = output;
       this.callbacks?.onConversationSummary?.(this.conversationSummary);
+      this.callbacks?.onCoachTranscript?.(output);
       if (turn.speechEpoch === this.speechEpoch) {
         await this.speakDeterministic(output, turn.requestId, turn.speechEpoch);
       }
@@ -2947,6 +2972,9 @@ export class RealtimeCoachSession {
       if (this.cartesiaActive) {
         await this.reportCartesiaUsage(true);
       }
+      if (this.assemblyInworldActive) {
+        await this.reportAssemblyInworldUsage(true);
+      }
       this.turnAbortController?.abort();
       this.turnAbortController = null;
       try {
@@ -2965,6 +2993,7 @@ export class RealtimeCoachSession {
       this.inworldClient = null;
       this.inworldContextId = null;
       this.assemblySpeechStartDeferred = false;
+      this.assemblyEchoGuardUntil = 0;
       this.lastAssemblyCoachSpeech = null;
       for (const subscription of this.duplexSubscriptions) subscription.remove();
       this.duplexSubscriptions = [];
@@ -3338,6 +3367,8 @@ export class RealtimeCoachSession {
       return;
     }
     if (event.type === "text_delta") {
+      this.streamedCoachTranscript += event.delta;
+      this.callbacks?.onCoachTranscript?.(this.streamedCoachTranscript);
       this.ttsInputBuffer += event.delta;
       const drained = drainSonicTextChunks(this.ttsInputBuffer, false);
       this.ttsInputBuffer = drained.remainder;
@@ -3397,6 +3428,7 @@ export class RealtimeCoachSession {
     this.generationActive = true;
     this.updateStatus();
     let responseText = "";
+    this.streamedCoachTranscript = "";
     try {
       await streamCoachTurn({
         dayId,
@@ -3421,6 +3453,7 @@ export class RealtimeCoachSession {
             gate.speech,
           );
           this.callbacks?.onConversationSummary?.(this.conversationSummary);
+          this.callbacks?.onCoachTranscript?.(gate.speech);
           this.lastAssemblyCoachSpeech = gate.speech;
           this.assemblyClient?.updateAgentContext(gate.speech);
         }
@@ -3433,6 +3466,7 @@ export class RealtimeCoachSession {
         this.generationActive = false;
         this.updateStatus();
       }
+      void this.reportAssemblyInworldUsage(false);
     }
   }
 
@@ -3923,6 +3957,48 @@ export class RealtimeCoachSession {
         this.providerUsagePromise = null;
       });
     await this.providerUsagePromise;
+  }
+
+  private async reportAssemblyInworldUsage(force: boolean): Promise<void> {
+    const dayId = this.dayId;
+    const sessionKey = this.sessionKey;
+    if (!this.assemblyInworldActive || !dayId || !sessionKey || !this.assemblySessionStartedAt) return;
+    const sessionSeconds = Math.max(
+      0,
+      (Date.now() - this.assemblySessionStartedAt) / 1000 -
+        this.reportedAssemblySessionSeconds,
+    );
+    const ttsCharacters = Math.max(
+      0,
+      this.inworldTtsCharacters - this.reportedInworldTtsCharacters,
+    );
+    if (!force && sessionSeconds < 15 && ttsCharacters < 300) return;
+    if (sessionSeconds <= 0 && ttsCharacters <= 0) return;
+    const sentSessionSeconds = Math.round(sessionSeconds * 1000) / 1000;
+    const sentTtsCharacters = Math.round(ttsCharacters);
+    const requestId = `assembly-inworld-usage-${++this.providerUsageSequence}-${Date.now()}`;
+    const { data, error } = await supabase.functions.invoke<{
+      daily_usage?: { spent_usd: number; budget_usd: number; remaining_usd: number };
+      error?: string;
+    }>("coach-provider-usage", {
+      body: {
+        day_id: dayId,
+        session_key: sessionKey,
+        request_id: requestId,
+        provider: "assembly_inworld",
+        assembly_session_seconds: sentSessionSeconds,
+        inworld_tts_characters: sentTtsCharacters,
+      },
+    });
+    if (error) throw new Error(await edgeFunctionErrorMessage(error));
+    if (data?.error) throw new Error(data.error);
+    this.reportedAssemblySessionSeconds += sentSessionSeconds;
+    this.reportedInworldTtsCharacters += sentTtsCharacters;
+    if (data?.daily_usage) {
+      this.dailySpentBaseline = data.daily_usage.spent_usd;
+      this.dailyBudgetUsd = data.daily_usage.budget_usd;
+      this.callbacks?.onBudgetUpdate?.(data.daily_usage.spent_usd, data.daily_usage.budget_usd);
+    }
   }
 
   private async speakDeterministic(

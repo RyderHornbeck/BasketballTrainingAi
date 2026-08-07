@@ -30,8 +30,19 @@ const INWORLD_API_KEY = Deno.env.get("INWORLD_API_KEY") ?? "";
 const INWORLD_WORKSPACE = Deno.env.get("INWORLD_WORKSPACE") ?? "";
 const CARTESIA_API_KEY = Deno.env.get("CARTESIA_API_KEY") ?? "";
 
-function inworldVoiceForPersona(persona: string): "Nate" | "Evan" {
-  return persona === "devin" || persona === "ava" ? "Evan" : "Nate";
+function inworldVoiceForPersona(persona: string): "Nate" | "Evan" | "Sarah" | "Zadie" {
+  switch (persona) {
+    case "devin":
+      return "Nate";
+    case "tyler":
+      return "Evan";
+    case "maya":
+      return "Sarah";
+    case "ava":
+      return "Zadie";
+    default:
+      return "Evan";
+  }
 }
 
 interface BootstrapRow {

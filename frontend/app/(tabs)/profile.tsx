@@ -15,11 +15,6 @@ import {
   DEFAULT_COACH_VOICE,
   CoachVoice,
 } from "@/lib/coachProfiles";
-import {
-  loadDeveloperCoachVoiceProvider,
-  saveDeveloperCoachVoiceProvider,
-  type CoachVoiceProvider,
-} from "@/lib/coachVoiceProvider";
 import { supabase } from "@/lib/supabase";
 import { onTrainingPreferenceUpdated } from "@/lib/trainingPreferenceEvents";
 import {
@@ -71,8 +66,6 @@ export default function ProfileScreen() {
   const [coachPickerOpen, setCoachPickerOpen] = useState(false);
   const [coachVoice, setCoachVoice] = useState<CoachVoice>(DEFAULT_COACH_VOICE);
   const [coachSaving, setCoachSaving] = useState(false);
-  const [developerVoiceProvider, setDeveloperVoiceProvider] =
-    useState<CoachVoiceProvider>("cartesia");
 
   const reminderTime = useMemo(
     () => new Date(2000, 0, 1, reminder.hour, reminder.minute),
@@ -139,10 +132,6 @@ export default function ProfileScreen() {
     const frame = requestAnimationFrame(() => setCoachVoice(voice));
     return () => cancelAnimationFrame(frame);
   }, [profile?.realtime_coach_voice]);
-
-  useEffect(() => {
-    void loadDeveloperCoachVoiceProvider().then(setDeveloperVoiceProvider);
-  }, []);
 
   const handleSignOut = () => {
     Alert.alert("Sign out?", "You can sign back in anytime to continue your training.", [
@@ -456,41 +445,6 @@ export default function ProfileScreen() {
             })}
           </Card>
         ) : null}
-        {
-          <>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Coach Voice Route</Text>
-            <Card style={styles.card}>
-              {(["cartesia", "assembly_inworld"] as const).map((provider, index) => {
-                const selected = provider === developerVoiceProvider;
-                return (
-                  <React.Fragment key={provider}>
-                    {index > 0 ? <Divider /> : null}
-                    <Pressable
-                      accessibilityRole="radio"
-                      accessibilityState={{ selected }}
-                      onPress={() => {
-                        setDeveloperVoiceProvider(provider);
-                        void saveDeveloperCoachVoiceProvider(provider);
-                      }}
-                      style={({ pressed }) => [
-                        styles.coachOption,
-                        {
-                          backgroundColor: selected ? colors.accentMuted : "transparent",
-                          opacity: pressed ? 0.72 : 1,
-                        },
-                      ]}
-                    >
-                      <Text style={[styles.coachOptionName, { color: colors.text }]}>
-                        {provider === "cartesia" ? "Cartesia (default)" : "AssemblyAI + Inworld"}
-                      </Text>
-                    </Pressable>
-                  </React.Fragment>
-                );
-              })}
-            </Card>
-          </>
-        }
-
         <Button
           title="How to use Court Coach AI"
           variant="secondary"

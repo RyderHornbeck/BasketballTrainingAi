@@ -1,5 +1,6 @@
 import {
   estimateAnthropicCostUsd,
+  estimateAssemblyInworldCostUsd,
   estimateCartesiaCostUsd,
   estimateRealtimeCostUsd,
   estimateResponsesCostUsd,
@@ -117,5 +118,16 @@ Deno.test("Cartesia, Anthropic, and Responses costs use provider billable units"
   assert(
     Math.abs(haiku - 0.00215) < 1e-12,
     "expected Haiku input, output, and prompt-cache rates",
+  );
+});
+
+Deno.test("AssemblyAI and Inworld costs use session seconds and billed characters", () => {
+  const cost = estimateAssemblyInworldCostUsd({
+    assemblySessionSeconds: 60,
+    inworldTtsCharacters: 1_000,
+  });
+  assert(
+    Math.abs(cost - (0.5 / 60 + 0.012)) < 1e-12,
+    "expected Universal-3.5 Pro Realtime with prompting and contracted TTS-2 pricing",
   );
 });

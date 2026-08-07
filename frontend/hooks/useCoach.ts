@@ -13,7 +13,6 @@ import { type CoachMachineState } from "@/lib/coachStateMachine";
 import {
   RealtimeCoachSession,
   type ClientTimerAction,
-  type RecognizedCoachCommand,
   type TimerState,
 } from "@/lib/realtimeCoach";
 import { type CoachVoiceProvider } from "@/lib/coachVoiceProvider";
@@ -34,7 +33,9 @@ export interface UseCoachResult {
   timerRunning: boolean;
   elapsedSeconds: number;
   timerDurationSeconds: number | null;
-  commandHeard: RecognizedCoachCommand | null;
+  userTranscript: string;
+  coachTranscript: string;
+  coachTranscriptFadeVersion: number;
   lastUsage: CoachUsageTotals | null;
   dailyBudget: CoachDailyBudget | null;
   connectedProvider: CoachVoiceProvider | null;
@@ -66,20 +67,26 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const startSessionRef = useRef<() => Promise<void>>(async () => {});
   const teardownRef = useRef<Promise<void>>(Promise.resolve());
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const coachTranscriptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const coachTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const coachTranscriptTargetRef = useRef("");
+  const coachTranscriptShownWordCountRef = useRef(0);
+  const userTranscriptRef = useRef("");
 
   const [status, setStatus] = useState<CoachStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [timerRunning, setTimerRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [timerDurationSeconds, setTimerDurationSeconds] = useState<number | null>(null);
-  const [commandHeard, setCommandHeard] = useState<RecognizedCoachCommand | null>(null);
+  const [userTranscript, setUserTranscript] = useState("");
+  const [coachTranscript, setCoachTranscript] = useState("");
+  const [coachTranscriptFadeVersion, setCoachTranscriptFadeVersion] = useState(0);
   const [lastUsage, setLastUsage] = useState<CoachUsageTotals | null>(null);
   const [dailyBudget, setDailyBudget] = useState<CoachDailyBudget | null>(null);
   const [connectedProvider, setConnectedProvider] = useState<CoachVoiceProvider | null>(null);
   const [providerFallbackReason, setProviderFallbackReason] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
   const timerAudio = useTimerAudioCues();
-  const commandHeardTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const markLimitReached = useCallback((msg: string) => {
     limitBlockedRef.current = true;
@@ -107,18 +114,9 @@ export function useCoach(dayId: string | null): UseCoachResult {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (commandHeardTimeoutRef.current) clearTimeout(commandHeardTimeoutRef.current);
+      if (coachTranscriptTimerRef.current) clearTimeout(coachTranscriptTimerRef.current);
+      if (coachTypingTimerRef.current) clearTimeout(coachTypingTimerRef.current);
     };
-  }, []);
-
-  const showCommandHeard = useCallback((event: RecognizedCoachCommand) => {
-    if (!mountedRef.current) return;
-    if (commandHeardTimeoutRef.current) clearTimeout(commandHeardTimeoutRef.current);
-    setCommandHeard(event);
-    commandHeardTimeoutRef.current = setTimeout(() => {
-      commandHeardTimeoutRef.current = null;
-      if (mountedRef.current) setCommandHeard(null);
-    }, 2_000);
   }, []);
 
   const currentElapsed = useCallback(() => {
@@ -249,6 +247,13 @@ export function useCoach(dayId: string | null): UseCoachResult {
 
     connectingRef.current = true;
     setError(null);
+    if (coachTranscriptTimerRef.current) clearTimeout(coachTranscriptTimerRef.current);
+    if (coachTypingTimerRef.current) clearTimeout(coachTypingTimerRef.current);
+    coachTranscriptTargetRef.current = "";
+    coachTranscriptShownWordCountRef.current = 0;
+    userTranscriptRef.current = "";
+    setUserTranscript("");
+    setCoachTranscript("");
     setConnectedProvider(null);
     setProviderFallbackReason(null);
 
@@ -293,7 +298,56 @@ export function useCoach(dayId: string | null): UseCoachResult {
             setError(msg);
           },
           onTimerAction: applyTimerAction,
-          onCommandHeard: showCommandHeard,
+          onUserTranscript: (text) => {
+            if (!mountedRef.current) return;
+            const isContinuation =
+              userTranscriptRef.current.length > 0 &&
+              text.startsWith(userTranscriptRef.current);
+            if (!isContinuation) {
+              if (coachTranscriptTimerRef.current) clearTimeout(coachTranscriptTimerRef.current);
+              if (coachTypingTimerRef.current) clearTimeout(coachTypingTimerRef.current);
+              coachTranscriptTargetRef.current = "";
+              coachTranscriptShownWordCountRef.current = 0;
+              setCoachTranscriptFadeVersion(0);
+              setCoachTranscript("");
+            }
+            userTranscriptRef.current = text;
+            setUserTranscript(text);
+          },
+          onCoachTranscript: (text) => {
+            if (!mountedRef.current) return;
+            if (coachTranscriptTimerRef.current) clearTimeout(coachTranscriptTimerRef.current);
+            setCoachTranscriptFadeVersion(0);
+            coachTranscriptTargetRef.current = text;
+            if (coachTypingTimerRef.current) return;
+            const revealNextWord = () => {
+              const words = coachTranscriptTargetRef.current.trim().split(/\s+/).filter(Boolean);
+              if (coachTranscriptShownWordCountRef.current >= words.length) {
+                coachTypingTimerRef.current = null;
+                return;
+              }
+              coachTranscriptShownWordCountRef.current += 1;
+              setCoachTranscript(
+                words.slice(0, coachTranscriptShownWordCountRef.current).join(" "),
+              );
+              coachTypingTimerRef.current = setTimeout(revealNextWord, 150);
+            };
+            revealNextWord();
+          },
+          onCoachPlaybackFinished: () => {
+            if (!mountedRef.current) return;
+            if (coachTranscriptTimerRef.current) clearTimeout(coachTranscriptTimerRef.current);
+            coachTranscriptTimerRef.current = setTimeout(() => {
+              if (!mountedRef.current) return;
+              setCoachTranscriptFadeVersion((version) => version + 1);
+              coachTranscriptTimerRef.current = setTimeout(() => {
+                if (!mountedRef.current) return;
+                userTranscriptRef.current = "";
+                setUserTranscript("");
+                setCoachTranscript("");
+              }, 250);
+            }, 2_000);
+          },
           onConversationSummary: (summary) => {
             conversationSummaryRef.current = summary;
             void AsyncStorage.setItem(
@@ -360,12 +414,9 @@ export function useCoach(dayId: string | null): UseCoachResult {
   }, [
     dayId,
     dailyBudget,
-    connectedProvider,
-    providerFallbackReason,
     ensureSession,
     getTimerState,
     applyTimerAction,
-    showCommandHeard,
     muted,
     refreshDailyBudget,
     markLimitReached,
@@ -468,7 +519,9 @@ export function useCoach(dayId: string | null): UseCoachResult {
     timerRunning,
     elapsedSeconds,
     timerDurationSeconds,
-    commandHeard,
+    userTranscript,
+    coachTranscript,
+    coachTranscriptFadeVersion,
     lastUsage,
     dailyBudget,
     connectedProvider,

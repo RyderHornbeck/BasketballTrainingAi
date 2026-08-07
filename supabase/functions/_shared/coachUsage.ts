@@ -16,6 +16,33 @@ export const CARTESIA_RATES = {
   usdPerMillionCredits: 37.375,
 } as const;
 
+export const ASSEMBLY_INWORLD_RATES = {
+  /** Universal-3.5 Pro Realtime base ($0.45/hr) plus Prompting beta ($0.05/hr). */
+  assemblyRealtimePerHour: 0.5,
+  /** Inworld TTS-2 contracted rate; override when the provider rate changes. */
+  inworldTtsPerMillionCharacters: 12,
+} as const;
+
+export function estimateAssemblyInworldCostUsd(input: {
+  assemblySessionSeconds?: number;
+  inworldTtsCharacters?: number;
+  assemblyRealtimePerHour?: number;
+  inworldTtsPerMillionCharacters?: number;
+}): number {
+  return (
+    Math.max(0, input.assemblySessionSeconds ?? 0) *
+      Math.max(0, input.assemblyRealtimePerHour ?? ASSEMBLY_INWORLD_RATES.assemblyRealtimePerHour) /
+      3600 +
+    Math.max(0, input.inworldTtsCharacters ?? 0) *
+      Math.max(
+        0,
+        input.inworldTtsPerMillionCharacters ??
+          ASSEMBLY_INWORLD_RATES.inworldTtsPerMillionCharacters,
+      ) /
+      1_000_000
+  );
+}
+
 export const RESPONSES_RATES = {
   "gpt-5.6-luna": { input: 1 / 1_000_000, output: 6 / 1_000_000 },
   "gpt-5.6-terra": { input: 2.5 / 1_000_000, output: 15 / 1_000_000 },

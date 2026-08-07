@@ -1,11 +1,20 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { estimateCartesiaCostUsd } from "../_shared/coachUsage.ts";
+import {
+  estimateAssemblyInworldCostUsd,
+  estimateCartesiaCostUsd,
+} from "../_shared/coachUsage.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const USD_PER_MILLION_CREDITS = Number(
   Deno.env.get("CARTESIA_USD_PER_MILLION_CREDITS") ?? 37.375
+);
+const ASSEMBLY_REALTIME_PER_HOUR = Number(
+  Deno.env.get("ASSEMBLYAI_REALTIME_USD_PER_HOUR") ?? 0.5,
+);
+const INWORLD_TTS_PER_MILLION_CHARS = Number(
+  Deno.env.get("INWORLD_TTS_USD_PER_MILLION_CHARS") ?? 12,
 );
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
@@ -33,6 +42,9 @@ Deno.serve(async (req: Request) => {
   const requestId = typeof body?.request_id === "string" ? body.request_id : "";
   const sttSeconds = Number(body?.stt_audio_seconds ?? 0);
   const ttsCharacters = Number(body?.tts_characters ?? 0);
+  const provider = body?.provider === "assembly_inworld" ? "assembly_inworld" : "cartesia";
+  const assemblySessionSeconds = Number(body?.assembly_session_seconds ?? 0);
+  const inworldTtsCharacters = Number(body?.inworld_tts_characters ?? 0);
   if (
     !dayId ||
     dayId.length > 64 ||
@@ -47,7 +59,15 @@ Deno.serve(async (req: Request) => {
     !Number.isInteger(ttsCharacters) ||
     ttsCharacters < 0 ||
     ttsCharacters > 20_000 ||
-    (sttSeconds === 0 && ttsCharacters === 0)
+    !Number.isFinite(assemblySessionSeconds) ||
+    assemblySessionSeconds < 0 ||
+    assemblySessionSeconds > 3_600 ||
+    !Number.isInteger(inworldTtsCharacters) ||
+    inworldTtsCharacters < 0 ||
+    inworldTtsCharacters > 20_000 ||
+    (provider === "cartesia"
+      ? sttSeconds === 0 && ttsCharacters === 0
+      : assemblySessionSeconds === 0 && inworldTtsCharacters === 0)
   ) {
     return jsonResponse({ error: "Invalid provider usage report" }, 400);
   }
@@ -65,7 +85,28 @@ Deno.serve(async (req: Request) => {
   let latest:
     | { spent_usd?: number; budget_usd?: number; remaining_usd?: number }
     | null = null;
-  const metrics = [
+  const metrics = provider === "assembly_inworld" ? [
+    ...(assemblySessionSeconds > 0 ? [{
+      suffix: "stt",
+      metric: "assemblyai_u3_rt_pro_session",
+      quantity: assemblySessionSeconds,
+      unit: "seconds",
+      cost: estimateAssemblyInworldCostUsd({
+        assemblySessionSeconds,
+        assemblyRealtimePerHour: ASSEMBLY_REALTIME_PER_HOUR,
+      }),
+    }] : []),
+    ...(inworldTtsCharacters > 0 ? [{
+      suffix: "tts",
+      metric: "inworld_tts2_text",
+      quantity: inworldTtsCharacters,
+      unit: "characters",
+      cost: estimateAssemblyInworldCostUsd({
+        inworldTtsCharacters,
+        inworldTtsPerMillionCharacters: INWORLD_TTS_PER_MILLION_CHARS,
+      }),
+    }] : []),
+  ] : [
     ...(sttSeconds > 0
       ? [
           {
@@ -102,7 +143,7 @@ Deno.serve(async (req: Request) => {
         p_session_id: session.id,
         p_day_id: dayId,
         p_turn_id: null,
-        p_provider: "cartesia",
+        p_provider: provider,
         p_provider_request_id: `${requestId}:${metric.suffix}`,
         p_metric: metric.metric,
         p_quantity: metric.quantity,

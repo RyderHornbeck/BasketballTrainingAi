@@ -3,12 +3,20 @@ import {
   type InworldTTSClient,
 } from "@inworld/tts";
 
+// The HTTP streaming API has no shared prosody context across calls. Sending
+// token-sized deltas makes each one a new utterance, which is audible as
+// robotic pauses. These thresholds normally keep a full concise Coach reply
+// together while still beginning long answers before generation is complete.
+const MINIMUM_UTTERANCE_CHARACTERS = 240;
+const MAXIMUM_UTTERANCE_WAIT_MS = 450;
+
 export interface InworldTtsOptions {
   accessToken: string;
   voiceId: string;
   onAudio: (base64Pcm: string, contextId: string) => void;
   onFirstAudio: (contextId: string) => void;
   onDone: (contextId: string) => void;
+  onBilledCharacters: (count: number) => void;
   onError: (error: Error) => void;
   onClose: () => void;
 }
@@ -46,9 +54,19 @@ export class InworldTtsClient {
   pushText(contextId: string, text: string, finish = false): void {
     if (!text.trim() || this.cancelledContexts.has(contextId)) return;
     this.pendingText.set(contextId, `${this.pendingText.get(contextId) ?? ""}${text}`);
-    if (!finish && (this.pendingText.get(contextId)?.length ?? 0) < 80) {
+    if (
+      !finish &&
+      (this.pendingText.get(contextId)?.length ?? 0) <
+        MINIMUM_UTTERANCE_CHARACTERS
+    ) {
       if (!this.flushTimers.has(contextId)) {
-        this.flushTimers.set(contextId, setTimeout(() => this.flush(contextId, false), 110));
+        this.flushTimers.set(
+          contextId,
+          setTimeout(
+            () => this.flush(contextId, false),
+            MAXIMUM_UTTERANCE_WAIT_MS,
+          ),
+        );
       }
       return;
     }
@@ -110,11 +128,14 @@ export class InworldTtsClient {
     const client = this.client;
     if (!client) return;
     try {
+      const requestText =
+        `[warm supportive basketball coach with natural conversational pacing and brief pauses between thoughts] ${text}`;
+      this.options.onBilledCharacters(requestText.length);
       for await (const audio of client.stream({
         // TTS-2 interprets this steering tag instead of voicing it. Keeping the
         // direction transport-side makes every streamed phrase consistent
         // without requiring Haiku to emit provider-specific markup.
-        text: `[warm supportive basketball coach with natural conversational pacing and brief pauses between thoughts] ${text}`,
+        text: requestText,
         voice: this.options.voiceId,
         model: "inworld-tts-2",
         encoding: "PCM",
