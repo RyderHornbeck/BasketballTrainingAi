@@ -27,7 +27,7 @@ const DESCRIPTION_UPDATES = [
   [
     "8229b35b-a670-4483-9a86-243254f4c132",
     "Between dribbles",
-    "Start in an athletic stance with the ball in your right hand. Step 1: Dribble from the ball through your legs, right hand to left hand. Step 2: Then dribble the ball back between the legs the same way it came, without rapping it around your knee to go through your leg. Step 3: Aim to go continously.",
+    "Start in an athletic stance with the ball in your right hand. Step 1: Dribble the ball through your legs, right hand to left hand. Step 2: Then dribble the ball back between the legs the same way it came, without rapping it around your knee to go through your leg. Step 3: Aim to go continously.",
   ],
   [
     "8fec78cb-a40a-4317-a04f-2ae55283d614",
@@ -111,7 +111,7 @@ const DESCRIPTION_UPDATES = [
   ],
   [
     "aa64e118-201e-455b-b03e-54df58599fed",
-    "Jogging W/ Dribbling",
+    "Jogging with Dribbling",
     "Start by jogging in place. Step 1: Dribble at hip height while keeping your head up. Step 2: Add pound dribbles and other dribble moves while jogging in place until the timer runs out.",
   ],
 ] as const;

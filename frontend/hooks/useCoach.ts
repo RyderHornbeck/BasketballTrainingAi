@@ -16,6 +16,7 @@ import {
   type RecognizedCoachCommand,
   type TimerState,
 } from "@/lib/realtimeCoach";
+import { type CoachVoiceProvider } from "@/lib/coachVoiceProvider";
 import { useTimerAudioCues } from "@/hooks/useTimerAudioCues";
 import { completeTimedExerciseSet } from "@/lib/timedSetCompletion";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -36,6 +37,8 @@ export interface UseCoachResult {
   commandHeard: RecognizedCoachCommand | null;
   lastUsage: CoachUsageTotals | null;
   dailyBudget: CoachDailyBudget | null;
+  connectedProvider: CoachVoiceProvider | null;
+  providerFallbackReason: string | null;
   startSession: () => Promise<void>;
   stopSession: () => Promise<void>;
   toggleMute: () => void;
@@ -72,6 +75,8 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const [commandHeard, setCommandHeard] = useState<RecognizedCoachCommand | null>(null);
   const [lastUsage, setLastUsage] = useState<CoachUsageTotals | null>(null);
   const [dailyBudget, setDailyBudget] = useState<CoachDailyBudget | null>(null);
+  const [connectedProvider, setConnectedProvider] = useState<CoachVoiceProvider | null>(null);
+  const [providerFallbackReason, setProviderFallbackReason] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
   const timerAudio = useTimerAudioCues();
   const commandHeardTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -244,6 +249,8 @@ export function useCoach(dayId: string | null): UseCoachResult {
 
     connectingRef.current = true;
     setError(null);
+    setConnectedProvider(null);
+    setProviderFallbackReason(null);
 
     await teardownRef.current;
     if (!overlayOpenRef.current || !dayId || limitBlockedRef.current) {
@@ -332,6 +339,12 @@ export function useCoach(dayId: string | null): UseCoachResult {
               }, 1_000);
             }
           },
+          onProviderConnected: (provider) => {
+            if (mountedRef.current) setConnectedProvider(provider);
+          },
+          onProviderFallback: (reason) => {
+            if (mountedRef.current) setProviderFallbackReason(reason);
+          },
         },
         {
           dailySpentUsd: budget?.spentUsd ?? dailySpentBaselineRef.current,
@@ -347,6 +360,8 @@ export function useCoach(dayId: string | null): UseCoachResult {
   }, [
     dayId,
     dailyBudget,
+    connectedProvider,
+    providerFallbackReason,
     ensureSession,
     getTimerState,
     applyTimerAction,
@@ -456,6 +471,8 @@ export function useCoach(dayId: string | null): UseCoachResult {
     commandHeard,
     lastUsage,
     dailyBudget,
+    connectedProvider,
+    providerFallbackReason,
     startSession,
     stopSession,
     toggleMute,

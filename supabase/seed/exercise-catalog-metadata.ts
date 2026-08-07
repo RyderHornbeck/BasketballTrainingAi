@@ -140,7 +140,7 @@ export const EXERCISE_CATALOG_METADATA: Record<
     coaching_notes: "Gather high, absorb contact, extend through the finish.",
     requires_both_sides: true,
   },
-  "Defensive Slides W/ Jumper": {
+  "Defensive Slides with Jumper": {
     description:
       "Start on the left block in a low defensive stance. Step 1: Defensive slide across the lane to the right block without crossing your feet. Step 2: Sprint to the right-wing mid-range spot and close out with a high hand. Step 3: Reset on offense at that spot and shoot the right-wing mid-range jumper. Complete the right-side set, then mirror every step to the left wing.",
     coaching_notes: "Stay low in slides, don't cross feet, contest with verticality.",
@@ -326,7 +326,7 @@ export const EXERCISE_CATALOG_METADATA: Record<
     coaching_notes: "Jab with purpose, one explosive dribble, pull up on balance.",
     requires_both_sides: true,
   },
-  "Jogging W/ Dribbling": {
+  "Jogging with Dribbling": {
     description:
       "Start at the baseline with the ball in your right hand. Step 1: Begin a light jog down the court. Step 2: Dribble at hip height while keeping your head up. Step 3: Change hands every few steps with a crossover or between-the-legs. Jog the full court dribbling with your right hand, jog back with your left hand, and repeat 3 times.",
     coaching_notes: "Head up, relaxed dribble at hip height, smooth hand changes.",
@@ -344,7 +344,7 @@ export const EXERCISE_CATALOG_METADATA: Record<
     coaching_notes: "Stay low on the gather, extend fully through the finish, use the glass.",
     requires_both_sides: true,
   },
-  "Lateral Dribble w/ Thru the Legs": {
+  "Lateral Dribble with Thru the Legs": {
     description:
       "Start at the top of the key with the ball in your right hand in a low stance. Step 1: Shuffle two steps to your right while dribbling. Step 2: Push the ball through your legs to your left hand. Step 3: Shuffle two steps left and push it back through your legs. Keep shuffling and going through your legs for 20 reps, then switch starting direction.",
     coaching_notes: "Stay low in the lateral slide, push the ball through hard, recover quickly.",
@@ -577,12 +577,6 @@ export const EXERCISE_CATALOG_METADATA: Record<
     description:
       "Start at half court with the ball. Step 1: Sprint full speed down the center of the court. Step 2: Drop your hips and stop suddenly on two feet behind the top-of-key three-point line. Step 3: Shoot the top-of-key three without drifting. Return to half court and repeat the same center shot.",
     coaching_notes: "Drop your hips on the stop, stick the landing, rise straight up.",
-    requires_both_sides: false,
-  },
-  "Spider Dribble (Flight23White Dribble)": {
-    description:
-      "Start at half court in a wide, low stance with the ball in front of you. Step 1: Tap the ball with your right hand in front of your right foot. Step 2: Tap it with your left hand in front of your left foot. Step 3: Tap it with your right hand behind your right foot, then left behind your left foot — keep all four taps going in a rhythm. Go for 30 seconds without stopping, rest, and do 3 sets.",
-    coaching_notes: "Wide base, quick taps with fingertips, keep the ball in front.",
     requires_both_sides: false,
   },
   "Spin Into Pullup": {

@@ -46,6 +46,8 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     timerDurationSeconds,
     commandHeard,
     dailyBudget,
+    connectedProvider,
+    providerFallbackReason,
     startSession,
     stopSession,
     toggleMute,
@@ -161,6 +163,13 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
                 {dayTitle}
               </Text>
             ) : null}
+            {connectedProvider ? (
+              <Text style={[styles.subtitle, { color: colors.textSecondary }]} numberOfLines={1}>
+                {connectedProvider === "assembly_inworld"
+                  ? "Voice: AssemblyAI + Inworld"
+                  : "Voice: Cartesia"}
+              </Text>
+            ) : null}
           </View>
 
           <Pressable
@@ -206,6 +215,12 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
                 : `${remainingBudgetPercent}% left today`}
             </Text>
           </View>
+        ) : null}
+        {providerFallbackReason ? (
+          <Text style={[styles.providerWarning, { color: colors.danger }]}>
+            AssemblyAI + Inworld could not connect. Using Cartesia instead.{" "}
+            {providerFallbackReason}
+          </Text>
         ) : null}
 
         <View style={styles.center}>
@@ -356,6 +371,12 @@ const styles = StyleSheet.create({
   budgetLabel: {
     fontSize: 12,
     fontWeight: "600",
+  },
+  providerWarning: {
+    fontSize: 12,
+    fontWeight: "600",
+    paddingHorizontal: 20,
+    paddingBottom: 8,
   },
   timerChip: {
     flexDirection: "row",

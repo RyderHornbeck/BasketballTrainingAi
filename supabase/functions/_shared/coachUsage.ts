@@ -4,16 +4,16 @@ export const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini";
 
 export const COACH_LIMITS = {
   /** One coach-credit pool across every workout in the user's local day. */
-  maxDailyCostUsd: 0.75,
+  maxDailyCostUsd: 0.85,
 } as const;
 
 export const COACH_DAILY_BUDGET_USD = COACH_LIMITS.maxDailyCostUsd;
 
 export const CARTESIA_RATES = {
-  /** Public direct-API billing units; override the USD conversion for the account plan. */
+  /** Scale-plan effective credit cost: $299 for 8 million monthly credits. */
   ink2CreditsPerAudioSecond: 3,
   sonic35CreditsPerCharacter: 1,
-  usdPerMillionCredits: 50,
+  usdPerMillionCredits: 37.375,
 } as const;
 
 export const RESPONSES_RATES = {

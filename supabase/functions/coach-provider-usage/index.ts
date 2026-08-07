@@ -5,7 +5,7 @@ import { estimateCartesiaCostUsd } from "../_shared/coachUsage.ts";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const USD_PER_MILLION_CREDITS = Number(
-  Deno.env.get("CARTESIA_USD_PER_MILLION_CREDITS") ?? 50
+  Deno.env.get("CARTESIA_USD_PER_MILLION_CREDITS") ?? 37.375
 );
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
@@ -122,7 +122,7 @@ Deno.serve(async (req: Request) => {
     recorded: true,
     daily_usage: {
       spent_usd: Number(latest?.spent_usd ?? 0),
-      budget_usd: Number(latest?.budget_usd ?? 0.75),
+      budget_usd: Number(latest?.budget_usd ?? 0.85),
       remaining_usd: Number(latest?.remaining_usd ?? 0),
     },
   });

@@ -347,7 +347,7 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   tool({
     name: "search_exercise_catalog",
     description:
-      "Search active exercises after required add permission. Result IDs are internal; present names only and never ask the athlete for an ID.",
+      "Search active exercises to offer options. After the athlete accepts or selects a displayed option by name or number, add that exact option directly without re-searching or asking another confirmation. Result IDs are internal; present names only and never ask the athlete for an ID.",
     capability: "recommendations",
     execution: "server",
     kind: "read_only",
@@ -363,7 +363,7 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   tool({
     name: "add_workout_exercise",
     description:
-      "Add one exercise returned by an authorized catalog search using its exact result name, only after the athlete confirms. Never ask the athlete for a catalog ID.",
+      "Add one exact displayed catalog exercise after the athlete accepts it or selects it by name or number. Do not re-search or ask another confirmation. Never ask the athlete for a catalog ID.",
     capability: "edits",
     execution: "server",
     kind: "mutation",

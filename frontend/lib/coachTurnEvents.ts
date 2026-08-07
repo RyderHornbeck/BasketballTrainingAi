@@ -30,6 +30,11 @@ export type CoachTurnStreamEvent =
       state_version: number;
       state_fingerprint: string;
       workout_context?: string | null;
+      daily_usage?: {
+        spent_usd: number;
+        budget_usd: number;
+        remaining_usd: number;
+      };
     }
   | { type: "error"; turn_id: string; error: string };
 
@@ -89,6 +94,7 @@ export function parseCoachTurnStreamEvent(value: unknown): CoachTurnStreamEvent 
       state_version: stateVersion,
       state_fingerprint: requiredString(event, "state_fingerprint"),
       workout_context: optionalNullableString(event, "workout_context"),
+      daily_usage: optionalDailyUsage(event.daily_usage),
     };
   }
   throw new Error(`Unknown coach turn stream event "${type}".`);
@@ -108,6 +114,25 @@ function requiredNumber(event: Record<string, unknown>, key: string): number {
     throw new Error(`Invalid coach turn stream ${key}.`);
   }
   return value;
+}
+
+function optionalDailyUsage(
+  value: unknown,
+): { spent_usd: number; budget_usd: number; remaining_usd: number } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const usage = value as Record<string, unknown>;
+  if (
+    typeof usage.spent_usd !== "number" ||
+    typeof usage.budget_usd !== "number" ||
+    typeof usage.remaining_usd !== "number"
+  ) {
+    return undefined;
+  }
+  return {
+    spent_usd: usage.spent_usd,
+    budget_usd: usage.budget_usd,
+    remaining_usd: usage.remaining_usd,
+  };
 }
 
 function requiredBoolean(event: Record<string, unknown>, key: string): boolean {

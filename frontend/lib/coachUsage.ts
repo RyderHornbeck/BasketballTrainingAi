@@ -2,10 +2,10 @@
 
 import { supabase } from "@/lib/supabase";
 
-export const COACH_DAILY_BUDGET_USD = 0.75;
+export const COACH_DAILY_BUDGET_USD = 0.85;
 
 export const COACH_LIMIT_MESSAGES = {
-  dailyBudgetExhausted: "Today's 75¢ coach credit is used up. It refills tomorrow.",
+  dailyBudgetExhausted: "Today's 85¢ coach credit is used up. It refills tomorrow.",
 } as const;
 
 export function isCoachLimitMessage(msg: string): boolean {

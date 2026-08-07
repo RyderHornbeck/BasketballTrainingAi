@@ -805,6 +805,18 @@ Deno.test("shooting context labels results far below the makes target", () => {
   );
 });
 
+Deno.test("workout kickoff asks Haiku to report the current drill without tools", () => {
+  assert(
+    COACH_SYSTEM_PROMPT.includes(
+      '"Let\'s start this workout," "start the workout," or equivalent kickoff language is a read-only request',
+    ) &&
+      COACH_SYSTEM_PROMPT.includes(
+        "Without calling any tool or changing state, state the current drill and set",
+      ),
+    "workout kickoff must be a context-only response rather than a tool action",
+  );
+});
+
 Deno.test("normalized realtime context preserves coach knowledge with less duplication", () => {
   const ctx = contextWithPartialShootingSet();
   const legacy = buildCompactContextSummary(ctx, {

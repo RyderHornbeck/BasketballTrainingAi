@@ -36,6 +36,14 @@ import {
   type InkTranscriptEvent,
 } from "@/lib/cartesia";
 import {
+  AssemblyRealtimeClient,
+  InworldTtsClient,
+} from "@/lib/assemblyInworld";
+import {
+  loadDeveloperCoachVoiceProvider,
+  type CoachVoiceProvider,
+} from "@/lib/coachVoiceProvider";
+import {
   streamCoachTurn,
   type CoachTurnStreamEvent,
 } from "@/lib/coachTurnStream";
@@ -170,6 +178,8 @@ export interface RealtimeCoachCallbacks {
   onUsage?: (totals: ReturnType<ReturnType<typeof createUsageTracker>["snapshot"]>) => void;
   onBudgetUpdate?: (spentUsd: number, budgetUsd: number) => void;
   onSessionEnded?: (reason: string) => void;
+  onProviderConnected?: (provider: CoachVoiceProvider) => void;
+  onProviderFallback?: (reason: string) => void;
 }
 
 export interface RecognizedCoachCommand {
@@ -399,6 +409,107 @@ type RnMediaStream = Awaited<ReturnType<WebRTCModule["mediaDevices"]["getUserMed
 type DuplexAudioModule = typeof import("expo-duplex-audio");
 type NativeEventSubscription = { remove(): void };
 
+type PcmInputFrame = {
+  data: string;
+  frames: number;
+  sampleRate: number;
+};
+
+/**
+ * Keeps the microphone open locally, but sends Ink only likely speech plus
+ * enough leading/trailing PCM for accurate first words and turn detection.
+ * Cartesia bills submitted audio duration, including silence.
+ */
+class InkAudioGate {
+  private readonly preRoll: PcmInputFrame[] = [];
+  private preRollFrames = 0;
+  private sending = false;
+  private providerTurnActive = false;
+  private trailingFrames = 0;
+  private noiseFloor = 220;
+  private consecutiveSpeechFrames = 0;
+
+  accept(frame: PcmInputFrame): PcmInputFrame[] {
+    const level = pcm16Rms(frame.data);
+    const speechThreshold = Math.max(420, this.noiseFloor * 2.5);
+    const isSpeech = level >= speechThreshold;
+    if (!isSpeech) {
+      // Learn the room noise only while idle; never let it grow quickly
+      // enough to suppress an athlete who starts speaking over a loud gym.
+      this.noiseFloor = this.noiseFloor * 0.985 + level * 0.015;
+      this.consecutiveSpeechFrames = 0;
+    } else {
+      this.consecutiveSpeechFrames += 1;
+    }
+
+    if (!this.sending) {
+      this.remember(frame);
+      // Two 20 ms speech frames avoid opening on a single gym impact while
+      // pre-roll retains those first 40 ms once actual speech is confirmed.
+      if (!isSpeech || this.consecutiveSpeechFrames < 2) return [];
+      this.sending = true;
+      this.trailingFrames = Math.round(frame.sampleRate * 1.25);
+      const buffered = this.preRoll.splice(0);
+      this.preRollFrames = 0;
+      return buffered;
+    }
+
+    // Once Ink has acknowledged the turn, it must receive continuous PCM
+    // until its own turn.end event. Stopping the silent tail early leaves the
+    // provider turn open and causes the next utterance to be appended to it.
+    if (this.providerTurnActive) return [frame];
+
+    if (isSpeech) {
+      // Forward actual captured silence longer than Ink's 1.1 s timeout.
+      // A WebSocket gap is not a dependable substitute for silent PCM.
+      this.trailingFrames = Math.round(frame.sampleRate * 1.25);
+    } else {
+      this.trailingFrames -= frame.frames;
+    }
+    if (this.trailingFrames <= 0) {
+      this.sending = false;
+      this.trailingFrames = 0;
+    }
+    return [frame];
+  }
+
+  endTurn(): void {
+    this.sending = false;
+    this.providerTurnActive = false;
+    this.trailingFrames = 0;
+    this.consecutiveSpeechFrames = 0;
+    this.preRoll.length = 0;
+    this.preRollFrames = 0;
+  }
+
+  providerTurnStarted(): void {
+    this.providerTurnActive = true;
+  }
+
+  private remember(frame: PcmInputFrame): void {
+    this.preRoll.push(frame);
+    this.preRollFrames += frame.frames;
+    const maxFrames = Math.round(frame.sampleRate * 0.45);
+    while (this.preRollFrames > maxFrames && this.preRoll.length > 1) {
+      this.preRollFrames -= this.preRoll.shift()?.frames ?? 0;
+    }
+  }
+}
+
+function pcm16Rms(base64Pcm: string): number {
+  if (typeof globalThis.atob !== "function") return Number.POSITIVE_INFINITY;
+  const binary = globalThis.atob(base64Pcm);
+  if (binary.length < 2) return 0;
+  let squareSum = 0;
+  const samples = Math.floor(binary.length / 2);
+  for (let index = 0; index + 1 < binary.length; index += 2) {
+    const value = (binary.charCodeAt(index) | (binary.charCodeAt(index + 1) << 8));
+    const signed = value >= 0x8000 ? value - 0x10000 : value;
+    squareSum += signed * signed;
+  }
+  return Math.sqrt(squareSum / samples);
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   const block = 0x8000;
@@ -480,7 +591,7 @@ export class RealtimeCoachSession {
   private transcriptRouteQueue: Promise<void> = Promise.resolve();
   private connectionGeneration = 0;
   private dailySpentBaseline = 0;
-  private dailyBudgetUsd = 0.75;
+  private dailyBudgetUsd = 0.85;
   private usageTracker: ReturnType<typeof createUsageTracker> | null = null;
   private handledToolCalls = new Set<string>();
   private loggedUsageSessionKeys = new Set<string>();
@@ -491,11 +602,20 @@ export class RealtimeCoachSession {
   private exactCompletedShotReply: string | null = null;
   private lastDeterministicReply: string | null = null;
   private cartesiaActive = false;
+  private voiceProvider: CoachVoiceProvider = "cartesia";
+  private assemblyInworldActive = false;
+  private assemblyClient: AssemblyRealtimeClient | null = null;
+  private inworldClient: InworldTtsClient | null = null;
+  private inworldVoiceId = "";
+  private inworldContextId: string | null = null;
+  private assemblySpeechStartDeferred = false;
+  private lastAssemblyCoachSpeech: string | null = null;
   private inkClient: CartesiaInkClient | null = null;
   private sonicClient: CartesiaSonicClient | null = null;
   private sonicContext: CartesiaSonicContext | null = null;
   private duplexAudio: DuplexAudioModule | null = null;
   private duplexSubscriptions: NativeEventSubscription[] = [];
+  private inkAudioGate: InkAudioGate | null = null;
   private turnAbortController: AbortController | null = null;
   private stateVersion = 0;
   private stateFingerprint = "";
@@ -540,7 +660,7 @@ export class RealtimeCoachSession {
     this.connecting = true;
     this.callbacks = callbacks;
     this.dailySpentBaseline = options?.dailySpentUsd ?? 0;
-    this.dailyBudgetUsd = options?.dailyBudgetUsd ?? 0.75;
+    this.dailyBudgetUsd = options?.dailyBudgetUsd ?? 0.85;
 
     if (this.dailySpentBaseline >= this.dailyBudgetUsd) {
       this.connecting = false;
@@ -592,14 +712,49 @@ export class RealtimeCoachSession {
     this.providerUsageSequence = 0;
     this.providerUsagePromise = null;
     this.shotUndoStack = [];
+    this.assemblySpeechStartDeferred = false;
+    this.lastAssemblyCoachSpeech = null;
     this.usageTracker = createUsageTracker(this.model);
     callbacks.onStatus("connecting");
 
     try {
+      this.voiceProvider = await loadDeveloperCoachVoiceProvider();
+      if (this.voiceProvider === "assembly_inworld") {
+        try {
+        await this.connectAssemblyInworld(generation);
+        } catch (assemblyError) {
+          // The alternate route is an opt-in developer experiment. A failed
+          // warm-up must not leave a user without the stable default route.
+          console.warn("AssemblyAI/Inworld initialization failed; falling back to Cartesia.", assemblyError);
+          this.assemblyClient?.close();
+          this.inworldClient?.close();
+          this.assemblyClient = null;
+          this.inworldClient = null;
+          for (const subscription of this.duplexSubscriptions) subscription.remove();
+          this.duplexSubscriptions = [];
+          await this.duplexAudio?.stopSessionAsync().catch(() => undefined);
+          this.duplexAudio = null;
+          this.inkAudioGate = null;
+          this.assemblyInworldActive = false;
+          this.voiceProvider = "cartesia";
+          this.callbacks?.onProviderFallback?.(
+            assemblyError instanceof Error
+              ? assemblyError.message
+              : "AssemblyAI/Inworld could not connect.",
+          );
+          await this.connectCartesia(generation);
+        }
+        if (generation === this.connectionGeneration && this.active) {
+          this.callbacks?.onStatus(this.muted ? "muted" : "listening");
+          this.callbacks?.onProviderConnected?.(this.voiceProvider);
+        }
+        return;
+      }
       if (process.env.EXPO_PUBLIC_COACH_VOICE_TRANSPORT !== "openai_realtime") {
         await this.connectCartesia(generation);
         if (generation === this.connectionGeneration && this.active) {
           this.callbacks?.onStatus(this.muted ? "muted" : "listening");
+          this.callbacks?.onProviderConnected?.("cartesia");
         }
         return;
       }
@@ -951,6 +1106,7 @@ export class RealtimeCoachSession {
       },
       onTurnStart: (event) => {
         logInkLifecycle("start", event.requestId);
+        this.inkAudioGate?.providerTurnStarted();
         if (this.playbackActive || this.generationActive) {
           // Do not cut Coach off merely because its own output leaked into
           // the microphone. A real barge-in is accepted on final transcript.
@@ -967,7 +1123,10 @@ export class RealtimeCoachSession {
         logInkLifecycle("resume", event.requestId);
         this.cancelCartesiaSpeculation("turn_resumed");
       },
-      onTurnEnd: routeInkTurn,
+      onTurnEnd: (event) => {
+        this.inkAudioGate?.endTurn();
+        routeInkTurn(event);
+      },
       onError: (providerError) => {
         if (generation !== this.connectionGeneration) return;
         console.error("Cartesia Ink error:", providerError);
@@ -996,6 +1155,7 @@ export class RealtimeCoachSession {
     }
     this.cartesiaActive = true;
     this.usageTracker = null;
+    this.inkAudioGate = new InkAudioGate();
     this.duplexSubscriptions = [
       duplexAudio.addAudioInputListener((event) => {
         if (
@@ -1004,8 +1164,10 @@ export class RealtimeCoachSession {
           !this.muted &&
           this.inkClient?.isOpen
         ) {
-          this.cartesiaSttSeconds += event.frames / event.sampleRate;
-          this.inkClient.sendAudio(event.data);
+          for (const frame of this.inkAudioGate?.accept(event) ?? []) {
+            this.cartesiaSttSeconds += frame.frames / frame.sampleRate;
+            this.inkClient.sendAudio(frame.data);
+          }
         }
       }),
       duplexAudio.addPlaybackStateListener((event) => {
@@ -1021,6 +1183,220 @@ export class RealtimeCoachSession {
         if (generation !== this.connectionGeneration) return;
         console.error("Duplex audio error:", audioError);
         this.callbacks?.onError(audioError.message);
+      }),
+    ];
+  }
+
+  private async connectAssemblyInworld(generation: number): Promise<void> {
+    const dayId = this.dayId;
+    const sessionKey = this.sessionKey;
+    if (!dayId || !sessionKey) throw new Error("Coach session is not active.");
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("realtime_coach_voice")
+      .maybeSingle();
+    const voicePersona = getCoachPersonaId(profile?.realtime_coach_voice);
+    const { data, error } = await supabase.functions.invoke<{
+      error?: string;
+      provider?: {
+        assembly?: { access_token?: string };
+        inworld?: { access_token?: string };
+      };
+      voice?: { provider_voice_id?: string };
+      workout_context?: string | RealtimeWorkoutState;
+      state?: { version?: number };
+      daily_usage?: { spent_usd: number; budget_usd: number; remaining_usd: number };
+    }>("coach-assembly-session", {
+      body: {
+        day_id: dayId,
+        session_key: sessionKey,
+        voice_persona: voicePersona,
+        state_version: this.stateVersion,
+        timer: this.timer,
+        conversation_summary: this.conversationSummary,
+      },
+    });
+    if (error) throw new Error(await edgeFunctionErrorMessage(error));
+    const assemblyToken = data?.provider?.assembly?.access_token;
+    const inworldToken = data?.provider?.inworld?.access_token;
+    const voiceId = data?.voice?.provider_voice_id;
+    if (!assemblyToken || !inworldToken || !voiceId) {
+      throw new Error(data?.error ?? "AssemblyAI/Inworld voice session was not created.");
+    }
+    if (data.daily_usage) {
+      this.dailySpentBaseline = data.daily_usage.spent_usd;
+      this.dailyBudgetUsd = data.daily_usage.budget_usd;
+      this.callbacks?.onBudgetUpdate?.(this.dailySpentBaseline, this.dailyBudgetUsd);
+    }
+    this.stateVersion = Math.max(this.stateVersion, data.state?.version ?? 0);
+    this.inworldVoiceId = voiceId;
+    this.updateWorkoutState(
+      typeof data.workout_context === "string"
+        ? data.workout_context
+        : JSON.stringify(data.workout_context ?? null),
+    );
+
+    const duplexAudio = await import("expo-duplex-audio");
+    const permission = await duplexAudio.requestPermissionsAsync();
+    if (!permission.granted) throw new Error("Microphone permission is required for Coach.");
+    await duplexAudio.startSessionAsync({
+      sampleRate: 16000,
+      frameDurationMs: 20,
+      speaker: true,
+      muted: this.muted,
+    });
+    if (generation !== this.connectionGeneration || !this.active) {
+      await duplexAudio.stopSessionAsync();
+      return;
+    }
+    this.duplexAudio = duplexAudio;
+
+    const assembly = new AssemblyRealtimeClient({
+      accessToken: assemblyToken,
+      keyterms: buildInkKeyterms(
+        COACH_INK_KEYTERMS,
+        this.orderedDrills().map((drill) => drill.name ?? "").filter(Boolean),
+      ),
+      prompt:
+        "Noisy basketball workout. Keep make, miss, made, and missed distinct. Transcribe basketball commands accurately.",
+      agentContext: this.lastDeterministicReply ?? undefined,
+      // The active duplex session routes Coach through the speaker. Far-field
+      // Voice Focus is therefore the correct default; a future headset route
+      // can explicitly select near-field when it controls the audio route.
+      voiceFocus: "far-field",
+      onSpeechStarted: () => {
+        if (this.playbackActive || this.generationActive) {
+          // Wait for transcript evidence before treating an Assembly detection
+          // as a barge-in; speaker playback otherwise becomes a user turn.
+          this.assemblySpeechStartDeferred = true;
+          return;
+        }
+        this.handleAssemblySpeechStart(generation);
+      },
+      onPartial: (transcript) => {
+        if (
+          this.assemblySpeechStartDeferred &&
+          !isLikelyPlaybackEcho(transcript, this.lastAssemblyCoachSpeech)
+        ) {
+          this.assemblySpeechStartDeferred = false;
+          this.handleAssemblySpeechStart(generation);
+        }
+        this.callbacks?.onCommandHeard?.({
+          turnId: `assembly-partial-${Date.now()}`,
+          label: `Heard: ${transcript}`.slice(0, 90),
+          state: "recognized",
+        });
+      },
+      onTurn: (turn) => {
+        if (this.assemblySpeechStartDeferred) {
+          this.assemblySpeechStartDeferred = false;
+          if (isLikelyPlaybackEcho(turn.transcript, this.lastAssemblyCoachSpeech)) {
+            return;
+          }
+          this.handleAssemblySpeechStart(generation);
+        }
+        const itemId = `assembly-${turn.turnOrder}-${Date.now()}`;
+        this.speechStoppedAtByItem.set(itemId, Date.now());
+        this.transcriptRouteQueue = this.transcriptRouteQueue
+          .then(() => this.routeTranscribedTurn(turn.transcript, itemId, generation))
+          .catch((routeError) => {
+            console.error("Failed to route AssemblyAI transcript:", routeError);
+          });
+      },
+      onError: (providerError) => {
+        console.error("AssemblyAI error:", providerError);
+        if (generation === this.connectionGeneration) this.callbacks?.onError(providerError.message);
+      },
+      onClose: (providerError) => {
+        if (generation === this.connectionGeneration && this.active) {
+          this.callbacks?.onError(providerError.message);
+          // A provider protocol/auth close cannot heal by repeatedly
+          // recreating the same session. Surface it so the athlete can retry
+          // after configuration is fixed instead of cycling indefinitely.
+          void this.disconnect("connect_failed").then(() => {
+            this.callbacks?.onStatus("error");
+          });
+        }
+      },
+    });
+    const inworld = new InworldTtsClient({
+      accessToken: inworldToken,
+      voiceId,
+      onAudio: (audio, contextId) => {
+        if (
+          generation !== this.connectionGeneration ||
+          contextId !== this.inworldContextId ||
+          !this.active
+        ) return;
+        this.playbackEnqueue = this.playbackEnqueue
+          .then(() => this.duplexAudio?.enqueuePlaybackAsync(audio))
+          .then(() => undefined)
+          .catch((playbackError) => console.error("Could not enqueue Inworld speech:", playbackError));
+      },
+      onFirstAudio: () => {
+        this.playbackActive = true;
+        this.updateStatus();
+      },
+      onDone: (contextId) => {
+        if (contextId !== this.inworldContextId) return;
+        this.generationActive = false;
+        this.updateStatus();
+      },
+      onError: (providerError) => {
+        console.error("Inworld TTS error:", providerError);
+        if (generation === this.connectionGeneration) this.callbacks?.onError(providerError.message);
+      },
+      onClose: () => undefined,
+    });
+    this.assemblyClient = assembly;
+    this.inworldClient = inworld;
+    try {
+      await assembly.connect();
+    } catch (error) {
+      throw new Error(
+        `AssemblyAI streaming connection failed: ${
+          error instanceof Error ? error.message : "unknown error"
+        }`,
+      );
+    }
+    try {
+      await inworld.connect();
+    } catch (error) {
+      assembly.close();
+      throw new Error(
+        `Inworld TTS connection failed: ${
+          error instanceof Error ? error.message : "unknown error"
+        }`,
+      );
+    }
+    if (generation !== this.connectionGeneration || !this.active) {
+      assembly.close();
+      inworld.close();
+      await duplexAudio.stopSessionAsync();
+      return;
+    }
+    this.assemblyInworldActive = true;
+    this.inkAudioGate = new InkAudioGate();
+    this.duplexSubscriptions = [
+      duplexAudio.addAudioInputListener((event) => {
+        if (
+          generation === this.connectionGeneration &&
+          this.active &&
+          !this.muted &&
+          this.assemblyClient?.isOpen
+        ) {
+          for (const frame of this.inkAudioGate?.accept(event) ?? []) {
+            this.assemblyClient.sendAudio(frame.data);
+          }
+        }
+      }),
+      duplexAudio.addPlaybackStateListener((event) => {
+        if (generation !== this.connectionGeneration) return;
+        this.playbackActive = event.state === "playing";
+        this.updateStatus();
+      }),
+      duplexAudio.addErrorListener((audioError) => {
+        if (generation === this.connectionGeneration) this.callbacks?.onError(audioError.message);
       }),
     ];
   }
@@ -2376,6 +2752,8 @@ export class RealtimeCoachSession {
         } else {
           await this.requestCartesiaModelTurn(transcript, turn);
         }
+      } else if (this.assemblyInworldActive) {
+        await this.requestAssemblyModelTurn(transcript, turn);
       } else {
         this.requestResponse(
           this.authoritativeTurnInstructions(),
@@ -2428,6 +2806,8 @@ export class RealtimeCoachSession {
         });
         if (this.cartesiaActive) {
           await this.requestCartesiaModelTurn(transcript, turn);
+        } else if (this.assemblyInworldActive) {
+          await this.requestAssemblyModelTurn(transcript, turn);
         } else {
           this.requestResponse(
             this.authoritativeTurnInstructions(),
@@ -2486,7 +2866,8 @@ export class RealtimeCoachSession {
 
   mute(): void {
     this.muted = true;
-    if (this.cartesiaActive) {
+    this.inkAudioGate?.endTurn();
+    if (this.cartesiaActive || this.assemblyInworldActive) {
       void this.duplexAudio?.setMutedAsync(true).catch((error) => {
         console.warn("Could not mute duplex audio:", error);
       });
@@ -2501,7 +2882,8 @@ export class RealtimeCoachSession {
 
   unmute(): void {
     this.muted = false;
-    if (this.cartesiaActive) {
+    this.inkAudioGate?.endTurn();
+    if (this.cartesiaActive || this.assemblyInworldActive) {
       void this.duplexAudio?.setMutedAsync(false).catch((error) => {
         console.warn("Could not unmute duplex audio:", error);
       });
@@ -2575,8 +2957,15 @@ export class RealtimeCoachSession {
       this.sonicContext = null;
       this.inkClient?.close();
       this.sonicClient?.close();
+      this.assemblyClient?.close();
+      this.inworldClient?.close();
       this.inkClient = null;
       this.sonicClient = null;
+      this.assemblyClient = null;
+      this.inworldClient = null;
+      this.inworldContextId = null;
+      this.assemblySpeechStartDeferred = false;
+      this.lastAssemblyCoachSpeech = null;
       for (const subscription of this.duplexSubscriptions) subscription.remove();
       this.duplexSubscriptions = [];
       if (this.duplexAudio) {
@@ -2584,8 +2973,12 @@ export class RealtimeCoachSession {
         await this.duplexAudio.stopSessionAsync().catch(() => undefined);
       }
       this.duplexAudio = null;
+      this.inkAudioGate = null;
       this.cartesiaActive = false;
+      this.assemblyInworldActive = false;
+      this.voiceProvider = "cartesia";
       this.cartesiaVoiceId = "";
+      this.inworldVoiceId = "";
       this.ttsInputBuffer = "";
       this.ttsSafetyBlocked = false;
       this.playbackEnqueue = Promise.resolve();
@@ -2879,6 +3272,170 @@ export class RealtimeCoachSession {
     this.callbacks?.onStatus(this.muted ? "muted" : "listening");
   }
 
+  private handleAssemblySpeechStart(generation: number): void {
+    if (generation !== this.connectionGeneration || !this.active) return;
+    this.cancelCartesiaSpeculation("new_speech");
+    this.latestUserTranscript = null;
+    this.speechEpoch += 1;
+    this.playbackGeneration += 1;
+    this.turnAbortController?.abort();
+    this.turnAbortController = null;
+    const contextId = this.inworldContextId;
+    this.inworldContextId = null;
+    if (contextId) {
+      this.inworldClient?.cancel(contextId);
+    }
+    this.ttsInputBuffer = "";
+    this.generationActive = false;
+    this.playbackActive = false;
+    void this.duplexAudio?.clearPlaybackAsync().catch(() => undefined);
+    this.callbacks?.onStatus(this.muted ? "muted" : "listening");
+  }
+
+  private async speakInworldText(text: string, speechEpoch: number): Promise<void> {
+    if (!text.trim() || speechEpoch !== this.speechEpoch || !this.active) return;
+    const inworld = this.inworldClient;
+    if (!inworld?.isOpen) throw new Error("Inworld speech is not connected.");
+    const contextId = `${this.sessionKey ?? "session"}:${speechEpoch}:${Date.now()}`.slice(0, 120);
+    this.inworldContextId = contextId;
+    this.generationActive = true;
+    this.updateStatus();
+    inworld.createContext(contextId);
+    inworld.pushText(contextId, text, true);
+    this.lastAssemblyCoachSpeech = text;
+    this.assemblyClient?.updateAgentContext(text);
+  }
+
+  private pushInworldChunk(text: string, speechEpoch: number, final = false): void {
+    if (!text.trim() || speechEpoch !== this.speechEpoch || !this.active) return;
+    const inworld = this.inworldClient;
+    if (!inworld?.isOpen) throw new Error("Inworld speech is not connected.");
+    let contextId = this.inworldContextId;
+    if (!contextId) {
+      contextId = `${this.sessionKey ?? "session"}:${speechEpoch}:${Date.now()}`.slice(0, 120);
+      this.inworldContextId = contextId;
+      this.generationActive = true;
+      this.updateStatus();
+      inworld.createContext(contextId);
+    }
+    inworld.pushText(contextId, text, final);
+  }
+
+  private applyAssemblyTurnEvent(
+    event: CoachTurnStreamEvent,
+    turnId: string,
+    speechEpoch: number,
+  ): void {
+    if (
+      !this.active ||
+      speechEpoch !== this.speechEpoch ||
+      event.turn_id !== turnId
+    ) return;
+    if ("state_version" in event) this.stateVersion = event.state_version;
+    if (event.type === "turn_started") {
+      this.model = event.model;
+      this.stateFingerprint = event.state_fingerprint;
+      return;
+    }
+    if (event.type === "text_delta") {
+      this.ttsInputBuffer += event.delta;
+      const drained = drainSonicTextChunks(this.ttsInputBuffer, false);
+      this.ttsInputBuffer = drained.remainder;
+      for (const chunk of drained.chunks) {
+        const gate = gateCoachSpeechText(chunk, true);
+        if (gate.status !== "safe") continue;
+        try {
+          this.pushInworldChunk(gate.speech, speechEpoch);
+        } catch (error) {
+          if (speechEpoch === this.speechEpoch) this.callbacks?.onError(
+            error instanceof Error ? error.message : "Coach speech failed.",
+          );
+        }
+      }
+      return;
+    }
+    if (event.type === "tool_result") {
+      const action = event.client_action as ClientTimerAction | null;
+      if (action && ["start_timer", "pause_timer", "resume_timer", "stop_timer"].includes(action.type)) {
+        this.callbacks?.onTimerAction(action);
+      }
+      this.updateWorkoutState(event.workout_context);
+      if (event.db_changed) emitWorkoutUpdated("coach");
+      return;
+    }
+    if (event.type === "turn_completed") {
+      this.stateFingerprint = event.state_fingerprint;
+      this.updateWorkoutState(event.workout_context);
+      if (event.daily_usage) {
+        this.dailySpentBaseline = event.daily_usage.spent_usd;
+        this.dailyBudgetUsd = event.daily_usage.budget_usd;
+        this.callbacks?.onBudgetUpdate?.(event.daily_usage.spent_usd, event.daily_usage.budget_usd);
+      }
+      const drained = drainSonicTextChunks(this.ttsInputBuffer, true);
+      this.ttsInputBuffer = "";
+      for (const chunk of drained.chunks) {
+        const gate = gateCoachSpeechText(chunk, true);
+        if (gate.status === "safe") this.pushInworldChunk(gate.speech, speechEpoch);
+      }
+      if (this.inworldContextId) this.inworldClient?.finish(this.inworldContextId);
+      return;
+    }
+    if (event.type === "error") throw new Error(event.error);
+  }
+
+  private async requestAssemblyModelTurn(
+    transcript: string,
+    turn: RoutedCoachTurn,
+  ): Promise<void> {
+    const dayId = this.dayId;
+    const sessionKey = this.sessionKey;
+    if (!dayId || !sessionKey) throw new Error("Coach session is not active.");
+    const speechEpoch = turn.speechEpoch;
+    const controller = new AbortController();
+    this.turnAbortController?.abort();
+    this.turnAbortController = controller;
+    this.generationActive = true;
+    this.updateStatus();
+    let responseText = "";
+    try {
+      await streamCoachTurn({
+        dayId,
+        sessionKey,
+        turnId: turn.requestId,
+        transcript,
+        stateVersion: this.stateVersion,
+        conversationSummary: this.conversationSummary,
+        signal: controller.signal,
+        onEvent: (event) => {
+          if (event.type === "text_delta") responseText += event.delta;
+          this.applyAssemblyTurnEvent(event, turn.requestId, speechEpoch);
+        },
+      });
+      if (speechEpoch !== this.speechEpoch) return;
+      if (responseText.trim()) {
+        const gate = gateCoachSpeechText(responseText.trim(), true);
+        if (gate.status === "safe") {
+          this.conversationSummary = appendConversationTurn(
+            this.conversationSummary,
+            transcript,
+            gate.speech,
+          );
+          this.callbacks?.onConversationSummary?.(this.conversationSummary);
+          this.lastAssemblyCoachSpeech = gate.speech;
+          this.assemblyClient?.updateAgentContext(gate.speech);
+        }
+      }
+      turn.backendCompletedAt = Date.now();
+      this.logVoiceMetric(turn, "backend_complete");
+    } finally {
+      if (this.turnAbortController === controller) this.turnAbortController = null;
+      if (speechEpoch === this.speechEpoch) {
+        this.generationActive = false;
+        this.updateStatus();
+      }
+    }
+  }
+
   private createSonicContext(
     speechEpoch: number,
     turn?: RoutedCoachTurn
@@ -3150,6 +3707,14 @@ export class RealtimeCoachSession {
     if (event.type === "turn_completed") {
       this.stateFingerprint = event.state_fingerprint;
       this.updateWorkoutState(event.workout_context);
+      if (event.daily_usage) {
+        this.dailySpentBaseline = event.daily_usage.spent_usd;
+        this.dailyBudgetUsd = event.daily_usage.budget_usd;
+        this.callbacks?.onBudgetUpdate?.(
+          event.daily_usage.spent_usd,
+          event.daily_usage.budget_usd,
+        );
+      }
       this.flushSonicText(true, turn);
       return;
     }
@@ -3385,6 +3950,12 @@ export class RealtimeCoachSession {
       this.sonicAudioEnqueuedEpoch = null;
       this.cartesiaTtsCharacters += speech.length;
       context.finish(speech);
+      return;
+    }
+    if (this.assemblyInworldActive) {
+      const speechGate = gateCoachSpeechText(text, true);
+      if (speechGate.status !== "safe") return;
+      await this.speakInworldText(speechGate.speech, speechEpoch);
       return;
     }
     this.requestResponse(`Say exactly: ${JSON.stringify(text)}`, true);

@@ -27,7 +27,7 @@ import {
   generatedResponseTools,
   validateCoachToolArguments,
 } from "../_shared/generated/coachTools.ts";
-import { estimateAnthropicCostUsd } from "../_shared/coachUsage.ts";
+import { COACH_LIMITS, estimateAnthropicCostUsd } from "../_shared/coachUsage.ts";
 import {
   aiDataConsentRequiredBody,
   hasCurrentAIDataConsent,
@@ -40,16 +40,6 @@ const MAX_TOOL_ROUNDS = 4;
 const MAX_TOOL_CALLS = 4;
 const MAX_PROVIDER_FORMAT_RETRIES = 1;
 const ANTHROPIC_TIMEOUT_MS = 15_000;
-
-function defer(promise: Promise<unknown>) {
-  const edgeRuntime = (globalThis as unknown as {
-    EdgeRuntime?: { waitUntil(promise: Promise<unknown>): void };
-  }).EdgeRuntime;
-  if (edgeRuntime?.waitUntil) edgeRuntime.waitUntil(promise);
-  else {void promise.catch((error) =>
-      console.error("deferred coach task failed:", error)
-    );}
-}
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -605,56 +595,69 @@ Deno.serve(async (req: Request) => {
           })
           .eq("id", claimedTurn.id);
       }
+      let dailyUsage: {
+        spent_usd: number;
+        budget_usd: number;
+        remaining_usd: number;
+      } | null = null;
+      if (usageEvents.length && claimedTurn) {
+        for (const [index, usage] of usageEvents.entries()) {
+          const inputTokens = Number(usage.input_tokens ?? 0);
+          const outputTokens = Number(usage.output_tokens ?? 0);
+          const cacheCreationInputTokens = Number(
+            usage.cache_creation_input_tokens ?? 0,
+          );
+          const cacheReadInputTokens = Number(
+            usage.cache_read_input_tokens ?? 0,
+          );
+          const { data, error } = await supabase.rpc("record_coach_provider_metric", {
+            p_user_id: userId,
+            p_session_id: session.id,
+            p_day_id: turn.dayId,
+            p_turn_id: claimedTurn.id,
+            p_provider: "anthropic",
+            p_provider_request_id: `${turn.turnId}:messages:${index}`,
+            p_metric: "messages_tokens",
+            p_quantity: Math.max(
+              0,
+              inputTokens +
+                outputTokens +
+                cacheCreationInputTokens +
+                cacheReadInputTokens,
+            ),
+            p_unit: "tokens",
+            p_estimated_cost_usd: estimateAnthropicCostUsd({
+              model,
+              inputTokens,
+              outputTokens,
+              cacheCreationInputTokens,
+              cacheReadInputTokens,
+            }),
+            p_metadata: {
+              ...usage,
+              prompt_cache_ttl: "5m",
+              stable_prefix_cache_breakpoint: true,
+            },
+          });
+          if (error) throw error;
+          const usageRow = Array.isArray(data) ? data[0] : data;
+          if (usageRow) {
+            dailyUsage = {
+              spent_usd: Number(usageRow.spent_usd ?? 0),
+              budget_usd: Number(usageRow.budget_usd ?? COACH_LIMITS.maxDailyCostUsd),
+              remaining_usd: Number(usageRow.remaining_usd ?? 0),
+            };
+          }
+        }
+      }
       await send({
         type: "turn_completed",
         turn_id: turn.turnId,
         state_version: nextStateVersion,
         state_fingerprint: finalFingerprint,
         workout_context: finalCompact,
+        daily_usage: dailyUsage,
       });
-      if (usageEvents.length && claimedTurn) {
-        defer((async () => {
-          for (const [index, usage] of usageEvents.entries()) {
-            const inputTokens = Number(usage.input_tokens ?? 0);
-            const outputTokens = Number(usage.output_tokens ?? 0);
-            const cacheCreationInputTokens = Number(
-              usage.cache_creation_input_tokens ?? 0,
-            );
-            const cacheReadInputTokens = Number(
-              usage.cache_read_input_tokens ?? 0,
-            );
-            await supabase.rpc("record_coach_provider_metric", {
-              p_user_id: userId,
-              p_session_id: session.id,
-              p_day_id: turn.dayId,
-              p_turn_id: claimedTurn.id,
-              p_provider: "anthropic",
-              p_provider_request_id: `${turn.turnId}:messages:${index}`,
-              p_metric: "messages_tokens",
-              p_quantity: Math.max(
-                0,
-                inputTokens +
-                  outputTokens +
-                  cacheCreationInputTokens +
-                  cacheReadInputTokens,
-              ),
-              p_unit: "tokens",
-              p_estimated_cost_usd: estimateAnthropicCostUsd({
-                model,
-                inputTokens,
-                outputTokens,
-                cacheCreationInputTokens,
-                cacheReadInputTokens,
-              }),
-              p_metadata: {
-                ...usage,
-                prompt_cache_ttl: "5m",
-                stable_prefix_cache_breakpoint: true,
-              },
-            });
-          }
-        })());
-      }
     } catch (error) {
       const aborted = req.signal.aborted ||
         (error instanceof DOMException && error.name === "AbortError");

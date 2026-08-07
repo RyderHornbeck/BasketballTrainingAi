@@ -10,72 +10,55 @@ import { SafeAreaView } from "react-native-safe-area-context";
 const GUIDE_SECTIONS = [
   {
     icon: "headset-outline" as const,
-    title: "Best voice experience",
+    title: "Talk to Coach",
     description:
-      "Streamed voice coaching needs a decent-to-good, stable internet connection. Bluetooth headphones give the best experience; connect them before opening Coach and speak clearly.",
+      "Use headphones when you can. Say one thing at a time.",
     examples: [
-      "Use a decent-to-good Wi-Fi or cellular connection.",
-      "Connect Bluetooth headphones so the coach audio does not feed back into your microphone.",
-      "Speak clearly and give one result, question, or instruction at a time.",
-      "You can interrupt while Coach is talking. Coach will stop its original response and begin responding to what you are saying now.",
-      "If you want the complete original answer, let Coach finish before speaking again.",
+      '"Stop talking."',
+      '"What’s next?"',
+      '"Explain this drill."',
     ],
   },
   {
     icon: "basketball-outline" as const,
-    title: "Log shots and sets",
+    title: "Log your shots",
     description:
-      "Court Coach saves results to the current set unless you name another drill or set.",
+      "Coach logs shots in your current set.",
     examples: [
-      '"I made 10 shots."',
-      '"I made 8 out of 10 on set two."',
-      '"Undo that last shot."',
-      '"Mark set two complete."',
-      '"Reopen set one."',
+      '"Make." or "I made it."',
+      '"Miss." or "I missed."',
+      '"I made 8 out of 10."',
+      '"Mark this set complete."',
     ],
   },
   {
     icon: "create-outline" as const,
-    title: "Change the workout",
+    title: "Change your workout",
     description:
-      "Ask for recommendations based on your completed sets, add drills for a specific skill, remove drills, change the remaining workout time, or save notes.",
+      "Add, remove, or adjust drills with your voice.",
     examples: [
-      '"What drills would you recommend for me?"',
-      '"Based on my performance today, add drills to my workout that you think I need."',
-      '"Could you add ball-handling drills that focus on between-the-legs moves?"',
       '"Add a cone dribbling drill."',
       '"Remove this drill."',
+      '"Make this workout 10 minutes shorter."',
       '"Save a note that my left hand felt weak."',
     ],
   },
   {
     icon: "checkmark-done-outline" as const,
-    title: "Complete or skip drills",
+    title: "Move through drills",
     description:
-      "Completing saves the drill as done. Skipping moves you forward without changing its results.",
+      "Finish a set, skip ahead, or go back anytime.",
     examples: [
-      '"I finished this drill."',
-      '"Reopen this drill."',
+      '"I’m done with this set."',
       '"Skip this drill and go to the next one."',
-    ],
-  },
-  {
-    icon: "navigate-outline" as const,
-    title: "Move around your workout",
-    description:
-      "Ask about your position or move to any drill by its name or place in the workout.",
-    examples: [
-      '"What’s next?"',
-      '"Go to the form shooting drill."',
       '"Go back to the previous drill."',
-      '"How many drills do I have left?"',
     ],
   },
   {
     icon: "timer-outline" as const,
-    title: "Control the timer",
+    title: "Use a timer",
     description:
-      "For timed drills, Court Coach can use the set’s planned duration or a duration you choose.",
+      "Start, pause, or stop a timer for timed drills.",
     examples: [
       '"Start the timer for this set."',
       '"Start a two-minute timer."',
@@ -88,15 +71,11 @@ const GUIDE_SECTIONS = [
     icon: "help-circle-outline" as const,
     title: "Ask your coach",
     description:
-      "Ask about targets, results, technique, progress, or any drill in today’s workout.",
+      "Ask about a drill, your progress, or what to do next.",
     examples: [
-      '"How many attempts do I have on this drill?"',
-      '"Whats my target for this set?"',
-      '"How many exercises do I have left?"',
-      '"What drill am I on?"',
-      '"What’s my shooting percentage so far in this workout?"',
-      '"How do I keep my elbow aligned?"',
       '"Could you explain this drill?"',
+      '"What’s my target?"',
+      '"What’s my shooting percentage?"',
     ],
   },
 ];

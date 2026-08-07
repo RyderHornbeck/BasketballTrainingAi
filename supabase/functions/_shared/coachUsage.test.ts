@@ -92,8 +92,8 @@ Deno.test("Cartesia, Anthropic, and Responses costs use provider billable units"
     ttsCharacters: 900,
   });
   assert(
-    Math.abs(cartesia - 0.054) < 1e-12,
-    "expected Ink-2 and Sonic credit cost",
+    Math.abs(cartesia - 0.040365) < 1e-12,
+    "expected Ink-2 and Sonic Scale-plan credit cost",
   );
   const luna = estimateResponsesCostUsd({
     model: "gpt-5.6-luna",
