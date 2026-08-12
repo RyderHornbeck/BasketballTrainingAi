@@ -66,6 +66,11 @@ export function isLikelyPlaybackEcho(
   const heard = normalizeEchoText(transcript);
   const spoken = normalizeEchoText(coachSpeech ?? "");
   const heardWords = heard.split(" ").filter(Boolean);
-  if (heardWords.length < 3 || heard.length < 12 || !spoken) return false;
-  return spoken.includes(heard) || heard.includes(spoken);
+  if (!spoken || heardWords.length < 2) return false;
+  // During active playout, even a short two-word excerpt such as "nice work"
+  // is strong echo evidence when it is a contiguous slice of Coach's actual
+  // speech. One-word transcripts remain eligible for real interruptions like
+  // "stop" or "wait".
+  if (spoken.includes(heard)) return true;
+  return heardWords.length >= 3 && heard.length >= 12 && heard.includes(spoken);
 }

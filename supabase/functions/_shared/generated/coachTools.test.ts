@@ -22,7 +22,7 @@ Deno.test("generated coach contracts reject unsafe tool arguments", () => {
 });
 
 Deno.test("navigation accepts an authoritative exercise ID without a duplicate name", () => {
-  const navigation = validateCoachToolArguments("set_current_drill", {
+  const navigation = validateCoachToolArguments("set_current_position", {
     exercise_id: "exercise-123",
   });
   assert(

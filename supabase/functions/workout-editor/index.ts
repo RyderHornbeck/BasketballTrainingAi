@@ -213,7 +213,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: day } = await supabase
       .from("workout_days")
-      .select("id, title, completed, active_exercise_id")
+      .select("id, title, completed, active_exercise_id, active_set_number")
       .eq("id", dayId)
       .eq("user_id", userId)
       .maybeSingle();

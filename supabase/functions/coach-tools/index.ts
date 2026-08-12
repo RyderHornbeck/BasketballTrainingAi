@@ -35,8 +35,6 @@ const EXACT_CONFIRMATION_TOOLS = new Set([
   "stop_timer",
   "add_workout_exercise",
   "remove_workout_exercise",
-  "set_current_drill",
-  "skip_drill",
   "save_note",
   "set_set_completion",
   "complete_drill",

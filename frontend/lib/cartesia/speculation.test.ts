@@ -66,6 +66,20 @@ test("suppresses substantial assistant echo but permits a user interruption", ()
     ),
     false,
   );
+  equal(
+    isLikelyPlaybackEcho(
+      "nice work",
+      "Nice work. Keep your shoulders square and finish strong.",
+    ),
+    true,
+  );
+  equal(
+    isLikelyPlaybackEcho(
+      "stop",
+      "Nice work. Keep your shoulders square and finish strong.",
+    ),
+    false,
+  );
 });
 
 test("rejects resumed, stale, changed, and aborted speculation", () => {

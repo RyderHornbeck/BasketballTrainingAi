@@ -25,7 +25,7 @@ export function PlanCard({
   const title = plan.duration === "annual" ? "Annual" : "Monthly";
   const billingSuffix = plan.duration === "annual" ? "/yr" : "/mo";
   const recurringPrice = `${plan.localizedRegularPrice}${billingSuffix}`;
-  const priceText =
+  const accessibilityPriceText =
     plan.hasEligibleFreeTrial && plan.introDurationCount && plan.introDurationUnit
       ? `${plan.introDurationCount}-${plan.introDurationUnit} free trial, then ${recurringPrice}`
       : recurringPrice;
@@ -34,7 +34,7 @@ export function PlanCard({
     <Pressable
       accessibilityRole="radio"
       accessibilityState={{ selected, disabled }}
-      accessibilityLabel={`${title}, ${priceText}`}
+      accessibilityLabel={`${title}, ${accessibilityPriceText}`}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
@@ -48,7 +48,7 @@ export function PlanCard({
       ]}
     >
       <Text style={[styles.title, { color: textColor }]}>{title}</Text>
-      <Text style={[styles.trial, { color: accentColor }]}>{priceText}</Text>
+      <Text style={[styles.price, { color: accentColor }]}>{recurringPrice}</Text>
     </Pressable>
   );
 }
@@ -65,9 +65,9 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: "800",
   },
-  trial: {
+  price: {
     marginTop: 1,
-    fontSize: 11,
-    fontWeight: "700",
+    fontSize: 13,
+    fontWeight: "800",
   },
 });

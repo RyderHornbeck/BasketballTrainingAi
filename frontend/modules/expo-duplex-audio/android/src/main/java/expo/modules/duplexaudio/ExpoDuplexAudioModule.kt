@@ -386,6 +386,16 @@ class ExpoDuplexAudioModule : Module() {
     }
 
     val frames = bytes.size / 2L
+    // Keep live Coach speech low-latency under bursty cellular/Wi-Fi delivery.
+    // Old queued output is worse than a clipped phrase: it becomes stale
+    // speaker audio that can leak back into an always-open microphone.
+    // Streaming PCM may arrive in brief bursts. Keep valid contiguous speech
+    // queued rather than clearing the middle of a sentence; real barge-in
+    // still clears playback immediately.
+    val maxQueuedFrames = sampleRate.toLong() * 5_000L / 1_000L
+    if (queuedFrames.get() + frames > maxQueuedFrames) {
+      clearPlayback("latency_budget_exceeded", restartTrack = true)
+    }
     val wasIdle = playbackState == "idle"
     enqueuedFrames.addAndGet(frames)
     queuedFrames.addAndGet(frames)

@@ -6,7 +6,7 @@ function assert(condition: unknown, message: string): asserts condition {
 
 Deno.test("editor context includes aggregate and per-set logged workout progress", () => {
   const snapshot = buildWorkoutEditorSnapshot(
-    { active_exercise_id: "drill-1" },
+    { active_exercise_id: "drill-1", active_set_number: 2 },
     [
       {
         id: "drill-1",
@@ -33,6 +33,7 @@ Deno.test("editor context includes aggregate and per-set logged workout progress
 
   const drill = snapshot.exercises[0];
   assert(snapshot.active_exercise_id === "drill-1", "active drill must be present");
+  assert(snapshot.active_set_number === 2, "active set must be present");
   assert(drill.log.makes === 5 && drill.log.attempts === 12, "aggregate log must be present");
   assert(drill.set_progress.length === 2, "all prescribed sets must be present");
   assert(drill.set_progress[0].completed, "completed set state must be retained");

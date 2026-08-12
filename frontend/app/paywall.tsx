@@ -444,6 +444,9 @@ export default function PaywallScreen() {
     : selectedPlan
       ? `Continue with ${selectedPlan.duration === "annual" ? "Annual" : "Monthly"}`
       : "Continue";
+  const trialNotice = selectedPlan?.hasEligibleFreeTrial && selectedPlan.trialLabel
+    ? `✓ ${selectedPlan.trialLabel} ・ No Payment Due Now`
+    : null;
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]}>
       <StatusBar style="dark" />
@@ -563,6 +566,9 @@ export default function PaywallScreen() {
                 </View>
               ))}
             </View>
+            {trialNotice ? (
+              <Text style={styles.trialNotice}>{trialNotice}</Text>
+            ) : null}
             {message ? (
               <Text accessibilityRole="alert" style={styles.operationMessage}>
                 {message}
@@ -651,6 +657,14 @@ const styles = StyleSheet.create({
     fontSize: 27,
     lineHeight: 34,
     fontWeight: "800",
+    textAlign: "center",
+  },
+  trialNotice: {
+    alignSelf: "center",
+    marginTop: 8,
+    color: DEFAULT_COLORS.accent,
+    fontSize: 11,
+    fontWeight: "700",
     textAlign: "center",
   },
   subtitle: {

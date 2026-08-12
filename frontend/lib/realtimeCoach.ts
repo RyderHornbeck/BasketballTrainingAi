@@ -364,8 +364,7 @@ interface CoachToolResponse {
 }
 
 const FLUSH_BEFORE_TOOLS = new Set([
-  "set_current_drill",
-  "skip_drill",
+  "set_current_position",
   "complete_drill",
   "set_set_completion",
   "set_shooting_set_targets",
@@ -583,7 +582,6 @@ export class RealtimeCoachSession {
   private deterministicTurnCount = 0;
   private fallbackTurnCount = 0;
   private pendingTimerDurationChange: PendingTimerDurationChange | null = null;
-  private selectedSetByExercise = new Map<string, number>();
   private speechEpoch = 0;
   private inkTurnSequence = 0;
   private latestUserTranscript: string | null = null;
@@ -709,7 +707,6 @@ export class RealtimeCoachSession {
     this.deterministicTurnCount = 0;
     this.fallbackTurnCount = 0;
     this.pendingTimerDurationChange = null;
-    this.selectedSetByExercise.clear();
     this.speechEpoch = 0;
     this.inkTurnSequence = 0;
     this.playbackGeneration = 0;
@@ -1303,7 +1300,11 @@ export class RealtimeCoachSession {
       // can explicitly select near-field when it controls the audio route.
       voiceFocus: "far-field",
       onSpeechStarted: () => {
-        if (this.playbackActive || this.generationActive) {
+        if (
+          this.playbackActive ||
+          this.generationActive ||
+          Date.now() < this.assemblyEchoGuardUntil
+        ) {
           // Wait for transcript evidence before treating an Assembly detection
           // as a barge-in; speaker playback otherwise becomes a user turn.
           this.assemblySpeechStartDeferred = true;
@@ -1479,7 +1480,10 @@ export class RealtimeCoachSession {
           // The native queue is empty, but far-field microphone capture can
           // still receive the speaker's final syllables. Hold speech-start
           // handling until Assembly provides a transcript we can compare.
-          this.assemblyEchoGuardUntil = Date.now() + 750;
+          // Keep listening for genuine barge-in, but defer it until transcript
+          // evidence arrives. Bluetooth/speaker routes and room reflections
+          // commonly outlive the native queue by more than 750 ms.
+          this.assemblyEchoGuardUntil = Date.now() + 1_500;
           this.callbacks?.onCoachPlaybackFinished?.();
         }
         this.updateStatus();
@@ -2152,7 +2156,6 @@ export class RealtimeCoachSession {
       // drill always takes priority over the next exercise.
       const nextSetInSameDrill = this.nextIncompleteSetInSameDrill(entry);
       await this.persistPendingShotSet(key);
-      this.selectedSetByExercise.delete(entry.exerciseId);
       return {
         kind: "completed_shot",
         output: this.completedShotReply(entry, nextSetInSameDrill),
@@ -2258,7 +2261,6 @@ export class RealtimeCoachSession {
     this.updateBufferedSetInWorkoutState(entry);
     this.stateVersion += 1;
     await this.persistPendingShotSet(key);
-    this.selectedSetByExercise.set(entry.exerciseId, entry.setNumber);
     const remaining =
       entry.targetAttempts == null
         ? null
@@ -2286,35 +2288,7 @@ export class RealtimeCoachSession {
   }
 
   private currentSetState(): RealtimeCurrentSetState | null {
-    const drill = this.currentDrill();
-    if (!drill) return null;
-    const selectedSet = this.selectedSetByExercise.get(drill.exercise_id);
-    if (!selectedSet) return this.workoutState?.navigation?.current_set_state ?? null;
-    const result = drill.set_results.find((set) => set.set_number === selectedSet);
-    if (!result) return this.workoutState?.navigation?.current_set_state ?? null;
-    const makes = result.progress?.makes ?? result.makes ?? 0;
-    const attempts = result.progress?.attempts ?? result.attempts ?? 0;
-    const targetMakes = result.target?.makes ?? drill.target.makes;
-    const targetAttempts = result.target?.attempts ?? drill.target.attempts;
-    return {
-      exercise_id: drill.exercise_id,
-      drill_name: drill.name,
-      set_number: result.set_number,
-      side_label: result.side_label,
-      completed: result.completed,
-      progress: { makes, attempts, misses: Math.max(0, attempts - makes) },
-      target: {
-        makes: targetMakes,
-        attempts: targetAttempts,
-        minutes: result.target?.minutes ?? drill.target.minutes,
-      },
-      remaining: {
-        makes:
-          targetMakes == null ? null : Math.max(0, targetMakes - makes),
-        attempts:
-          targetAttempts == null ? null : Math.max(0, targetAttempts - attempts),
-      },
-    };
+    return this.workoutState?.navigation?.current_set_state ?? null;
   }
 
   private resolveNavigationTarget(target: NavigationTarget): RealtimeDrillState | null {
@@ -2842,20 +2816,37 @@ export class RealtimeCoachSession {
                     : target.type === "current"
                       ? orderedSets[index]
                       : null;
-        if (!nextSet) return null;
-        this.selectedSetByExercise.set(current.exercise_id, nextSet.set_number);
-        this.stateVersion += 1;
-        const side = nextSet.side_label ? `, ${nextSet.side_label}` : "";
-        return `Moved to set ${nextSet.set_number}${side} of ${
-          current.name ?? "the current drill"
-        }.`;
+        if (!nextSet) {
+          if (target.type !== "next") return null;
+          const nextDrill = this.resolveNavigationTarget({ type: "next" });
+          if (!nextDrill) return null;
+          await this.flushPendingShotSets();
+          return (
+            await this.invokeCoachTool("set_current_position", {
+              exercise_id: nextDrill.exercise_id,
+              drill_name: nextDrill.name,
+              ...requestArgs,
+            })
+          ).result;
+        }
+        await this.flushPendingShotSets();
+        return (
+          await this.invokeCoachTool("set_current_position", {
+            exercise_id: current.exercise_id,
+            drill_name: current.name,
+            set_number: nextSet.set_number,
+            ...requestArgs,
+          })
+        ).result;
       }
       const current = this.currentDrill();
       if (command.args.skip && current) {
+        const target = this.resolveNavigationTarget({ type: "next" });
+        if (!target) return null;
         await this.flushPendingShotSets();
-        const result = await this.invokeCoachTool("skip_drill", {
-          exercise_id: current.exercise_id,
-          drill_name: current.name,
+        const result = await this.invokeCoachTool("set_current_position", {
+          exercise_id: target.exercise_id,
+          drill_name: target.name,
           ...requestArgs,
         });
         return result.result;
@@ -2863,7 +2854,7 @@ export class RealtimeCoachSession {
       const target = this.resolveNavigationTarget(command.args.target);
       if (!target) return null;
       await this.flushPendingShotSets();
-      const result = await this.invokeCoachTool("set_current_drill", {
+      const result = await this.invokeCoachTool("set_current_position", {
         exercise_id: target.exercise_id,
         drill_name: target.name,
         ...requestArgs,
@@ -2895,7 +2886,6 @@ export class RealtimeCoachSession {
           completed: command.args.action === "complete",
           ...requestArgs,
         });
-        this.selectedSetByExercise.delete(current.exercise_id);
         return command.args.action === "complete" && result.db_changed
           ? `Set ${set.set_number} complete. ${this.nextWorkReply("set", {
               type: "next",
@@ -3207,7 +3197,6 @@ export class RealtimeCoachSession {
       this.responseEpochs.clear();
       this.routedTurns.clear();
       this.speechStoppedAtByItem.clear();
-      this.selectedSetByExercise.clear();
       this.speechEpoch += 1;
       this.playbackGeneration += 1;
       this.cancelCartesiaSpeculation("disconnect");

@@ -318,6 +318,14 @@ public final class ExpoDuplexAudioModule: Module {
     }
 
     let frames = data.count / MemoryLayout<Int16>.size
+    // Inworld can deliver contiguous PCM in short network bursts. A 1.2-second
+    // cap cleared an entire valid sentence mid-playback whenever a burst briefly
+    // outpaced the speaker, producing chopped words. User barge-in still clears
+    // immediately; this is only a last-resort stale-audio ceiling.
+    let maxQueuedFrames = Int64(sampleRate * 5_000 / 1_000)
+    if queuedFrames + Int64(frames) > maxQueuedFrames {
+      clearPlayback(reason: "latency_budget_exceeded", restartPlayer: true)
+    }
     let format = AVAudioFormat(
       standardFormatWithSampleRate: Double(sampleRate),
       channels: 1

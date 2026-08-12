@@ -83,6 +83,7 @@ export interface WorkoutContext {
     coach_notes: string | null;
     completed: boolean;
     active_exercise_id: string | null;
+    active_set_number?: number | null;
   };
   exercises: ExerciseRow[];
   logs: Map<string, LogRow>;
@@ -147,7 +148,7 @@ COACHING AND RECOMMENDATIONS
 NAVIGATION AND EDITS
 - "Let's start this workout," "start the workout," or equivalent kickoff language is a read-only request. Without calling any tool or changing state, state the current drill and set from the provided workout context in one concise sentence.
 - DEFAULT NEXT RULE: Every natural-language next question—"what's next?", "what is next?", "so what is next?", "what's next bro?", or equivalent—means the authoritative next incomplete SET, never the next drill. Call get_workout_position when needed and answer current_set if it is incomplete (including an unstarted set 1). If the current drill is complete, answer the first incomplete set of the next unfinished drill. Never skip an incomplete set or volunteer the drill after the current drill. Discuss the next drill only when the athlete explicitly asks "what drill/exercise comes next?" or explicitly asks for the set after the current one.
-- "Go/switch/jump/skip to [drill]" calls set_current_drill. "Skip this/current drill" calls skip_drill. Navigation never changes results, completion, minutes, or notes and never turns targets into results.
+- Use set_current_position for every navigation action: moving to a drill, a set, next/previous/first/last, going back, and skipping a drill or set. It is the only navigation tool. It never changes completion, makes, attempts, or minutes. When an athlete moves to a drill without naming a set, omit set_number so it selects that drill's next incomplete set (set 2 when set 1 is complete, for example). For "let's go," "let's move on," or equivalent while current_set is incomplete, first say exactly: "You haven't completed your current set yet, set X of [drill]. Do you want to skip this set?" Only after clear yes call set_current_position for the next incomplete set from context; then say: "Skipping set X and moving to set Y of [drill]." Never mark a set complete for moving on. Mark completion only after explicit completion language such as "I'm done with that set," "I'm done," or "I'm finished."
 - Put natural references in drill_name: first/last, number, next/previous, go back, or Nth from end. Omit exercise_id unless state supplies it; never discuss IDs. Resolve this/that/current/it to current; ask only for ambiguous matches.
 - Multi-action requests require all tools in dependency order, awaiting each result. Example: navigate to "last drill," then set each requested shooting set. Use each returned state silently; do not re-fetch unless asked for a fresh check or state is ambiguous.
 - List with list_workout_drills. Add by catalog search then add after permission; remove with remove_workout_exercise; save notes with save_note. Name edits afterward.
@@ -384,18 +385,6 @@ const REALTIME_TOOL_DEFS = [
     },
   },
   {
-    name: "skip_drill",
-    description:
-      "Move to the next unfinished drill while leaving the current drill and all of its set results completely unchanged. Skipping never marks completion and never records target makes.",
-    parameters: {
-      type: "object",
-      properties: {
-        ...DRILL_REFERENCE_PROPERTIES,
-        reason: { type: "string" },
-      },
-    },
-  },
-  {
     name: "save_note",
     description:
       "Save a note on a specific drill when the athlete wants to remember something.",
@@ -473,13 +462,17 @@ const REALTIME_TOOL_DEFS = [
     parameters: { type: "object", properties: {} },
   },
   {
-    name: "set_current_drill",
+    name: "set_current_position",
     description:
-      "Switch the active workout drill without completing or skipping any other drills. Supply either the exact exercise_id from workout context or the athlete's drill_name reference.",
+      "The only navigation tool. Select a drill and optionally an unfinished set without changing completion or results. Omit set_number to select the drill's next incomplete set. Use for moving, skipping, and forward/back navigation.",
     parameters: {
       type: "object",
       properties: {
         ...DRILL_REFERENCE_PROPERTIES,
+        set_number: {
+          type: "number",
+          description: "Optional 1-based unfinished set number within the selected drill.",
+        },
       },
     },
   },
@@ -643,21 +636,6 @@ const TOOL_DEFS = [
     },
   },
   {
-    name: "skip_drill",
-    description:
-      "Move to the next unfinished drill without changing completion or results on the current drill. Never save target makes when skipping.",
-    parameters: {
-      type: "object",
-      properties: {
-        ...DRILL_REFERENCE_PROPERTIES,
-        reason: {
-          type: "string",
-          description: "Short reason, e.g. 'user tired'",
-        },
-      },
-    },
-  },
-  {
     name: "save_note",
     description:
       "Attach a note to a drill when the user says something worth remembering.",
@@ -767,7 +745,6 @@ const REALTIME_TOOL_DESCRIPTIONS: Record<string, string> = {
   set_set_completion: "Complete or reopen one set.",
   complete_drill: "Complete all drill sets.",
   uncomplete_drill: "Reopen a drill and its sets.",
-  skip_drill: "Move forward without changing results.",
   save_note: "Save a drill note.",
   search_exercise_catalog:
     "Search drills; IDs are internal and only names are spoken.",
@@ -776,7 +753,7 @@ const REALTIME_TOOL_DESCRIPTIONS: Record<string, string> = {
   remove_workout_exercise: "Remove a drill and its logs.",
   list_workout_drills: "List drills, optionally by category.",
   get_workout_position: "Fetch current set, progress, targets, and order.",
-  set_current_drill: "Navigate without changing completion.",
+  set_current_position: "Select a drill and set without changing completion.",
   get_progress: "Fetch workout progress.",
   extend_workout: "Add workout minutes.",
   shorten_workout: "Remove remaining workout minutes.",
@@ -854,7 +831,7 @@ export async function loadWorkoutContext(
   const { data: day } = await supabase
     .from("workout_days")
     .select(
-      "id, title, focus, estimated_minutes, coach_notes, completed, active_exercise_id, user_id",
+      "id, title, focus, estimated_minutes, coach_notes, completed, active_exercise_id, active_set_number, user_id",
     )
     .eq("id", dayId)
     .eq("user_id", userId)
@@ -1313,14 +1290,31 @@ export function buildWorkoutNavigation(ctx: WorkoutContext) {
     ? states.find((state) => state.exercise.id === nextExercise.id) ?? null
     : null;
 
+  const defaultCurrentSet = current
+    ? getCurrentSetNumber(current.totals.set_logs, current.plan)
+    : null;
+  const selectedActiveSet = current &&
+    ctx.day.active_set_number != null &&
+    ctx.day.active_set_number >= 1 &&
+    ctx.day.active_set_number <= current.plan.setCount
+    ? ctx.day.active_set_number
+    : null;
+  const selectedSetLog = selectedActiveSet == null
+    ? null
+    : current?.totals.set_logs.find((set) => set.set_number === selectedActiveSet) ?? null;
+  // Keep an explicitly selected incomplete set active even if an earlier set
+  // remains incomplete. Completion still advances to the first incomplete set.
+  const currentSetNumber = selectedSetLog && !selectedSetLog.completed
+    ? selectedActiveSet
+    : defaultCurrentSet;
   const nextWorkItem = current
     ? {
       kind: "set",
       ...drillContext(current),
-      set_number: getCurrentSetNumber(current.totals.set_logs, current.plan),
+      set_number: currentSetNumber,
       set_side_label: setSideLabel(
         current.exercise,
-        getCurrentSetNumber(current.totals.set_logs, current.plan),
+        currentSetNumber,
       ),
     }
     : null;
@@ -2342,6 +2336,62 @@ export async function executeCoachTool(
     case "get_next_drill":
       return { result: buildWorkoutPositionSummary(ctx), dbChanged: false };
 
+    case "set_current_position": {
+      const resolved = resolveWorkoutExercise(args.exercise_id, args.drill_name);
+      const exerciseId = resolved.id;
+      const suppliedSet = args.set_number == null ? null : Number(args.set_number);
+      if (
+        !exerciseId ||
+        (suppliedSet != null &&
+          (!Number.isInteger(suppliedSet) || suppliedSet < 1))
+      ) {
+        return {
+          result: "Choose one workout drill and, if supplied, a valid set number.",
+          dbChanged: false,
+        };
+      }
+      const targetState = orderedDrillStates(ctx).find(
+        (state) => state.exercise.id === exerciseId,
+      );
+      const requestedSet = suppliedSet ??
+        (targetState
+          ? getCurrentSetNumber(targetState.totals.set_logs, targetState.plan)
+          : null);
+      const targetSet = targetState?.totals.set_logs.find(
+        (set) => set.set_number === requestedSet,
+      );
+      if (
+        !targetState ||
+        targetState.totals.completed ||
+        requestedSet == null ||
+        requestedSet > targetState.plan.setCount ||
+        targetSet?.completed
+      ) {
+        return {
+          result: "That drill or set is not available. Use an unfinished set from the workout context.",
+          dbChanged: false,
+        };
+      }
+      const { error } = await supabase
+        .from("workout_days")
+        .update({
+          active_exercise_id: exerciseId,
+          active_set_number: requestedSet,
+        })
+        .eq("id", dayId)
+        .eq("user_id", userId);
+      if (error) return { result: `Error: ${error.message}`, dbChanged: false };
+      ctx.day.active_exercise_id = exerciseId;
+      ctx.day.active_set_number = requestedSet;
+      const sideLabel = setSideLabel(targetState.exercise, requestedSet);
+      return {
+        result: `Now on ${targetState.exercise.name ?? "the drill"}, set ${requestedSet} of ${
+          targetState.plan.setCount
+        }${sideLabel ? ` (${sideLabel})` : ""}.`,
+        dbChanged: true,
+      };
+    }
+
     case "set_current_drill": {
       const resolved = resolveWorkoutExercise(
         args.exercise_id,
@@ -2368,7 +2418,13 @@ export async function executeCoachTool(
       }
       const { error } = await supabase
         .from("workout_days")
-        .update({ active_exercise_id: exerciseId })
+        .update({
+          active_exercise_id: exerciseId,
+          active_set_number: getCurrentSetNumber(
+            targetState.totals.set_logs,
+            targetState.plan,
+          ),
+        })
         .eq("id", dayId)
         .eq("user_id", userId);
       if (error) return { result: `Error: ${error.message}`, dbChanged: false };
@@ -2377,6 +2433,7 @@ export async function executeCoachTool(
         targetState.totals.set_logs,
         targetState.plan,
       );
+      ctx.day.active_set_number = setNumber;
       const sideLabel = setSideLabel(targetState.exercise, setNumber);
       return {
         result: `Now on drill ${targetState.position}, ${
@@ -2559,7 +2616,7 @@ export async function executeCoachTool(
       }
       await supabase
         .from("workout_days")
-        .update({ active_exercise_id: null })
+        .update({ active_exercise_id: null, active_set_number: null })
         .eq("id", dayId)
         .eq("user_id", userId)
         .eq("active_exercise_id", exerciseId);
@@ -2600,13 +2657,20 @@ export async function executeCoachTool(
           dbChanged: false,
         };
       }
+      const nextState = orderedDrillStates(ctx).find(
+        (state) => state.exercise.id === next.id,
+      );
+      const nextSetNumber = nextState
+        ? getCurrentSetNumber(nextState.totals.set_logs, nextState.plan)
+        : 1;
       const { error } = await supabase
         .from("workout_days")
-        .update({ active_exercise_id: next.id })
+        .update({ active_exercise_id: next.id, active_set_number: nextSetNumber })
         .eq("id", dayId)
         .eq("user_id", userId);
       if (error) return { result: `Error: ${error.message}`, dbChanged: false };
       ctx.day.active_exercise_id = next.id;
+      ctx.day.active_set_number = nextSetNumber;
       return {
         result: `Moved to ${
           next.name ?? "the next drill"

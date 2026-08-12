@@ -12,6 +12,7 @@ export function buildWorkoutEditorSnapshot(
   const logsByExercise = new Map(logs.map((log) => [log.exercise_id, log]));
   return {
     active_exercise_id: day.active_exercise_id ?? null,
+    active_set_number: day.active_set_number ?? null,
     exercises: exercises.map((exercise) => {
       const log = logsByExercise.get(exercise.id) ?? null;
       return {

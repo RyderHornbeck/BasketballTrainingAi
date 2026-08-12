@@ -61,14 +61,10 @@ export function AchievementUnlockQueue({
 
     if (!newDefinitions.length) return;
     const previousEarnedCount = earnedKeys.filter((key) => seen.has(key)).length;
-    for (const [threshold, milestone] of [
-      [5, "badge_5"],
-      [10, "badge_10"],
-    ] as const) {
-      if (previousEarnedCount >= threshold || earnedKeys.length < threshold) continue;
-      const milestoneDefinition = newDefinitions[threshold - previousEarnedCount - 1];
-      if (milestoneDefinition) {
-        reviewAfterAchievement.current.set(milestoneDefinition.key, milestone);
+    if (previousEarnedCount === 0 && earnedKeys.length >= 1) {
+      const firstUnlocked = newDefinitions[0];
+      if (firstUnlocked) {
+        reviewAfterAchievement.current.set(firstUnlocked.key, "first_badge");
       }
     }
     await AsyncStorage.setItem(seenStorageKey(userId), JSON.stringify([...new Set([...seen, ...earnedKeys])]));

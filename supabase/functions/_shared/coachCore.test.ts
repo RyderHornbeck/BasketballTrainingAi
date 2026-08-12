@@ -148,6 +148,19 @@ Deno.test("coach navigation uses the grouped Workouts order and the next unfinis
   );
 });
 
+Deno.test("an explicitly selected incomplete set remains the current Coach position", () => {
+  const ctx = contextWithPartialShootingSet();
+  ctx.day.active_exercise_id = "finish";
+  ctx.day.active_set_number = 2;
+
+  const navigation = buildWorkoutNavigation(ctx);
+  assert(
+    navigation.next_work_item?.name === "Finishing" &&
+      navigation.next_work_item?.set_number === 2,
+    "an active incomplete set must override an earlier unfinished set",
+  );
+});
+
 Deno.test("shooting drill lists exclude the separate finishing category", () => {
   const summary = buildWorkoutDrillListSummary(
     contextWithPartialShootingSet(),
@@ -307,6 +320,46 @@ Deno.test("relative last drill overrides a conflicting guessed exercise ID", asy
   assert(
     ctx.day.active_exercise_id === "finish",
     "spoken last drill must override guessed ID",
+  );
+});
+
+Deno.test("set_current_position selects an incomplete set without completing it", async () => {
+  const ctx = contextWithPartialShootingSet();
+  const outcome = await executeCoachTool(
+    successfulSupabaseMock(),
+    "user",
+    "day",
+    ctx,
+    "set_current_position",
+    { drill_name: "Finishing", set_number: 2 },
+  );
+
+  assert(outcome.dbChanged, "position selection should persist");
+  assert(
+    ctx.day.active_exercise_id === "finish" && ctx.day.active_set_number === 2,
+    "the selected drill and set should become the authoritative position",
+  );
+  assert(
+    !ctx.logs.get("finish")?.completed,
+    "position selection must not complete the skipped set",
+  );
+});
+
+Deno.test("set_current_position defaults a drill move to its next incomplete set", async () => {
+  const ctx = contextWithPartialShootingSet();
+  const outcome = await executeCoachTool(
+    successfulSupabaseMock(),
+    "user",
+    "day",
+    ctx,
+    "set_current_position",
+    { drill_name: "Shooting" },
+  );
+
+  assert(outcome.dbChanged, "drill navigation should persist");
+  assert(
+    ctx.day.active_exercise_id === "shoot" && ctx.day.active_set_number === 2,
+    "moving to a drill without a set must select its next incomplete set",
   );
 });
 

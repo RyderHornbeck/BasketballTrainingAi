@@ -4,7 +4,6 @@ import { AIDataProcessingDisclosure } from "@/components/AIDataProcessingDisclos
 import { Button } from "@/components/Button";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
-import { requestOnboardingReviewOnce } from "@/lib/appReview";
 import {
   clearPendingAIDataConsent,
   savePendingAIDataConsent,
@@ -25,6 +24,7 @@ import { supabase } from "@/lib/supabase";
 import { OnboardingFormData } from "@/types/plan";
 import { Text } from "@/components/Text";
 import { router } from "expo-router";
+import { LineChart } from "react-native-gifted-charts";
 import {
   BasketballIcon,
   BarbellIcon,
@@ -103,7 +103,7 @@ const QUESTION_STEPS = 12;
 const PRE_SIGNUP_STEP = 13;
 const COACH_INTRO_STEP = 14;
 const COACH_SELECTION_STEP = 15;
-const REVIEW_STEP = 16;
+const PROGRESS_POTENTIAL_STEP = 16;
 const AI_CONSENT_STEP = 17;
 const PRE_SIGNUP_TOTAL_STEPS = AI_CONSENT_STEP;
 const GENERATION_STEPS = [
@@ -178,11 +178,6 @@ export default function OnboardingScreen() {
     );
     return () => timeouts.forEach(clearTimeout);
   }, [checklistRun, step]);
-
-  useEffect(() => {
-    if (user || step !== REVIEW_STEP) return;
-    void requestOnboardingReviewOnce();
-  }, [step, user]);
 
   const update = <K extends keyof OnboardingFormData>(key: K, value: OnboardingFormData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -269,10 +264,10 @@ export default function OnboardingScreen() {
     }
     if (step === COACH_SELECTION_STEP && !user) {
       await saveOnboardingDraft(currentDraft());
-      setStep(REVIEW_STEP);
+      setStep(PROGRESS_POTENTIAL_STEP);
       return;
     }
-    if (step === REVIEW_STEP && !user) {
+    if (step === PROGRESS_POTENTIAL_STEP && !user) {
       setStep(AI_CONSENT_STEP);
       return;
     }
@@ -358,8 +353,6 @@ export default function OnboardingScreen() {
       nextLabel={
         step === AI_CONSENT_STEP
           ? "Agree and Continue"
-          : step === REVIEW_STEP
-          ? "I rated"
           : step === QUESTION_STEPS && user
             ? "Build My Plan"
             : "Continue"
@@ -623,24 +616,7 @@ export default function OnboardingScreen() {
         </View>
       )}
 
-      {step === REVIEW_STEP && !user && (
-        <View style={styles.ratingSlide}>
-          <View style={styles.ratingStars}>
-            {Array.from({ length: 5 }, (_, index) => (
-              <StarIcon key={index} size={34} color="#FBBF24" weight="fill" />
-            ))}
-          </View>
-          <Image
-            source={require("../../assets/images/AppLogo.png")}
-            style={styles.ratingLogo}
-            resizeMode="contain"
-          />
-          <Text style={[styles.ratingCopy, { color: colors.textSecondary }]}>
-            Your rating helps more basketball players discover smarter, easier training with Court
-            Coach.
-          </Text>
-        </View>
-      )}
+      {step === PROGRESS_POTENTIAL_STEP && !user && <ProgressPotentialChart />}
 
       {step === AI_CONSENT_STEP && (
         <View style={styles.consentSlide}>
@@ -655,6 +631,71 @@ export default function OnboardingScreen() {
         </View>
       )}
     </OnboardingStep>
+  );
+}
+
+function ProgressPotentialChart() {
+  const labels = ["START", "2w", "4w", "6w", "8w", "MAX"];
+  const coachData = [0, 12, 31, 54, 72, 90].map((value) => ({ value }));
+  const traditionalData = [0, 3, 8, 13, 19, 25].map((value) => ({ value }));
+
+  return (
+    <View style={styles.progressSlide}>
+      <View style={styles.progressChart}>
+        <View pointerEvents="none" style={styles.progressYAxis}>
+          {[100, 75, 50, 25, 0].map((value) => (
+            <Text key={value} style={styles.progressYAxisLabel}>{value}%</Text>
+          ))}
+        </View>
+        <LineChart
+          data={coachData}
+          data2={traditionalData}
+          height={178}
+          maxValue={100}
+          noOfSections={4}
+          stepValue={25}
+          initialSpacing={8}
+          endSpacing={4}
+          spacing={55}
+          xAxisLabelTexts={labels}
+          xAxisLabelTextStyle={styles.progressXAxisLabel}
+          yAxisTextStyle={styles.progressYAxisText}
+          hideYAxisText
+          yAxisThickness={0}
+          xAxisThickness={1}
+          xAxisColor="#D8D2CC"
+          rulesColor="#EEE8E2"
+          rulesThickness={1}
+          hideDataPoints
+          curved
+          curvature={0.16}
+          isAnimated
+          animationDuration={1_250}
+          animateTogether
+          thickness={4}
+          thickness2={2.5}
+          color="#FF7A1A"
+          color2="#AAA39D"
+          disableScroll
+        />
+      </View>
+      <View style={styles.progressComparison}>
+        <View style={[styles.progressOption, styles.progressOptionSelected]}>
+          <View>
+            <Text style={styles.progressOptionEyebrow}>WITH</Text>
+            <Text style={styles.progressOptionTitle}>Court Coach AI</Text>
+          </View>
+          <Text style={styles.progressOptionMetric}>3x FASTER</Text>
+        </View>
+        <View style={[styles.progressOption, styles.progressOptionMuted]}>
+          <View>
+            <Text style={styles.progressOptionEyebrowMuted}>WITHOUT</Text>
+            <Text style={styles.progressOptionTitle}>Traditional</Text>
+          </View>
+          <Text style={styles.progressOptionMetricMuted}>Traditional</Text>
+        </View>
+      </View>
+    </View>
   );
 }
 
@@ -695,8 +736,9 @@ const STEP_TITLES = [
     subtitle: "Pick the coaching style that feels best for you.",
   },
   {
-    title: "Give Court Coach a rating",
-    subtitle: "If you’re excited to start training, support Court Coach with a quick rating.",
+    title: "Your Progress Potential",
+    subtitle:
+      "See how Court Coach accelerates your improvement compared to traditional training.",
   },
   {
     title: "Data and Privacy",
@@ -1092,26 +1134,83 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
   },
-  ratingSlide: {
-    minHeight: 390,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 24,
+  progressSlide: {
+    gap: 18,
+    paddingTop: 4,
   },
-  ratingStars: {
+  progressChart: {
+    position: "relative",
+    marginLeft: 26,
+    minHeight: 218,
+  },
+  progressYAxis: {
+    position: "absolute",
+    left: -31,
+    top: 4,
+    bottom: 32,
+    justifyContent: "space-between",
+  },
+  progressYAxisLabel: {
+    color: "#8B827B",
+    fontSize: 10,
+    fontWeight: "700",
+    textAlign: "right",
+  },
+  progressYAxisText: {
+    color: "transparent",
+  },
+  progressXAxisLabel: {
+    color: "#756C65",
+    fontSize: 9,
+    fontWeight: "800",
+  },
+  progressComparison: {
+    gap: 10,
+  },
+  progressOption: {
+    minHeight: 68,
+    borderRadius: 16,
+    borderWidth: 1,
     flexDirection: "row",
-    justifyContent: "center",
-    gap: 5,
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
   },
-  ratingLogo: {
-    width: 190,
-    height: 190,
+  progressOptionSelected: {
+    backgroundColor: "#FFF0E5",
+    borderColor: "#FF7A1A",
   },
-  ratingCopy: {
-    maxWidth: 330,
+  progressOptionMuted: {
+    backgroundColor: "#F4F1EF",
+    borderColor: "#DDD7D2",
+  },
+  progressOptionEyebrow: {
+    color: "#FF7A1A",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+  },
+  progressOptionEyebrowMuted: {
+    color: "#9B938D",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+  },
+  progressOptionTitle: {
+    color: "#1F1916",
     fontSize: 15,
-    lineHeight: 22,
-    textAlign: "center",
+    fontWeight: "800",
+    marginTop: 2,
+  },
+  progressOptionMetric: {
+    color: "#FF7A1A",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  progressOptionMetricMuted: {
+    color: "#8B827B",
+    fontSize: 13,
+    fontWeight: "700",
   },
   consentSlide: {
     gap: 18,

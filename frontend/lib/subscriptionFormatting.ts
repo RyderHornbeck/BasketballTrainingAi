@@ -134,7 +134,7 @@ export function formatCurrency(
 }
 
 export function formatSubscriptionDate(date: Date): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-US", {
     month: "long",
     day: "numeric",
   }).format(date);
