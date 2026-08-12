@@ -72,5 +72,44 @@ export function isLikelyPlaybackEcho(
   // speech. One-word transcripts remain eligible for real interruptions like
   // "stop" or "wait".
   if (spoken.includes(heard)) return true;
-  return heardWords.length >= 3 && heard.length >= 12 && heard.includes(spoken);
+  if (heardWords.length >= 3 && heard.length >= 12 && heard.includes(spoken)) return true;
+
+  // Far-field ASR can distort a speaker echo enough that it no longer remains
+  // a contiguous substring (for example, "doing want art it" for "doing
+  // great, do you want to start it"). Compare only meaningful terms so that
+  // common conversational glue does not suppress a genuine user barge-in.
+  const stopWords = new Set([
+    "a", "an", "and", "are", "as", "at", "be", "do", "for", "from",
+    "i", "in", "is", "it", "of", "on", "or", "that", "the", "this",
+    "to", "we", "with", "you", "your",
+  ]);
+  const meaningfulHeard = heardWords.filter((word) => !stopWords.has(word));
+  const spokenWords = new Set(
+    spoken.split(" ").filter((word) => word && !stopWords.has(word)),
+  );
+  const overlappingWords = meaningfulHeard.filter((word) => spokenWords.has(word));
+  return (
+    meaningfulHeard.length >= 3 &&
+    overlappingWords.length >= 2 &&
+    overlappingWords.length / meaningfulHeard.length >= 0.6
+  );
+}
+
+export type PlaybackTranscriptClassification = "echo" | "user" | "ambiguous";
+
+/**
+ * Classify live ASR received while Coach is playing. Short partials wait for
+ * more evidence; a substantial novel phrase can promote a natural barge-in
+ * before the provider's final transcription arrives.
+ */
+export function classifyPlaybackTranscript(
+  transcript: string,
+  coachSpeech: string | null | undefined,
+): PlaybackTranscriptClassification {
+  if (isLikelyPlaybackEcho(transcript, coachSpeech)) return "echo";
+  const words = normalizeSpeculativeTranscript(transcript)
+    .replace(/[^a-z0-9' ]/g, "")
+    .split(" ")
+    .filter(Boolean);
+  return words.length >= 3 ? "user" : "ambiguous";
 }

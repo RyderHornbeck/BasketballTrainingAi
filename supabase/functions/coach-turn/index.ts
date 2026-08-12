@@ -141,7 +141,7 @@ Deno.serve(async (req: Request) => {
         .maybeSingle(),
       supabase
         .from("profiles")
-        .select("realtime_coach_voice")
+        .select("realtime_coach_voice, preferred_name")
         .eq("id", userId)
         .maybeSingle(),
     ]);
@@ -169,7 +169,7 @@ Deno.serve(async (req: Request) => {
     : "Coach Tyler";
   const compactContext = buildCompactContextSummary(
     initialContext,
-    answers ?? null,
+    { ...(answers ?? {}), preferred_name: profile?.preferred_name ?? null },
     undefined,
     safeConversationSummary,
   );
@@ -184,7 +184,7 @@ Deno.serve(async (req: Request) => {
   const toolFreeTurn = speculativeReadOnly;
   const dynamicContext = buildCoachTurnDynamicContext(
     initialContext,
-    answers ?? null,
+    { ...(answers ?? {}), preferred_name: profile?.preferred_name ?? null },
     undefined,
     coachName,
     speculativeReadOnly,

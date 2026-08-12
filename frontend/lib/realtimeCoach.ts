@@ -29,6 +29,7 @@ import {
   CartesiaInkClient,
   CartesiaSonicClient,
   buildInkKeyterms,
+  classifyPlaybackTranscript,
   gateCoachSpeechText,
   isLikelyPlaybackEcho,
   isSafeSpeculativeTranscript,
@@ -250,6 +251,12 @@ interface PendingTimerDurationChange {
   requestedSeconds: number;
 }
 
+interface PendingIncompleteShotCompletion {
+  exerciseId: string;
+  drillName: string | null;
+  setNumber: number;
+}
+
 interface RealtimeSetResult {
   set_number: number;
   makes: number | null;
@@ -368,7 +375,6 @@ const FLUSH_BEFORE_TOOLS = new Set([
   "complete_drill",
   "set_set_completion",
   "set_shooting_set_targets",
-  "finish_workout",
   "add_workout_exercise",
   "remove_workout_exercise",
 ]);
@@ -582,6 +588,7 @@ export class RealtimeCoachSession {
   private deterministicTurnCount = 0;
   private fallbackTurnCount = 0;
   private pendingTimerDurationChange: PendingTimerDurationChange | null = null;
+  private pendingIncompleteShotCompletion: PendingIncompleteShotCompletion | null = null;
   private speechEpoch = 0;
   private inkTurnSequence = 0;
   private latestUserTranscript: string | null = null;
@@ -707,6 +714,7 @@ export class RealtimeCoachSession {
     this.deterministicTurnCount = 0;
     this.fallbackTurnCount = 0;
     this.pendingTimerDurationChange = null;
+    this.pendingIncompleteShotCompletion = null;
     this.speechEpoch = 0;
     this.inkTurnSequence = 0;
     this.playbackGeneration = 0;
@@ -1077,8 +1085,9 @@ export class RealtimeCoachSession {
         return;
       }
       if (isDeferredBargeIn) {
-        // A real user interruption is committed only after Ink's final
-        // transcript proves it was not Coach playback.
+        // Wait for the final transcript before interrupting. The strengthened
+        // echo matcher rejects distorted speaker bleed while preserving
+        // natural-language barge-in once the athlete has finished speaking.
         this.handleCartesiaSpeechStart(generation);
       }
       logInkLifecycle("end", event.requestId, event.transcript);
@@ -1147,6 +1156,21 @@ export class RealtimeCoachSession {
           this.deferredBargeInRequestIds.add(event.requestId);
           return;
         }
+        this.handleCartesiaSpeechStart(generation);
+      },
+      onTurnUpdate: (event) => {
+        if (!this.deferredBargeInRequestIds.has(event.requestId)) return;
+        if (
+          classifyPlaybackTranscript(
+            event.transcript,
+            this.replayableSonicSpeech?.text,
+          ) !== "user"
+        ) {
+          return;
+        }
+        // A novel, substantial partial is enough evidence to barge in. Echo
+        // and short ambiguous fragments keep the current speech intact.
+        this.deferredBargeInRequestIds.delete(event.requestId);
         this.handleCartesiaSpeechStart(generation);
       },
       onTurnEagerEnd: (event) => {
@@ -1313,11 +1337,16 @@ export class RealtimeCoachSession {
         this.handleAssemblySpeechStart(generation);
       },
       onPartial: (transcript) => {
-        if (this.assemblySpeechStartDeferred) {
-          if (isLikelyPlaybackEcho(transcript, this.lastAssemblyCoachSpeech)) {
-            return;
-          }
+        if (
+          this.assemblySpeechStartDeferred &&
+          classifyPlaybackTranscript(
+            transcript,
+            this.lastAssemblyCoachSpeech,
+          ) === "user"
+        ) {
           this.assemblySpeechStartDeferred = false;
+          // Promote a reliable novel partial immediately so ordinary spoken
+          // requests interrupt Coach without waiting for final transcription.
           this.handleAssemblySpeechStart(generation);
         }
         this.callbacks?.onUserTranscript?.(transcript);
@@ -1328,6 +1357,8 @@ export class RealtimeCoachSession {
           if (isLikelyPlaybackEcho(turn.transcript, this.lastAssemblyCoachSpeech)) {
             return;
           }
+          // Do not interrupt from partial ASR. A final non-echo transcript is
+          // a real natural-language barge-in and may safely stop Coach.
           this.handleAssemblySpeechStart(generation);
         }
         const itemId = `assembly-${turn.turnOrder}-${Date.now()}`;
@@ -1854,9 +1885,6 @@ export class RealtimeCoachSession {
     const requestArgs = { ...args };
     if (typeof requestArgs.client_request_id !== "string") {
       requestArgs.client_request_id = createClientRequestId(toolName);
-    }
-    if (toolName === "finish_workout") {
-      requestArgs.timezone_offset_minutes = new Date().getTimezoneOffset();
     }
     const { data, error } = await supabase.functions.invoke<CoachToolResponse>("coach-tools", {
       body: {
@@ -2613,6 +2641,24 @@ export class RealtimeCoachSession {
           )}. ${this.timerStartedReply(durationSeconds)}`
         : this.timerStartedReply(durationSeconds);
     }
+    if (command.kind === "set_completion_confirmation") {
+      const pending = this.pendingIncompleteShotCompletion;
+      this.pendingIncompleteShotCompletion = null;
+      if (!pending) return null;
+      if (!command.args.accepted) {
+        return `Okay, let's start set ${pending.setNumber} of ${pending.drillName ?? "this drill"}.`;
+      }
+      return (
+        await this.invokeCoachTool("set_set_completion", {
+          exercise_id: pending.exerciseId,
+          drill_name: pending.drillName,
+          set_number: pending.setNumber,
+          completed: true,
+          confirmed_incomplete: true,
+          ...requestArgs,
+        })
+      ).result;
+    }
 
     if (command.kind === "undo_shot") {
       return this.undoLastShot();
@@ -2871,14 +2917,34 @@ export class RealtimeCoachSession {
             ) ?? null
           : this.currentSetState();
       if (command.args.scope === "workout") {
-        if (command.args.action === "reopen") return null;
-        await this.flushPendingShotSets();
-        return (await this.invokeCoachTool("finish_workout", requestArgs)).result;
+        return null;
       }
       if (!current) return null;
       await this.flushPendingShotSets();
       if (command.args.scope === "set") {
         if (!set) return null;
+        const targetAttempts = set.target?.attempts ?? current.target.attempts;
+        const attempts =
+          set.progress?.attempts ??
+          ("attempts" in set ? set.attempts ?? 0 : 0);
+        const makes =
+          set.progress?.makes ??
+          ("makes" in set ? set.makes ?? 0 : 0);
+        if (
+          command.args.action === "complete" &&
+          this.acceptsShotResults(current) &&
+          targetAttempts != null &&
+          attempts < targetAttempts
+        ) {
+          this.pendingIncompleteShotCompletion = {
+            exerciseId: current.exercise_id,
+            drillName: current.name,
+            setNumber: set.set_number,
+          };
+          return `You're ${makes} for ${attempts}, ${
+            targetAttempts - attempts
+          } shots left. Would you like to start this set or mark it complete as is?`;
+        }
         const result = await this.invokeCoachTool("set_set_completion", {
           exercise_id: current.exercise_id,
           drill_name: current.name,
@@ -3002,6 +3068,16 @@ export class RealtimeCoachSession {
             )
           ? false
           : null;
+    const incompleteShotCompletionChoice =
+      /^(?:yes|yeah|yep|sure|ok|okay|mark it complete|complete it|finish it|mark it done)$/.test(
+        normalizedReply
+      )
+        ? true
+        : /^(?:no|nope|start|start it|lets start|let's start|begin)$/.test(
+              normalizedReply
+            )
+          ? false
+          : null;
     const command: CoachSpeechIntent | null =
       this.pendingTimerDurationChange && acceptedDurationChange != null
         ? {
@@ -3013,9 +3089,25 @@ export class RealtimeCoachSession {
               : "Timer duration change declined",
             safeToDelete: true,
           }
+        : this.pendingIncompleteShotCompletion && incompleteShotCompletionChoice != null
+          ? {
+              kind: "set_completion_confirmation",
+              args: { accepted: incompleteShotCompletionChoice },
+              confidence: 1,
+              heardLabel: incompleteShotCompletionChoice
+                ? "Incomplete shooting set completion confirmed"
+                : "Start incomplete shooting set",
+              safeToDelete: true,
+            }
         : parseCoachSpeechIntent(transcript);
     if (this.pendingTimerDurationChange && acceptedDurationChange == null) {
       this.pendingTimerDurationChange = null;
+    }
+    if (
+      this.pendingIncompleteShotCompletion &&
+      incompleteShotCompletionChoice == null
+    ) {
+      this.pendingIncompleteShotCompletion = null;
     }
     if (!command) {
       turn.routeDecidedAt = Date.now();
@@ -3607,10 +3699,12 @@ export class RealtimeCoachSession {
     if (!contextId) {
       contextId = `${this.sessionKey ?? "session"}:${speechEpoch}:${Date.now()}`.slice(0, 120);
       this.inworldContextId = contextId;
+      this.lastAssemblyCoachSpeech = "";
       this.generationActive = true;
       this.updateStatus();
       inworld.createContext(contextId);
     }
+    this.lastAssemblyCoachSpeech = `${this.lastAssemblyCoachSpeech ?? ""}${text}`;
     inworld.pushText(contextId, text, final);
   }
 

@@ -38,6 +38,7 @@ import {
   ScrollView,
   StyleSheet,
   Switch,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -46,18 +47,36 @@ const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
   { label: "Light", value: "light" },
   { label: "Dark", value: "dark" },
 ];
+const DISALLOWED_NAME_PATTERNS = [
+  /\b(?:fuck|shit|bitch|asshole|dick|cunt|bastard)\b/i,
+  /\b(?:nigger|faggot|kike|spic|chink)\b/i,
+];
 
 type AthleteDetails = Pick<
   OnboardingAnswers,
   "overall_skill_level" | "position" | "minutes_per_workout"
 >;
 
+function validatePreferredName(value: string): string | null {
+  const name = value.trim();
+  if (!/^[\p{L}][\p{L} '-]{0,79}$/u.test(name)) {
+    return "Use 1 to 80 letters, spaces, apostrophes, or hyphens.";
+  }
+  return DISALLOWED_NAME_PATTERNS.some((pattern) => pattern.test(name))
+    ? "Please choose a different name."
+    : null;
+}
+
 export default function ProfileScreen() {
   const { colors, mode, setMode } = useTheme();
-  const { user, profile, signOut } = useAuth();
+  const { user, profile, refreshProfile, signOut } = useAuth();
   const [athleteDetails, setAthleteDetails] = useState<AthleteDetails | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(true);
   const [showTrainingUpdateNotice, setShowTrainingUpdateNotice] = useState(false);
+  const [preferredName, setPreferredName] = useState("");
+  const [preferredNameEditing, setPreferredNameEditing] = useState(false);
+  const [preferredNameError, setPreferredNameError] = useState<string | null>(null);
+  const [preferredNameSaving, setPreferredNameSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [reminder, setReminder] = useState<WorkoutReminder>(defaultWorkoutReminder);
   const [reminderLoading, setReminderLoading] = useState(true);
@@ -132,6 +151,35 @@ export default function ProfileScreen() {
     const frame = requestAnimationFrame(() => setCoachVoice(voice));
     return () => cancelAnimationFrame(frame);
   }, [profile?.realtime_coach_voice]);
+
+  const handlePreferredNameChange = (value: string) => {
+    const normalized = value.replace(/\s+/g, " ").trimStart();
+    setPreferredName(normalized);
+    setPreferredNameError(validatePreferredName(normalized));
+  };
+
+  const handlePreferredNameSave = async () => {
+    if (!user || preferredNameSaving) return;
+    const validationError = validatePreferredName(preferredName);
+    setPreferredNameError(validationError);
+    if (validationError) return;
+
+    setPreferredNameSaving(true);
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ preferred_name: preferredName.trim() })
+        .eq("id", user.id);
+      if (error) throw error;
+      await refreshProfile();
+      setPreferredNameEditing(false);
+      actionHaptic();
+    } catch {
+      Alert.alert("Could not save name", "Please try again.");
+    } finally {
+      setPreferredNameSaving(false);
+    }
+  };
 
   const handleSignOut = () => {
     Alert.alert("Sign out?", "You can sign back in anytime to continue your training.", [
@@ -283,9 +331,67 @@ export default function ProfileScreen() {
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Athlete</Text>
         <Card style={styles.card}>
           {detailsLoading ? (
-            <ProfileRowsSkeleton rows={4} />
+            <ProfileRowsSkeleton rows={5} />
           ) : (
             <>
+              {preferredNameEditing ? (
+                <View style={styles.preferredNameEditor}>
+                  <Text style={[styles.rowLabel, { color: colors.textMuted }]}>Preferred name</Text>
+                  <TextInput
+                    accessibilityLabel="Preferred name"
+                    autoCapitalize="words"
+                    autoComplete="name"
+                    maxLength={80}
+                    onChangeText={handlePreferredNameChange}
+                    placeholder="Enter your name"
+                    placeholderTextColor={colors.textMuted}
+                    returnKeyType="done"
+                    value={preferredName}
+                    style={[
+                      styles.preferredNameInput,
+                      {
+                        backgroundColor: colors.cardAlt,
+                        borderColor: preferredNameError ? colors.danger : colors.border,
+                        color: colors.text,
+                      },
+                    ]}
+                  />
+                  {preferredNameError ? (
+                    <Text style={[styles.preferredNameError, { color: colors.danger }]}>
+                      {preferredNameError}
+                    </Text>
+                  ) : null}
+                  <View style={styles.preferredNameActions}>
+                    <Button
+                      title="Cancel"
+                      variant="outline"
+                      onPress={() => setPreferredNameEditing(false)}
+                      disabled={preferredNameSaving}
+                      buttonStyle={styles.preferredNameActionButton}
+                      style={styles.preferredNameAction}
+                    />
+                    <Button
+                      title="Save"
+                      onPress={() => void handlePreferredNameSave()}
+                      loading={preferredNameSaving}
+                      buttonStyle={styles.preferredNameActionButton}
+                      style={styles.preferredNameAction}
+                    />
+                  </View>
+                </View>
+              ) : (
+                <EditableProfileRow
+                  label="Preferred name"
+                  value={profile?.preferred_name ?? "Add name"}
+                  onPress={() => {
+                    actionHaptic();
+                    setPreferredName(profile?.preferred_name ?? "");
+                    setPreferredNameError(null);
+                    setPreferredNameEditing(true);
+                  }}
+                />
+              )}
+              <Divider />
               <EditableProfileRow
                 label="Skill Level"
                 value={capitalize(athleteDetails?.overall_skill_level) ?? "--"}
@@ -675,6 +781,32 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "flex-end",
     gap: 6,
+  },
+  preferredNameEditor: {
+    gap: 8,
+    paddingVertical: 6,
+  },
+  preferredNameInput: {
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+    fontFamily: "Poppins_400Regular",
+  },
+  preferredNameError: {
+    fontSize: 12,
+  },
+  preferredNameActions: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  preferredNameAction: {
+    flex: 1,
+  },
+  preferredNameActionButton: {
+    borderRadius: 12,
+    paddingVertical: 10,
   },
   trainingUpdateNotice: {
     marginTop: 14,

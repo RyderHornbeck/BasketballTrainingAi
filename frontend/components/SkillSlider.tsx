@@ -1,4 +1,5 @@
 import { useTheme } from "@/hooks/useTheme";
+import { selectionHaptic } from "@/lib/haptics";
 import React from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { Text } from "./Text";
@@ -13,11 +14,6 @@ interface SkillSliderProps {
   highLabel?: string;
 }
 
-/**
- * A dependency-free "slider" made of tappable step segments (0-10 by
- * default). Avoids requiring a native slider module while still giving
- * users a quick way to self-rate a skill.
- */
 export function SkillSlider({
   label,
   value,
@@ -55,7 +51,10 @@ export function SkillSlider({
           return (
             <Pressable
               key={step}
-              onPress={() => onChange(step)}
+              onPress={() => {
+                selectionHaptic();
+                onChange(step);
+              }}
               hitSlop={4}
               style={[
                 styles.step,

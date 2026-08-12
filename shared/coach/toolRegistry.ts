@@ -213,7 +213,11 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
     flushShots: true,
     exactSpeech: true,
     parameters: args(
-      { ...setReference, completed: { type: "boolean" } },
+      {
+        ...setReference,
+        completed: { type: "boolean" },
+        confirmed_incomplete: { type: "boolean" },
+      },
       ["set_number", "completed"]
     ),
   }),
@@ -247,20 +251,6 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
     kind: "mutation",
     realtime: true,
     exactSpeech: true,
-  }),
-  tool({
-    name: "finish_workout",
-    description: "Finish only after an explicit request and confirmation if work remains.",
-    capability: "completion",
-    execution: "server",
-    kind: "mutation",
-    realtime: true,
-    flushShots: true,
-    exactSpeech: true,
-    parameters: args({
-      confirmation_token: { type: "string", maxLength: 240 },
-      timezone_offset_minutes: { type: "number", minimum: -840, maximum: 840 },
-    }),
   }),
   tool({
     name: "start_timer",

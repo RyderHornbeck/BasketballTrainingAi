@@ -1,4 +1,5 @@
 import {
+  classifyPlaybackTranscript,
   isLikelyPlaybackEcho,
   isSafeSpeculativeTranscript,
   normalizeSpeculativeTranscript,
@@ -79,6 +80,38 @@ test("suppresses substantial assistant echo but permits a user interruption", ()
       "Nice work. Keep your shoulders square and finish strong.",
     ),
     false,
+  );
+  equal(
+    isLikelyPlaybackEcho(
+      "doing want art it",
+      "Doing great. Do you want to start it?",
+    ),
+    true,
+  );
+  equal(
+    isLikelyPlaybackEcho(
+      "can you move me to set two",
+      "Doing great. Do you want to start it?",
+    ),
+    false,
+  );
+});
+
+test("promotes only substantial novel partials during playback", () => {
+  equal(
+    classifyPlaybackTranscript(
+      "doing want art it",
+      "Doing great. Do you want to start it?",
+    ),
+    "echo",
+  );
+  equal(
+    classifyPlaybackTranscript("can you move me", "Doing great. Do you want to start it?"),
+    "user",
+  );
+  equal(
+    classifyPlaybackTranscript("can you", "Doing great. Do you want to start it?"),
+    "ambiguous",
   );
 });
 

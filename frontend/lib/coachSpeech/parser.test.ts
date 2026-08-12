@@ -273,6 +273,12 @@ test("keeps navigation queries separate from movement", () => {
     kind: "navigation",
     args: { mode: "action", unit: "drill", target: { type: "next" }, skip: false },
   });
+  for (const phrase of ["let's move on", "lets move on", "move on", "let's go"]) {
+    expectIntent(phrase, {
+      kind: "navigation",
+      args: { mode: "action", unit: "set", target: { type: "next" }, skip: false },
+    });
+  }
   expectIntent("skip this drill", {
     kind: "navigation",
     args: { mode: "action", unit: "drill", target: { type: "next" }, skip: true },

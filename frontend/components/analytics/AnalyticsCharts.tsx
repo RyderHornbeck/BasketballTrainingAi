@@ -129,8 +129,7 @@ export function SkillRadarChart({
             <Text style={[styles.radarOverall, { color: colors.text }]}>{profile.overall}</Text>
           </View>
           <Text style={[styles.radarCaption, { color: colors.textMuted }]}>
-            Starts from onboarding, then slowly shifts as you log workouts. One great set barely moves
-            the needle — consistent improvement does.
+            Complete exercises and stay consistent to boost your Overall.
           </Text>
         </View>
       ) : null}

@@ -345,6 +345,32 @@ Deno.test("set_current_position selects an incomplete set without completing it"
   );
 });
 
+Deno.test("set_current_position moves from an incomplete first set to set two without completion", async () => {
+  const ctx = contextWithPartialShootingSet();
+  ctx.day.active_exercise_id = "finish";
+  ctx.day.active_set_number = 1;
+  const writtenExerciseLogs: Record<string, unknown>[] = [];
+
+  const outcome = await executeCoachTool(
+    capturingSupabaseMock(writtenExerciseLogs),
+    "user",
+    "day",
+    ctx,
+    "set_current_position",
+    { drill_name: "Finishing", set_number: 2 },
+  );
+
+  assert(outcome.dbChanged, "moving to set two should persist the position");
+  assert(
+    ctx.day.active_exercise_id === "finish" && ctx.day.active_set_number === 2,
+    "the second set should become active even when set one is incomplete",
+  );
+  assert(
+    writtenExerciseLogs.length === 0 && !ctx.logs.get("finish")?.completed,
+    "set navigation must not record or complete the drill",
+  );
+});
+
 Deno.test("set_current_position defaults a drill move to its next incomplete set", async () => {
   const ctx = contextWithPartialShootingSet();
   const outcome = await executeCoachTool(
@@ -454,10 +480,10 @@ Deno.test("reopening a completed set preserves its recorded numbers", async () =
   );
 });
 
-Deno.test("explicit set completion does not require shooting results", async () => {
+Deno.test("incomplete finishing completion requires confirmation before marking the set done", async () => {
   const ctx = contextWithPartialShootingSet();
   const rows: Record<string, unknown>[] = [];
-  const outcome = await executeCoachTool(
+  const firstOutcome = await executeCoachTool(
     capturingSupabaseMock(rows),
     "user",
     "day",
@@ -471,14 +497,31 @@ Deno.test("explicit set completion does not require shooting results", async () 
     },
   );
 
+  assert(!firstOutcome.dbChanged, "incomplete shooting work must not complete immediately");
+  assert(rows.length === 0, "the confirmation prompt must not write a result");
+  assert(
+    firstOutcome.result.includes("Would you like to start this set or mark it complete as is?"),
+    "Coach should offer the athlete an explicit completion choice",
+  );
+
+  const outcome = await executeCoachTool(
+    capturingSupabaseMock(rows),
+    "user",
+    "day",
+    ctx,
+    "set_set_completion",
+    {
+      exercise_id: "finish",
+      drill_name: "Finishing",
+      set_number: 1,
+      completed: true,
+      confirmed_incomplete: true,
+    },
+  );
   const meta = decodeExerciseLogMeta(String(rows[0]?.notes ?? ""));
   const completed = meta.set_logs?.find((set) => set.set_number === 1);
-  assert(outcome.dbChanged, "an explicit finish request must complete the set");
+  assert(outcome.dbChanged, "the confirmed completion request must complete the set");
   assert(completed?.completed === true, "the selected set must be marked complete");
-  assert(
-    !outcome.result.includes("Tell me the makes and attempts"),
-    "explicit completion must not require a shooting follow-up",
-  );
 });
 
 Deno.test("reopening a whole drill preserves every recorded result", async () => {

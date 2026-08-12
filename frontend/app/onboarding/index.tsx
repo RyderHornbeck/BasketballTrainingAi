@@ -4,6 +4,7 @@ import { AIDataProcessingDisclosure } from "@/components/AIDataProcessingDisclos
 import { Button } from "@/components/Button";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
+import { selectionHaptic } from "@/lib/haptics";
 import {
   clearPendingAIDataConsent,
   savePendingAIDataConsent,
@@ -23,6 +24,7 @@ import { requestPlanGeneration, submitOnboardingAnswers } from "@/lib/plan";
 import { supabase } from "@/lib/supabase";
 import { OnboardingFormData } from "@/types/plan";
 import { Text } from "@/components/Text";
+import { TextInput } from "@/components/TextInput";
 import { router } from "expo-router";
 import { LineChart } from "react-native-gifted-charts";
 import {
@@ -53,6 +55,7 @@ import {
   TrophyIcon,
   UserCircleIcon,
   WatchIcon,
+  XCircleIcon,
 } from "phosphor-react-native";
 import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Image, Pressable, StyleSheet, View } from "react-native";
@@ -66,7 +69,7 @@ const GOALS = [
   "Get faster",
   "Improve conditioning",
   "Become stronger",
-  "Become an all-around better player",
+  "Become a more complete player",
 ];
 const PLAYING_LEVELS = [
   "Elementary School",
@@ -99,12 +102,13 @@ const INTENSITY_OPTIONS = ["Light", "Medium", "Hard", "Extremely hard"];
 const DAYS_PER_WEEK_OPTIONS = [1, 2, 3, 4, 5, 6, 7];
 const MINUTES_OPTIONS = [15, 30, 45, 60, 75, 90];
 
-const QUESTION_STEPS = 12;
-const PRE_SIGNUP_STEP = 13;
-const COACH_INTRO_STEP = 14;
-const COACH_SELECTION_STEP = 15;
-const PROGRESS_POTENTIAL_STEP = 16;
-const AI_CONSENT_STEP = 17;
+const QUESTION_STEPS = 13;
+const PRE_SIGNUP_STEP = 14;
+const COACH_INTRO_STEP = 15;
+const COACH_SELECTION_STEP = 16;
+const PROGRESS_POTENTIAL_STEP = 17;
+const WHY_COURT_COACH_STEP = 18;
+const AI_CONSENT_STEP = 19;
 const PRE_SIGNUP_TOTAL_STEPS = AI_CONSENT_STEP;
 const GENERATION_STEPS = [
   "Calculating your workout length",
@@ -114,6 +118,20 @@ const GENERATION_STEPS = [
   "Scheduling your first five workouts",
 ];
 const CHECKLIST_STEP_MS = 1_000;
+const DISALLOWED_NAME_PATTERNS = [
+  /\b(?:fuck|shit|bitch|asshole|dick|cunt|bastard)\b/i,
+  /\b(?:nigger|faggot|kike|spic|chink)\b/i,
+];
+
+function validatePreferredName(value: string): string | null {
+  const name = value.trim();
+  if (!/^[\p{L}][\p{L} '-]{0,79}$/u.test(name)) {
+    return "Use 1 to 80 letters, spaces, apostrophes, or hyphens.";
+  }
+  return DISALLOWED_NAME_PATTERNS.some((pattern) => pattern.test(name))
+    ? "Please choose a different name."
+    : null;
+}
 
 const initialForm: OnboardingFormData = {
   overall_skill_level: "",
@@ -143,6 +161,8 @@ export default function OnboardingScreen() {
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<OnboardingFormData>(initialForm);
   const [playingLevel, setPlayingLevel] = useState("");
+  const [preferredName, setPreferredName] = useState("");
+  const [nameError, setNameError] = useState<string | null>(null);
   const [coachVoice, setCoachVoice] = useState<CoachVoice | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -200,6 +220,7 @@ export default function OnboardingScreen() {
     value.split(",").map((item) => item.trim()).filter(Boolean);
   const currentDraft = () => ({
     ...form,
+    preferred_name: preferredName.trim(),
     ...(coachVoice ? { realtime_coach_voice: coachVoice } : {}),
   });
 
@@ -209,24 +230,26 @@ export default function OnboardingScreen() {
       case 2:
         return true;
       case 3:
-        return !!form.overall_skill_level;
+        return preferredName.trim().length > 0 && !nameError;
       case 4:
-        return !!playingLevel;
+        return !!form.overall_skill_level;
       case 5:
-        return !!form.main_goal;
+        return !!playingLevel;
       case 6:
-        return !!form.position;
+        return !!form.main_goal;
       case 7:
-        return selectedTextValues(form.strengths).length > 0;
+        return !!form.position;
       case 8:
-        return selectedTextValues(form.weaknesses).length > 0;
+        return selectedTextValues(form.strengths).length > 0;
       case 9:
-        return true;
+        return selectedTextValues(form.weaknesses).length > 0;
       case 10:
-        return form.days_per_week > 0;
+        return true;
       case 11:
-        return form.minutes_per_workout > 0;
+        return form.days_per_week > 0;
       case 12:
+        return form.minutes_per_workout > 0;
+      case 13:
         return !!form.preferred_intensity;
       case PRE_SIGNUP_STEP:
         return completedChecklistSteps === GENERATION_STEPS.length;
@@ -238,6 +261,11 @@ export default function OnboardingScreen() {
   };
 
   const handleNext = async () => {
+    if (step === 3) {
+      const validationError = validatePreferredName(preferredName);
+      setNameError(validationError);
+      if (validationError) return;
+    }
     if (step < QUESTION_STEPS) {
       if (!user) await saveOnboardingDraft(currentDraft());
       setStep(step + 1);
@@ -268,6 +296,10 @@ export default function OnboardingScreen() {
       return;
     }
     if (step === PROGRESS_POTENTIAL_STEP && !user) {
+      setStep(WHY_COURT_COACH_STEP);
+      return;
+    }
+    if (step === WHY_COURT_COACH_STEP && !user) {
       setStep(AI_CONSENT_STEP);
       return;
     }
@@ -291,7 +323,10 @@ export default function OnboardingScreen() {
           submitOnboardingAnswers(user.id, form),
           supabase
             .from("profiles")
-            .update({ realtime_coach_voice: coachVoice ?? DEFAULT_COACH_VOICE })
+            .update({
+              realtime_coach_voice: coachVoice ?? DEFAULT_COACH_VOICE,
+              preferred_name: preferredName.trim() || null,
+            })
             .eq("id", user.id)
             .then(({ error: profileError }) => {
               if (profileError) throw profileError;
@@ -348,15 +383,19 @@ export default function OnboardingScreen() {
       totalSteps={totalSteps}
       onNext={handleNext}
       onBack={handleBack}
+      nextLabel={
+        step === PROGRESS_POTENTIAL_STEP
+          ? "Reveal Advantage"
+          : step === WHY_COURT_COACH_STEP
+            ? "Start Training Smarter"
+            : step === AI_CONSENT_STEP
+              ? "Agree and Continue"
+              : step === QUESTION_STEPS && user
+                ? "Build My Plan"
+                : "Continue"
+      }
       nextDisabled={!canGoNext()}
       nextLoading={submitting}
-      nextLabel={
-        step === AI_CONSENT_STEP
-          ? "Agree and Continue"
-          : step === QUESTION_STEPS && user
-            ? "Build My Plan"
-            : "Continue"
-      }
     >
       {error ? <Text style={[styles.error, { color: colors.danger }]}>{error}</Text> : null}
 
@@ -381,6 +420,23 @@ export default function OnboardingScreen() {
       )}
 
       {step === 3 && (
+        <View>
+          <TextInput
+            value={preferredName}
+            onChangeText={(value) => {
+              const normalized = value.replace(/\s+/g, " ").trimStart();
+              setPreferredName(normalized);
+              setNameError(validatePreferredName(normalized));
+            }}
+            placeholder="Enter your name"
+            autoCapitalize="words"
+            autoComplete="name"
+            returnKeyType="done"
+          />
+          {nameError ? <Text style={[styles.error, { color: colors.danger }]}>{nameError}</Text> : null}
+        </View>
+      )}
+      {step === 4 && (
         <ChipGroup
           options={SKILL_LEVELS.map((level) => ({
             label: capitalize(level),
@@ -392,7 +448,7 @@ export default function OnboardingScreen() {
         />
       )}
 
-      {step === 4 && (
+      {step === 5 && (
         <ChipGroup
           options={PLAYING_LEVELS.map((level) => ({
             label: level,
@@ -404,7 +460,7 @@ export default function OnboardingScreen() {
         />
       )}
 
-      {step === 5 && (
+      {step === 6 && (
         <ChipGroup
           options={GOALS.map((goal) => ({ label: goal, value: goal, icon: goalIcon(goal) }))}
           selected={selectedTextValues(form.main_goal)}
@@ -412,7 +468,7 @@ export default function OnboardingScreen() {
         />
       )}
 
-      {step === 6 && (
+      {step === 7 && (
         <ChipGroup
           options={POSITIONS.map((position) => ({
             label: position,
@@ -424,7 +480,7 @@ export default function OnboardingScreen() {
         />
       )}
 
-      {step === 7 && (
+      {step === 8 && (
         <View>
           <ChipGroup
             options={STRENGTH_OPTIONS.map((strength) => ({
@@ -439,7 +495,7 @@ export default function OnboardingScreen() {
         </View>
       )}
 
-      {step === 8 && (
+      {step === 9 && (
         <View>
           <ChipGroup
             options={WEAKNESS_OPTIONS.map((weakness) => ({
@@ -454,7 +510,7 @@ export default function OnboardingScreen() {
         </View>
       )}
 
-      {step === 9 && (
+      {step === 10 && (
         <View>
           <SkillSlider label="Shooting" value={form.shooting_level ? Number(form.shooting_level) : null} onChange={(v) => update("shooting_level", String(v))} />
           <SkillSlider label="Ball Handling" value={form.ball_handling_level ? Number(form.ball_handling_level) : null} onChange={(v) => update("ball_handling_level", String(v))} />
@@ -466,7 +522,7 @@ export default function OnboardingScreen() {
         </View>
       )}
 
-      {step === 10 && (
+      {step === 11 && (
         <View>
           <Text style={[styles.groupLabel, { color: colors.text }]}>Days per week you can train</Text>
           <ChipGroup
@@ -477,7 +533,7 @@ export default function OnboardingScreen() {
         </View>
       )}
 
-      {step === 11 && (
+      {step === 12 && (
         <View>
           <Text style={[styles.groupLabel, { color: colors.text }]}>Minutes per workout</Text>
           <ChipGroup
@@ -488,7 +544,7 @@ export default function OnboardingScreen() {
         </View>
       )}
 
-      {step === 12 && (
+      {step === 13 && (
         <View>
           <Text style={[styles.groupLabel, { color: colors.text }]}>Preferred workout intensity</Text>
           <ChipGroup
@@ -583,7 +639,10 @@ export default function OnboardingScreen() {
                 key={coach.voice}
                 accessibilityRole="radio"
                 accessibilityState={{ selected }}
-                onPress={() => setCoachVoice(coach.voice)}
+                onPress={() => {
+                  selectionHaptic();
+                  setCoachVoice(coach.voice);
+                }}
                 style={({ pressed }) => [
                   styles.coachChoice,
                   {
@@ -618,13 +677,18 @@ export default function OnboardingScreen() {
 
       {step === PROGRESS_POTENTIAL_STEP && !user && <ProgressPotentialChart />}
 
+      {step === WHY_COURT_COACH_STEP && !user && <WhyCourtCoachComparison />}
+
       {step === AI_CONSENT_STEP && (
         <View style={styles.consentSlide}>
           <AIDataProcessingDisclosure />
           <Button
             title="Not Now"
             variant="outline"
-            onPress={() => void handleSubmit(false)}
+            onPress={() => {
+              selectionHaptic();
+              void handleSubmit(false);
+            }}
             disabled={submitting}
             style={styles.consentNotNow}
           />
@@ -636,12 +700,31 @@ export default function OnboardingScreen() {
 
 function ProgressPotentialChart() {
   const labels = ["START", "2w", "4w", "6w", "8w", "MAX"];
-  const coachData = [0, 12, 31, 54, 72, 90].map((value) => ({ value }));
-  const traditionalData = [0, 3, 8, 13, 19, 25].map((value) => ({ value }));
+  const [chartWidth, setChartWidth] = useState(0);
+  const axisGutter = 36;
+  const horizontalPadding = 36;
+  const plotWidth = Math.max(0, chartWidth - axisGutter - horizontalPadding);
+  const edgeInset = 16;
+  const spacing = plotWidth > 0 ? Math.max(0, (plotWidth - edgeInset * 2) / 5) : 42;
+  const coachData = [0, 12, 31, 54, 72, 90].map((value, index, values) => ({
+    value,
+    ...(index === values.length - 1
+      ? { dataPointRadius: 5, dataPointColor: "#FF7A1A" }
+      : { hideDataPoint: true }),
+  }));
+  const traditionalData = [0, 3, 8, 13, 19, 25].map((value, index, values) => ({
+    value,
+    ...(index === values.length - 1
+      ? { dataPointRadius: 3.5, dataPointColor: "#AAA39D" }
+      : { hideDataPoint: true }),
+  }));
 
   return (
     <View style={styles.progressSlide}>
-      <View style={styles.progressChart}>
+      <View
+        style={styles.progressChart}
+        onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)}
+      >
         <View pointerEvents="none" style={styles.progressYAxis}>
           {[100, 75, 50, 25, 0].map((value) => (
             <Text key={value} style={styles.progressYAxisLabel}>{value}%</Text>
@@ -650,30 +733,33 @@ function ProgressPotentialChart() {
         <LineChart
           data={coachData}
           data2={traditionalData}
-          height={178}
+          height={184}
           maxValue={100}
           noOfSections={4}
           stepValue={25}
-          initialSpacing={8}
-          endSpacing={4}
-          spacing={55}
+          parentWidth={plotWidth || undefined}
+          xAxisLength={plotWidth || undefined}
+          yAxisLabelWidth={0}
+          initialSpacing={edgeInset}
+          endSpacing={edgeInset}
+          spacing={spacing}
           xAxisLabelTexts={labels}
           xAxisLabelTextStyle={styles.progressXAxisLabel}
           yAxisTextStyle={styles.progressYAxisText}
           hideYAxisText
           yAxisThickness={0}
-          xAxisThickness={1}
-          xAxisColor="#D8D2CC"
-          rulesColor="#EEE8E2"
+          xAxisThickness={0}
+          rulesColor="rgba(255, 122, 26, 0.22)"
           rulesThickness={1}
-          hideDataPoints
+          rulesType="solid"
+          backgroundColor="transparent"
           curved
           curvature={0.16}
           isAnimated
           animationDuration={1_250}
           animateTogether
-          thickness={4}
-          thickness2={2.5}
+          thickness={5}
+          thickness2={3.5}
           color="#FF7A1A"
           color2="#AAA39D"
           disableScroll
@@ -690,11 +776,58 @@ function ProgressPotentialChart() {
         <View style={[styles.progressOption, styles.progressOptionMuted]}>
           <View>
             <Text style={styles.progressOptionEyebrowMuted}>WITHOUT</Text>
-            <Text style={styles.progressOptionTitle}>Traditional</Text>
+            <Text style={[styles.progressOptionTitle, styles.progressOptionTitleMuted]}>Court Coach AI</Text>
           </View>
           <Text style={styles.progressOptionMetricMuted}>Traditional</Text>
         </View>
       </View>
+    </View>
+  );
+}
+
+function WhyCourtCoachComparison() {
+  const comparisons = [
+    ["Random drills", "AI personal coach"],
+    ["No plan", "Smart workouts"],
+    ["No tracking", "Progress insights"],
+    ["No feedback", "Live coaching"],
+    ["Manual logging", "Voice tracking"],
+    ["No proof", "Share workouts"],
+    ["Stagnant rank", "Boost overall"],
+    ["Train alone", "Always guided"],
+  ];
+
+  return (
+    <View style={styles.whyCourtCoachCard}>
+      <View style={styles.comparisonHeadingRow}>
+        <View style={styles.comparisonColumn}>
+        <Text style={styles.withoutHeading}>WITHOUT{`\n`}COURT COACH</Text>
+        </View>
+        <View style={styles.comparisonDivider} />
+        <View style={styles.comparisonColumn}>
+        <Text style={styles.withHeading}>WITH{`\n`}COURT COACH</Text>
+        </View>
+      </View>
+      {comparisons.map(([without, withCourtCoach], index) => (
+        <View
+          key={without}
+          style={[styles.comparisonFullRow, index > 0 && styles.comparisonHorizontalLine]}
+        >
+          <View style={styles.comparisonColumn}>
+            <View style={styles.comparisonRow}>
+              <XCircleIcon size={19} color="#D94A45" weight="fill" />
+              <Text style={styles.withoutComparisonText}>{without}</Text>
+            </View>
+          </View>
+          <View style={styles.comparisonDivider} />
+          <View style={styles.comparisonColumn}>
+            <View style={styles.comparisonRow}>
+              <CheckCircleIcon size={19} color="#35B96F" weight="fill" />
+              <Text style={styles.withComparisonText}>{withCourtCoach}</Text>
+            </View>
+          </View>
+        </View>
+      ))}
     </View>
   );
 }
@@ -710,16 +843,20 @@ const STEP_TITLES = [
     subtitle:
       "Court Coach builds personalized workouts, guides each drill, and tracks your progress. Just talk to change drills, start timers, or log results.",
   },
-  { title: "What's your skill level?", subtitle: "Be honest -- this shapes your entire plan." },
+  {
+    title: "What should your Court Coach call you?",
+    subtitle: "Your preferred name, nickname, or regular name all work.",
+  },
+  { title: "What's your skill level?", subtitle: "Be honest. This shapes your entire plan." },
   {
     title: "What level do you play?",
     subtitle: "Choose the level that best matches where you currently compete.",
   },
   { title: "What's your main goal?", subtitle: "Choose every goal that matters to you." },
-  { title: "What position do you play?", subtitle: "Helps us pick position-relevant drills." },
+  { title: "What position do you play?", subtitle: "Helps us pick drills that fit your position." },
   { title: "Your strengths", subtitle: "Choose every area you feel confident in." },
   { title: "Your weaknesses", subtitle: "Choose every area you want to improve." },
-  { title: "Rate your skills", subtitle: "A quick self-assessment, 0 to 10." },
+  { title: "Rate your skills", subtitle: "A quick skill assessment from 0 to 10." },
   { title: "Training days", subtitle: "How often can you train each week?" },
   { title: "Workout length", subtitle: "How much time do you have per workout?" },
   { title: "Workout intensity", subtitle: "Choose how challenging you want it to feel." },
@@ -741,9 +878,13 @@ const STEP_TITLES = [
       "See how Court Coach accelerates your improvement compared to traditional training.",
   },
   {
+    title: "Why Court Coach",
+    subtitle: "Everything you need to train smarter in one place.",
+  },
+  {
     title: "Data and Privacy",
     subtitle:
-      "Review how Court Coach uses data when you choose AI-powered features.",
+      "Review how Court Coach uses data when you choose AI powered features.",
   },
 ];
 
@@ -811,7 +952,10 @@ function ChipGroup({
         return (
           <Pressable
             key={opt.value}
-            onPress={() => onToggle(opt.value)}
+            onPress={() => {
+              selectionHaptic();
+              onToggle(opt.value);
+            }}
             style={({ pressed }) => [
               styles.chip,
               styles.chipVertical,
@@ -1140,14 +1284,21 @@ const styles = StyleSheet.create({
   },
   progressChart: {
     position: "relative",
-    marginLeft: 26,
-    minHeight: 218,
+    backgroundColor: "transparent",
+    borderRadius: 32,
+    overflow: "hidden",
+    minHeight: 248,
+    marginHorizontal: 7,
+    paddingLeft: 36,
+    paddingTop: 17,
+    paddingBottom: 8,
+    paddingRight: 36,
   },
   progressYAxis: {
     position: "absolute",
-    left: -31,
-    top: 4,
-    bottom: 32,
+    left: 5,
+    top: 20,
+    bottom: 38,
     justifyContent: "space-between",
   },
   progressYAxisLabel: {
@@ -1179,6 +1330,7 @@ const styles = StyleSheet.create({
   progressOptionSelected: {
     backgroundColor: "#FFF0E5",
     borderColor: "#FF7A1A",
+    borderWidth: 1,
   },
   progressOptionMuted: {
     backgroundColor: "#F4F1EF",
@@ -1202,6 +1354,9 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginTop: 2,
   },
+  progressOptionTitleMuted: {
+    color: "#8B827B",
+  },
   progressOptionMetric: {
     color: "#FF7A1A",
     fontSize: 13,
@@ -1211,6 +1366,67 @@ const styles = StyleSheet.create({
     color: "#8B827B",
     fontSize: 13,
     fontWeight: "700",
+  },
+  whyCourtCoachCard: {
+    minHeight: 452,
+    borderRadius: 22,
+    overflow: "hidden",
+  },
+  comparisonHeadingRow: {
+    flexDirection: "row",
+    minHeight: 76,
+  },
+  comparisonFullRow: {
+    flexDirection: "row",
+    minHeight: 47,
+  },
+  comparisonHorizontalLine: {
+    borderTopColor: "#DDD6D0",
+    borderTopWidth: 1,
+  },
+  comparisonColumn: {
+    flex: 1,
+    paddingHorizontal: 10,
+    justifyContent: "center",
+  },
+  comparisonDivider: {
+    width: 1,
+    backgroundColor: "#D4CCC5",
+  },
+  withoutHeading: {
+    color: "#D94A45",
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 0.7,
+    lineHeight: 17,
+    marginBottom: 0,
+  },
+  withHeading: {
+    color: "#FF7A1A",
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 0.7,
+    lineHeight: 17,
+    marginBottom: 0,
+  },
+  comparisonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  withoutComparisonText: {
+    color: "#8D8580",
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "600",
+    lineHeight: 16,
+  },
+  withComparisonText: {
+    color: "#251D19",
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 16,
   },
   consentSlide: {
     gap: 18,

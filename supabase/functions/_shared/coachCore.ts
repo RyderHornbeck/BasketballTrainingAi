@@ -178,8 +178,8 @@ TIMED SET DURATION OVERRIDE
 
 COMPLETION, TIME, OUTPUT
 - set_set_completion completes/reopens one set, including timed sets. complete_drill requires explicit whole-drill completion; uncomplete_drill reopens it. "Can I skip?" is skip, not completion.
+- Before completing a shooting or finishing set with attempts remaining, say its exact progress and remaining attempts, then ask: "Would you like to start this set or mark it complete as is?" Only mark it complete after the athlete clearly chooses to mark it complete as is.
 - Honor an explicit request to go back and reopen an earlier completed set: call set_set_completion with completed=false; never claim past sets cannot be reopened.
-- Workout completion requires totals.remaining_drills=0; a last-position drill or null next_exercise is insufficient because earlier drills may remain. finish_workout only on explicit done.
 - extend_workout/shorten_workout change time. start_timer targets the named/current timed set and includes its reference; omit duration for saved time. Preserve seconds/minutes. After success say "A X-minute/second timer has been started." Ask duration for untimed drills. set_timed_set_duration applies to any drill configured with minute-based sets.
 `;
 
@@ -504,12 +504,6 @@ const REALTIME_TOOL_DEFS = [
     },
   },
   {
-    name: "finish_workout",
-    description:
-      "Finish the workout when the athlete explicitly says they are done, even if they leave drills unfinished. This unlocks the next workout.",
-    parameters: { type: "object", properties: {} },
-  },
-  {
     name: "start_timer",
     description:
       "Start a countdown bound to the named set or active timed set. Include its exercise and set reference. Omit duration for its saved time and preserve units.",
@@ -671,12 +665,6 @@ const TOOL_DEFS = [
     },
   },
   {
-    name: "finish_workout",
-    description:
-      "Finish and close out today's workout when the user says they're done, even if drills remain unfinished.",
-    parameters: { type: "object", properties: {} },
-  },
-  {
     name: "start_timer",
     description:
       "Start a countdown bound to the named set or active timed set. Include its exercise and set reference. Omit duration for its saved time and preserve units.",
@@ -757,7 +745,6 @@ const REALTIME_TOOL_DESCRIPTIONS: Record<string, string> = {
   get_progress: "Fetch workout progress.",
   extend_workout: "Add workout minutes.",
   shorten_workout: "Remove remaining workout minutes.",
-  finish_workout: "Finish only when explicitly done.",
   start_timer:
     "Start a timer bound to a workout exercise/set; seconds and minutes keep their units.",
   set_timed_set_duration:
@@ -1780,8 +1767,13 @@ export function buildCoachTurnDynamicContext(
   _speculativeReadOnly = false,
   includeWorkoutState = true,
 ): string {
+  const preferredName = typeof profile?.preferred_name === "string"
+    ? profile.preferred_name.slice(0, 80)
+    : null;
   const identity =
-    `Your name is ${coachName}. If asked, introduce yourself by that name.`;
+    `Your name is ${coachName}. If asked, introduce yourself by that name.${
+      preferredName ? ` The athlete's preferred name is ${preferredName}; use it naturally.` : ""
+    }`;
   if (!includeWorkoutState) return identity;
   return `${identity}
 Authoritative workout state follows. Use it silently and prefer newer state from tool results:
@@ -2266,6 +2258,24 @@ export async function executeCoachTool(
       );
       const current = setLogs.find((set) => set.set_number === requestedSet);
       const completed = args.completed;
+      const targetAttempts = current
+        ? targetAttemptsForSet(current, plan)
+        : plan.perSetAttempts;
+      const attempts = current?.attempts ?? 0;
+      if (
+        completed &&
+        isShootingDrill(ex) &&
+        targetAttempts != null &&
+        attempts < targetAttempts &&
+        args.confirmed_incomplete !== true
+      ) {
+        return {
+          result: `You're ${current?.makes ?? 0} for ${attempts}, ${
+            targetAttempts - attempts
+          } shots left. Would you like to start this set or mark it complete as is?`,
+          dbChanged: false,
+        };
+      }
 
       setLogs = updateSetLog(setLogs, plan, requestedSet, {
         completed,
@@ -3094,64 +3104,6 @@ export async function executeCoachTool(
         .eq("user_id", userId);
       if (error) return { result: `Error: ${error.message}`, dbChanged: false };
       return { result: `Workout is now ${updated} minutes.`, dbChanged: true };
-    }
-
-    case "finish_workout": {
-      if (ctx.day.completed) {
-        return { result: "Workout already finished.", dbChanged: false };
-      }
-      const completionKind = ctx.exercises.length > 0 &&
-          ctx.exercises.every((exercise) =>
-            ctx.logs.get(exercise.id)?.completed === true
-          )
-        ? "full"
-        : "partial";
-      const completedMinutes = [...ctx.logs.values()].reduce(
-        (total, log) => total + (log.minutes_completed ?? 0),
-        0,
-      );
-
-      const { error: logError } = await supabase.from("workout_day_logs")
-        .upsert(
-          {
-            day_id: dayId,
-            user_id: userId,
-            total_minutes: completedMinutes || ctx.day.estimated_minutes ||
-              null,
-          },
-          { onConflict: "day_id" },
-        );
-      if (logError) {
-        return { result: `Error: ${logError.message}`, dbChanged: false };
-      }
-
-      await supabase
-        .from("workout_days")
-        .update({
-          completed: true,
-          locked: false,
-          completion_kind: completionKind,
-          finalized_at: new Date().toISOString(),
-        })
-        .eq("id", dayId)
-        .eq("user_id", userId);
-
-      const { data: dayRow } = await supabase
-        .from("workout_days")
-        .select("plan_id, day_number")
-        .eq("id", dayId)
-        .single();
-      if (dayRow?.day_number != null) {
-        await supabase
-          .from("workout_days")
-          .update({ locked: false, scheduled_date: null })
-          .eq("plan_id", dayRow.plan_id)
-          .eq("day_number", dayRow.day_number + 1);
-      }
-      return {
-        result: "Workout finished and saved. Your next workout is unlocked.",
-        dbChanged: true,
-      };
     }
 
     case "start_timer": {

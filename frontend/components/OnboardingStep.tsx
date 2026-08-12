@@ -1,8 +1,9 @@
 import { useTheme } from "@/hooks/useTheme";
+import { actionHaptic, selectionHaptic } from "@/lib/haptics";
 import { LinearGradient } from "expo-linear-gradient";
 import { ArrowLeftIcon } from "phosphor-react-native";
 import React from "react";
-import { Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button } from "./Button";
 import { Text } from "./Text";
@@ -48,7 +49,10 @@ export function OnboardingStep({
             accessibilityRole="button"
             accessibilityLabel="Go back"
             hitSlop={10}
-            onPress={onBack}
+            onPress={() => {
+              selectionHaptic();
+              onBack?.();
+            }}
             style={({ pressed }) => [styles.backArrow, { opacity: pressed ? 0.65 : 1 }]}
           >
             <ArrowLeftIcon size={21} color={colors.text} weight="bold" />
@@ -68,40 +72,52 @@ export function OnboardingStep({
         </View>
       </View>
 
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={styles.keyboardArea}
       >
-        <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
-        {subtitle ? (
-          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>{subtitle}</Text>
-        ) : null}
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
+          {subtitle ? (
+            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>{subtitle}</Text>
+          ) : null}
 
-        <View style={styles.questions}>{children}</View>
-      </ScrollView>
+          <View style={styles.questions}>{children}</View>
+        </ScrollView>
 
-      <View
-        style={[
-          styles.footer,
-          { borderTopColor: colors.border, backgroundColor: "transparent" },
-        ]}
-      >
-        <Button
-          title={nextLabel}
-          onPress={onNext}
-          disabled={nextDisabled}
-          loading={nextLoading}
-          style={styles.nextButton}
-        />
-      </View>
+        <View
+          style={[
+            styles.footer,
+            { borderTopColor: colors.border, backgroundColor: "transparent", paddingBottom: Math.max(26, insets.bottom + 12) },
+          ]}
+        >
+          <Button
+            title={nextLabel}
+            onPress={() => {
+              actionHaptic();
+              onNext();
+            }}
+            disabled={nextDisabled}
+            loading={nextLoading}
+            style={styles.nextButton}
+            buttonStyle={styles.nextButtonPill}
+          />
+        </View>
+      </KeyboardAvoidingView>
     </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
+    flex: 1,
+  },
+  keyboardArea: {
     flex: 1,
   },
   progressWrapper: {
@@ -161,5 +177,8 @@ const styles = StyleSheet.create({
   },
   nextButton: {
     width: "100%",
+  },
+  nextButtonPill: {
+    borderRadius: 999,
   },
 });

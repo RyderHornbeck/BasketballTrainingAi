@@ -406,15 +406,6 @@ const TOOLS = [
   {
     type: "function",
     function: {
-      name: "finish_workout",
-      description:
-        "Finish and close out today's workout when the user says they're done, even if drills remain unfinished.",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "start_timer",
       description: "Start the workout timer.",
       parameters: { type: "object", properties: {} },
@@ -626,67 +617,6 @@ async function executeTool(
       return { result: `Workout is now ${updated} minutes.`, dbChanged: true };
     }
 
-    case "finish_workout": {
-      if (ctx.day.completed) {
-        return { result: "Workout already finished.", dbChanged: false };
-      }
-      const completionKind = ctx.exercises.length > 0 &&
-          ctx.exercises.every((exercise) =>
-            ctx.logs.get(exercise.id)?.completed === true
-          )
-        ? "full"
-        : "partial";
-      const completedMinutes = [...ctx.logs.values()].reduce(
-        (total, log) => total + (log.minutes_completed ?? 0),
-        0,
-      );
-
-      const { error: logError } = await supabase.from("workout_day_logs")
-        .upsert(
-          {
-            day_id: dayId,
-            user_id: userId,
-            total_minutes: completedMinutes || ctx.day.estimated_minutes ||
-              null,
-          },
-          { onConflict: "day_id" },
-        );
-      if (logError) {
-        return { result: `Error: ${logError.message}`, dbChanged: false };
-      }
-
-      await supabase
-        .from("workout_days")
-        .update({
-          completed: true,
-          locked: false,
-          completion_kind: completionKind,
-          finalized_at: new Date().toISOString(),
-        })
-        .eq("id", dayId)
-        .eq("user_id", userId);
-
-      const { data: dayRow } = await supabase
-        .from("workout_days")
-        .select("plan_id, day_number")
-        .eq("id", dayId)
-        .single();
-      if (dayRow?.day_number != null) {
-        await supabase
-          .from("workout_days")
-          .update({
-            locked: false,
-            scheduled_date: null,
-          })
-          .eq("plan_id", dayRow.plan_id)
-          .eq("day_number", dayRow.day_number + 1);
-      }
-      return {
-        result: "Workout finished and saved. Your next workout is unlocked.",
-        dbChanged: true,
-      };
-    }
-
     case "start_timer":
       return {
         result: "Timer started.",
@@ -725,7 +655,6 @@ Rules:
 - When the athlete reports results ("I made 8 out of 10"), call save_shooting_results, then react with the percentage and a quick push.
 - When they finish or want to skip a drill, call complete_drill or skip_drill and tell them what's next.
 - When they want to redo a drill or say they marked one complete by mistake, call uncomplete_drill.
-- When they're done or say "end the workout", call finish_workout and give a short wrap-up referencing today's numbers.
 - Use start_timer/pause_timer/resume_timer when they mention the timer or starting/pausing the workout.
 - Use extend_workout/shorten_workout when they want more or less time, and rebalance your guidance accordingly.
 - Reference their actual numbers when encouraging: improvement, streaks, percentages.

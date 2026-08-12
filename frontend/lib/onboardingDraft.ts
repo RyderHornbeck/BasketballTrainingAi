@@ -11,6 +11,7 @@ const DRAFT_KEY = "hoopplan.onboarding_draft.v1";
 
 export type OnboardingDraft = OnboardingFormData & {
   realtime_coach_voice?: CoachVoice;
+  preferred_name?: string;
 };
 
 export async function saveOnboardingDraft(data: OnboardingDraft): Promise<void> {

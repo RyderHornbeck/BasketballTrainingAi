@@ -259,7 +259,6 @@ export function coachToolPreamble(
     set_set_completion: "I'm making that change.",
     complete_drill: "I'm marking that drill complete.",
     uncomplete_drill: "I'm reopening that drill.",
-    finish_workout: "I'm finishing your workout.",
     start_timer: "I'm starting the timer.",
     pause_timer: "I'm pausing the timer.",
     resume_timer: "I'm resuming the timer.",

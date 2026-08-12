@@ -52,6 +52,7 @@ export interface Profile {
   id: string;
   email: string | null;
   full_name: string | null;
+  preferred_name: string | null;
   created_at: string;
   onboarding_completed: boolean;
   push_token: string | null;

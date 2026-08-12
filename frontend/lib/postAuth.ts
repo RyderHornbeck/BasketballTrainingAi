@@ -53,7 +53,10 @@ export async function routeAfterSocialAuth(
     await setAIDataConsent(aiConsentAllowed, "onboarding");
     const { error: voiceError } = await supabase
       .from("profiles")
-      .update({ realtime_coach_voice: draft.realtime_coach_voice ?? DEFAULT_COACH_VOICE })
+      .update({
+        realtime_coach_voice: draft.realtime_coach_voice ?? DEFAULT_COACH_VOICE,
+        preferred_name: draft.preferred_name?.trim() || null,
+      })
       .eq("id", userId);
     if (voiceError) throw voiceError;
     // This flips onboarding_completed and is deliberately the final database

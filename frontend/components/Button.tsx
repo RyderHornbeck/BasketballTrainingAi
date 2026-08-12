@@ -19,6 +19,7 @@ interface ButtonProps {
   disabled?: boolean;
   loading?: boolean;
   style?: StyleProp<ViewStyle>;
+  buttonStyle?: StyleProp<ViewStyle>;
 }
 
 export function Button({
@@ -28,6 +29,7 @@ export function Button({
   disabled,
   loading,
   style,
+  buttonStyle,
 }: ButtonProps) {
   const { colors, scheme } = useTheme();
   const isDisabled = disabled || loading;
@@ -61,6 +63,7 @@ export function Button({
         pressRetentionOffset={24}
         style={({ pressed }) => [
           styles.base,
+          buttonStyle,
           {
             backgroundColor,
             borderColor,

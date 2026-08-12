@@ -4,8 +4,9 @@ import { useTheme } from "@/hooks/useTheme";
 import { isLikelyNetworkError, reportNetworkFailure } from "@/lib/connectivity";
 import { routeAfterSocialAuth } from "@/lib/postAuth";
 import * as AppleAuthentication from "expo-apple-authentication";
+import { LinearGradient } from "expo-linear-gradient";
 import { Link, router } from "expo-router";
-import { ArrowLeftIcon, GoogleLogoIcon } from "phosphor-react-native";
+import { ArrowLeftIcon } from "phosphor-react-native";
 import React, { useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -16,6 +17,7 @@ import {
   StyleSheet,
   View,
 } from "react-native";
+import Svg, { Path } from "react-native-svg";
 
 type Provider = "google" | "apple";
 
@@ -93,6 +95,11 @@ export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
   const busy = loadingProvider !== null;
 
   return (
+    <LinearGradient
+      colors={["rgba(247,179,121,0.30)", colors.background, colors.background]}
+      locations={[0, 0.42, 1]}
+      style={styles.flex}
+    >
     <ScrollView contentContainerStyle={styles.content}>
       <Pressable
         accessibilityRole="button"
@@ -131,16 +138,18 @@ export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
       </View>
 
       <View style={styles.actions}>
-        <SocialButton
-          label="Continue with Google"
-          icon={<GoogleLogoIcon size={22} color={colors.text} weight="bold" />}
-          loading={loadingProvider === "google"}
-          disabled={busy}
-          onPress={() => void authenticate("google")}
-          backgroundColor={colors.card}
-          borderColor={colors.border}
-          textColor={colors.text}
-        />
+        <View style={styles.googleButtonWrapper}>
+          <SocialButton
+            label="Continue with Google"
+            icon={<GoogleMark />}
+            loading={loadingProvider === "google"}
+            disabled={busy}
+            onPress={() => void authenticate("google")}
+            backgroundColor={colors.card}
+            borderColor={colors.border}
+            textColor={colors.text}
+          />
+        </View>
 
         {Platform.OS === "ios" ? (
           <View style={[styles.appleButtonWrapper, { opacity: busy ? 0.55 : 1 }]}>
@@ -179,6 +188,7 @@ export function SocialAuthScreen({ mode }: { mode: "login" | "signup" }) {
         </Link>
       </View>
     </ScrollView>
+    </LinearGradient>
   );
 }
 
@@ -222,7 +232,21 @@ function SocialButton({
   );
 }
 
+function GoogleMark() {
+  return (
+    <Svg width={22} height={22} viewBox="0 0 18 18">
+      <Path fill="#EA4335" d="M17.64 9.205c0-.638-.057-1.252-.164-1.841H9v3.483h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.909c1.703-1.568 2.683-3.876 2.683-6.617Z" />
+      <Path fill="#4285F4" d="M9 18c2.43 0 4.467-.806 5.956-2.178l-2.909-2.259c-.806.54-1.837.86-3.047.86-2.344 0-4.328-1.584-5.037-3.71H.956v2.332A9 9 0 0 0 9 18Z" />
+      <Path fill="#FBBC05" d="M3.963 10.713A5.41 5.41 0 0 1 3.681 9c0-.594.102-1.172.282-1.713V4.955H.956A9 9 0 0 0 0 9c0 1.452.348 2.827.956 4.045l3.007-2.332Z" />
+      <Path fill="#34A853" d="M9 3.578c1.322 0 2.508.455 3.441 1.348l2.581-2.581C13.463.891 11.425 0 9 0A9 9 0 0 0 .956 4.955l3.007 2.332C4.672 5.162 6.656 3.578 9 3.578Z" />
+    </Svg>
+  );
+}
+
 const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+  },
   content: {
     flexGrow: 1,
     justifyContent: "center",
@@ -261,6 +285,10 @@ const styles = StyleSheet.create({
   },
   actions: {
     gap: 14,
+  },
+  googleButtonWrapper: {
+    borderRadius: 18,
+    overflow: "hidden",
   },
   socialButton: {
     height: 54,

@@ -39,7 +39,6 @@ const EXACT_CONFIRMATION_TOOLS = new Set([
   "set_set_completion",
   "complete_drill",
   "uncomplete_drill",
-  "finish_workout",
 ]);
 
 function jsonResponse(body: unknown, status = 200) {

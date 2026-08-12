@@ -18,6 +18,10 @@ export interface TimerDurationConfirmationArgs {
   accepted: boolean;
 }
 
+export interface SetCompletionConfirmationArgs {
+  accepted: boolean;
+}
+
 export interface SpeechControlIntentArgs {
   action: "stop_speaking";
 }
@@ -82,6 +86,7 @@ export type CoachSpeechIntent =
   | IntentBase<"correct_last_shot", { from: "make" | "miss"; to: "make" | "miss" }>
   | IntentBase<"timer", TimerIntentArgs>
   | IntentBase<"timer_duration_confirmation", TimerDurationConfirmationArgs>
+  | IntentBase<"set_completion_confirmation", SetCompletionConfirmationArgs>
   | IntentBase<"speech_control", SpeechControlIntentArgs>
   | IntentBase<"navigation", NavigationIntentArgs>
   | IntentBase<"completion", CompletionIntentArgs>
@@ -524,6 +529,13 @@ export const parseNavigationIntent: Parser = (text) => {
       "navigation",
       { mode: "query", unit: "set", target: { type: "next" } },
       "What's next heard"
+    );
+  }
+  if (/^(?:(?:let'?s\s+)?(?:move on|keep going|continue)|let'?s go)$/.test(text)) {
+    return intent(
+      "navigation",
+      { mode: "action", unit: "set", target: { type: "next" }, skip: false },
+      "Move to next set heard"
     );
   }
   if (/^(?:whats|what is|what do i have) (?:up )?next(?: for me)?$/.test(text)) {
