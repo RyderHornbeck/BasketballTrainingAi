@@ -343,7 +343,7 @@ export default function ProfileScreen() {
                     autoComplete="name"
                     maxLength={80}
                     onChangeText={handlePreferredNameChange}
-                    placeholder="Enter your name"
+                    placeholder="Enter your preferred name"
                     placeholderTextColor={colors.textMuted}
                     returnKeyType="done"
                     value={preferredName}

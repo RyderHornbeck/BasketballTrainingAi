@@ -1,4 +1,4 @@
-import { setAudioModeAsync, useAudioPlayer } from "expo-audio";
+import { useAudioPlayer } from "expo-audio";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 type TimerCue = "halfway" | "tenSeconds" | "complete";
@@ -55,15 +55,6 @@ export function useTimerAudioCues() {
 
   useEffect(() => {
     disposedRef.current = false;
-    // Timer cues share the iOS audio session with the duplex Cartesia engine.
-    // Keeping recording enabled prevents a cue from changing the category to
-    // playback-only and disabling microphone capture.
-    void setAudioModeAsync({
-      allowsRecording: true,
-      playsInSilentMode: true,
-      interruptionMode: "mixWithOthers",
-      shouldRouteThroughEarpiece: false,
-    }).catch(() => {});
     return () => {
       disposedRef.current = true;
       stopAll();

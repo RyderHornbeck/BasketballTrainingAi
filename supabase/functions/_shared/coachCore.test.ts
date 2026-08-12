@@ -1476,6 +1476,12 @@ Deno.test("realtime shooting tools make single shots deterministic", () => {
     ) && COACH_SYSTEM_PROMPT.includes("Never save the prescribed target makes"),
     "saved shooting results must never substitute target or remaining numbers",
   );
+  assert(
+    COACH_SYSTEM_PROMPT.includes("I actually want to shoot 50 shots") &&
+      COACH_SYSTEM_PROMPT.includes("target_attempts=50") &&
+      COACH_SYSTEM_PROMPT.includes("Never answer with an updated progress sentence"),
+    "explicit shot-count changes must call the target-edit tool instead of narrating progress",
+  );
 });
 
 Deno.test("realtime sessions transcribe audio and retain stable tool contracts", () => {

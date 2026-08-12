@@ -64,11 +64,16 @@ export interface DuplexAudioErrorEvent {
   fatal: boolean;
 }
 
+export interface LocalPlaybackFinishedEvent {
+  playbackId: string;
+}
+
 type DuplexAudioEvents = {
   audioInput: (event: AudioInputEvent) => void;
   playbackStateChanged: (event: PlaybackStateEvent) => void;
   sessionStateChanged: (event: SessionStateEvent) => void;
   error: (event: DuplexAudioErrorEvent) => void;
+  localPlaybackFinished: (event: LocalPlaybackFinishedEvent) => void;
 };
 
 interface ExpoDuplexAudioNativeModule {
@@ -85,6 +90,8 @@ interface ExpoDuplexAudioNativeModule {
   setMutedAsync(muted: boolean): Promise<DuplexAudioState>;
   /** Enqueues headerless little-endian signed 16-bit mono PCM. */
   enqueuePlaybackAsync(base64Pcm: string): Promise<void>;
+  /** Plays packaged local audio through the active voice-call output graph. */
+  playLocalFilesAsync(uris: string[]): Promise<string>;
   /** Immediately drops queued audio and flushes audio already handed to output. */
   clearPlaybackAsync(): Promise<void>;
   getStateAsync(): Promise<DuplexAudioState>;
@@ -103,6 +110,8 @@ export const setMutedAsync = (muted: boolean) =>
   nativeModule.setMutedAsync(muted);
 export const enqueuePlaybackAsync = (base64Pcm: string) =>
   nativeModule.enqueuePlaybackAsync(base64Pcm);
+export const playLocalFilesAsync = (uris: string[]) =>
+  nativeModule.playLocalFilesAsync(uris);
 export const clearPlaybackAsync = () => nativeModule.clearPlaybackAsync();
 export const getStateAsync = () => nativeModule.getStateAsync();
 
@@ -128,4 +137,10 @@ export function addErrorListener(
   listener: DuplexAudioEvents["error"],
 ): EventSubscription {
   return nativeModule.addListener("error", listener);
+}
+
+export function addLocalPlaybackFinishedListener(
+  listener: DuplexAudioEvents["localPlaybackFinished"],
+): EventSubscription {
+  return nativeModule.addListener("localPlaybackFinished", listener);
 }

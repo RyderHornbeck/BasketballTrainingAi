@@ -23,6 +23,7 @@ public final class ExpoDuplexAudioModule: Module {
   private var frameDurationMs = 20
   private var queuedFrames: Int64 = 0
   private var playbackGeneration: UInt64 = 0
+  private var localPlaybackRemainingFiles: [String: Int] = [:]
   private var stoppedForBackground = false
   // Configuring AVAudioSession can itself generate route and engine
   // configuration notifications. Those are expected during startup and must
@@ -32,7 +33,13 @@ public final class ExpoDuplexAudioModule: Module {
   public func definition() -> ModuleDefinition {
     Name("ExpoDuplexAudio")
 
-    Events("audioInput", "playbackStateChanged", "sessionStateChanged", "error")
+    Events(
+      "audioInput",
+      "playbackStateChanged",
+      "sessionStateChanged",
+      "error",
+      "localPlaybackFinished"
+    )
 
     OnCreate {
       self.installInterruptionObserver()
@@ -75,6 +82,12 @@ public final class ExpoDuplexAudioModule: Module {
     AsyncFunction("enqueuePlaybackAsync") { (base64Pcm: String) in
       try self.audioQueue.sync {
         try self.enqueuePlayback(base64Pcm)
+      }
+    }
+
+    AsyncFunction("playLocalFilesAsync") { (uris: [String]) in
+      try self.audioQueue.sync {
+        try self.playLocalFiles(uris)
       }
     }
 
@@ -362,11 +375,64 @@ public final class ExpoDuplexAudioModule: Module {
     }
   }
 
+  private func playLocalFiles(_ uris: [String]) throws -> String {
+    guard isActive, engine.isRunning else {
+      throw Exception(
+        name: "DuplexSessionInactive",
+        description: "Start the duplex session before playing local audio."
+      )
+    }
+    let files = try uris.map { uri -> AVAudioFile in
+      guard let url = URL(string: uri) else {
+        throw Exception(name: "InvalidLocalAudioUri", description: "Invalid local audio URI.")
+      }
+      return try AVAudioFile(forReading: url)
+    }
+    guard !files.isEmpty else {
+      throw Exception(name: "InvalidLocalAudioUri", description: "No local audio files supplied.")
+    }
+
+    let playbackId = UUID().uuidString
+    localPlaybackRemainingFiles[playbackId] = files.count
+    for file in files {
+      let frames = Int64(file.length)
+      queuedFrames += frames
+      let generation = playbackGeneration
+      player.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack) {
+        [weak self] _ in
+        self?.audioQueue.async {
+          guard let self, generation == self.playbackGeneration else { return }
+          self.queuedFrames = max(0, self.queuedFrames - frames)
+          self.completeLocalPlayback(playbackId)
+        }
+      }
+    }
+    if !player.isPlaying {
+      player.play()
+    }
+    emitPlaybackState(state: "playing", reason: "started")
+    return playbackId
+  }
+
+  private func completeLocalPlayback(_ playbackId: String) {
+    guard let remaining = localPlaybackRemainingFiles[playbackId] else { return }
+    if remaining > 1 {
+      localPlaybackRemainingFiles[playbackId] = remaining - 1
+      return
+    }
+    localPlaybackRemainingFiles.removeValue(forKey: playbackId)
+    if queuedFrames == 0 {
+      emitPlaybackState(state: "idle", reason: "completed")
+    }
+    sendEvent("localPlaybackFinished", ["playbackId": playbackId])
+  }
+
   private func clearPlayback(reason: String, restartPlayer: Bool) {
     playbackGeneration &+= 1
     player.stop()
     player.reset()
     queuedFrames = 0
+    localPlaybackRemainingFiles.removeAll()
     if restartPlayer, isActive, engine.isRunning {
       player.play()
     }

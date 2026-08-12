@@ -3,6 +3,10 @@ package expo.modules.duplexaudio
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.net.Uri
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -24,6 +28,7 @@ import expo.modules.kotlin.records.Record
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.UUID
 import kotlin.concurrent.thread
 import kotlin.math.max
 
@@ -52,6 +57,8 @@ class ExpoDuplexAudioModule : Module() {
   @Volatile private var isActive = false
   @Volatile private var isMuted = false
   @Volatile private var playbackState = "idle"
+  @Volatile private var localPlaybackId: String? = null
+  @Volatile private var localDecodeComplete = false
 
   private var sampleRate = 24_000
   private var frameDurationMs = 20
@@ -68,7 +75,13 @@ class ExpoDuplexAudioModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("ExpoDuplexAudio")
 
-    Events("audioInput", "playbackStateChanged", "sessionStateChanged", "error")
+    Events(
+      "audioInput",
+      "playbackStateChanged",
+      "sessionStateChanged",
+      "error",
+      "localPlaybackFinished"
+    )
 
     AsyncFunction("requestPermissionsAsync") { promise: Promise ->
       Permissions.askForPermissionsWithPermissionsManager(
@@ -111,6 +124,10 @@ class ExpoDuplexAudioModule : Module() {
 
     AsyncFunction("enqueuePlaybackAsync") { base64Pcm: String ->
       enqueuePlayback(base64Pcm)
+    }
+
+    AsyncFunction("playLocalFilesAsync") { uris: List<String> ->
+      playLocalFiles(uris)
     }
 
     AsyncFunction("clearPlaybackAsync") {
@@ -364,6 +381,12 @@ class ExpoDuplexAudioModule : Module() {
         ) {
           playbackState = "idle"
           emitPlaybackState("idle", "completed")
+          val localId = localPlaybackId
+          if (localId != null && localDecodeComplete) {
+            localPlaybackId = null
+            localDecodeComplete = false
+            sendEvent("localPlaybackFinished", mapOf("playbackId" to localId))
+          }
         }
       }
     }
@@ -385,6 +408,10 @@ class ExpoDuplexAudioModule : Module() {
       "PCM byte length must be aligned to signed 16-bit samples."
     }
 
+    enqueuePcm(bytes)
+  }
+
+  private fun enqueuePcm(bytes: ByteArray) {
     val frames = bytes.size / 2L
     val wasIdle = playbackState == "idle"
     enqueuedFrames.addAndGet(frames)
@@ -396,6 +423,90 @@ class ExpoDuplexAudioModule : Module() {
     }
   }
 
+  private fun playLocalFiles(uris: List<String>): String {
+    check(isActive) {
+      "Start the duplex audio session before playing local audio."
+    }
+    require(uris.isNotEmpty()) { "At least one local audio file is required." }
+    val playbackId = UUID.randomUUID().toString()
+    localPlaybackId = playbackId
+    localDecodeComplete = false
+    thread(name = "ExpoDuplexAudio-LocalDecode", priority = Thread.MAX_PRIORITY) {
+      try {
+        uris.forEach { decodeLocalFile(it) }
+        localDecodeComplete = true
+      } catch (error: Exception) {
+        localPlaybackId = null
+        localDecodeComplete = false
+        emitError("local_decode_failed", error.message ?: "Could not decode local audio.", fatal = false)
+      }
+    }
+    return playbackId
+  }
+
+  private fun decodeLocalFile(uri: String) {
+    val extractor = MediaExtractor()
+    extractor.setDataSource(context, Uri.parse(uri), null)
+    val trackIndex = (0 until extractor.trackCount).firstOrNull {
+      extractor.getTrackFormat(it).getString("mime")?.startsWith("audio/") == true
+    } ?: throw IllegalArgumentException("Local file has no audio track.")
+    extractor.selectTrack(trackIndex)
+    val inputFormat = extractor.getTrackFormat(trackIndex)
+    val mime = inputFormat.getString("mime") ?: throw IllegalArgumentException("Local audio MIME type is missing.")
+    val decoder = MediaCodec.createDecoderByType(mime)
+    decoder.configure(inputFormat, null, null, 0)
+    decoder.start()
+    try {
+      val info = MediaCodec.BufferInfo()
+      var inputDone = false
+      var outputDone = false
+      while (!outputDone && isActive && localPlaybackId != null) {
+        if (!inputDone) {
+          val index = decoder.dequeueInputBuffer(10_000)
+          if (index >= 0) {
+            val buffer = decoder.getInputBuffer(index) ?: continue
+            val size = extractor.readSampleData(buffer, 0)
+            if (size < 0) {
+              decoder.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+              inputDone = true
+            } else {
+              decoder.queueInputBuffer(index, 0, size, extractor.sampleTime, 0)
+              extractor.advance()
+            }
+          }
+        }
+        val index = decoder.dequeueOutputBuffer(info, 10_000)
+        when {
+          index >= 0 -> {
+            if (info.size > 0) {
+              val buffer = decoder.getOutputBuffer(index) ?: throw IllegalStateException("Decoded audio buffer unavailable.")
+              val bytes = ByteArray(info.size)
+              buffer.position(info.offset)
+              buffer.limit(info.offset + info.size)
+              buffer.get(bytes)
+              enqueuePcm(bytes)
+            }
+            outputDone = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+            decoder.releaseOutputBuffer(index, false)
+          }
+          index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+            val format = decoder.outputFormat
+            require(format.getInteger(MediaFormat.KEY_SAMPLE_RATE) == sampleRate) {
+              "Local audio sample rate must match the active voice session."
+            }
+            require(format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) == 1) {
+              "Local audio must be mono."
+            }
+          }
+        }
+      }
+    } finally {
+      decoder.stop()
+      decoder.release()
+      extractor.release()
+    }
+  }
+
   private fun clearPlayback(reason: String, restartTrack: Boolean) {
     val track = audioTrack
     playbackGeneration.incrementAndGet()
@@ -403,6 +514,8 @@ class ExpoDuplexAudioModule : Module() {
     enqueuedFrames.set(0)
     queuedFrames.set(0)
     playbackState = "idle"
+    localPlaybackId = null
+    localDecodeComplete = false
 
     if (track != null && track.state == AudioTrack.STATE_INITIALIZED) {
       try {

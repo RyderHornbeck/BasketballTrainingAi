@@ -1,4 +1,9 @@
-import { createAudioPlaylist, setAudioModeAsync } from "expo-audio";
+import { Asset } from "expo-asset";
+import {
+  addLocalPlaybackFinishedListener,
+  clearPlaybackAsync,
+  playLocalFilesAsync,
+} from "expo-duplex-audio";
 
 import {
   SHOT_PROGRESS_AUDIO,
@@ -45,10 +50,8 @@ export function playShotProgressAudio(
   const remaining = clips.remaining[reply.shotsLeft];
   if (!prefix || !remaining) return null;
 
-  // A single playlist hands off directly from prefix to remaining; there is no
-  // JavaScript timer or separate-player scheduling gap between the clips.
-  const playlist = createAudioPlaylist({ sources: [prefix, remaining], loop: "none" });
   let stopped = false;
+  let playbackId: string | null = null;
   let subscription: { remove: () => void } | null = null;
   const finish = () => {
     if (stopped) return;
@@ -57,25 +60,25 @@ export function playShotProgressAudio(
     onFinished();
   };
 
-  void setAudioModeAsync({
-    allowsRecording: true,
-    playsInSilentMode: true,
-    interruptionMode: "mixWithOthers",
-    shouldRouteThroughEarpiece: false,
-  }).catch(() => undefined);
-  subscription = playlist.addListener("playlistStatusUpdate", (status) => {
-    if (status.didJustFinish && status.currentIndex === status.trackCount - 1) finish();
+  // The native duplex module is the only owner of the active voice-call
+  // session. It decodes these packaged files into its existing voice-chat
+  // output graph, preserving speaker volume and hardware echo cancellation.
+  subscription = addLocalPlaybackFinishedListener((event) => {
+    if (event.playbackId === playbackId) finish();
   });
-  playlist.play();
+  void Promise.all([Asset.fromModule(prefix).downloadAsync(), Asset.fromModule(remaining).downloadAsync()])
+    .then(async (assets) => {
+      if (stopped) return;
+      const uris = assets.map((asset) => asset.localUri ?? asset.uri);
+      playbackId = await playLocalFilesAsync(uris);
+      if (stopped) await clearPlaybackAsync();
+    })
+    .catch(() => finish());
 
   return () => {
     if (stopped) return;
     stopped = true;
     subscription?.remove();
-    try {
-      playlist.pause();
-    } catch {
-      // The playlist may already be released during app teardown.
-    }
+    void clearPlaybackAsync().catch(() => undefined);
   };
 }

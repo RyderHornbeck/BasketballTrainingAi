@@ -29,7 +29,10 @@ function normalize(path) {
     const child = spawn(ffmpeg, [
       "-y",
       "-i", path,
-      "-af", "loudnorm=I=-14:TP=-1.0:LRA=7",
+      // Short clips hit peak headroom before loudnorm can raise their
+      // perceived level. Apply a real 4x gain, then contain transients with
+      // a fast limiter. This is materially louder than a loudnorm-only pass.
+      "-af", "volume=4,alimiter=limit=0.8:attack=5:release=50",
       "-ar", "16000",
       "-b:a", "64k",
       temporary,

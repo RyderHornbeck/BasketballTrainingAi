@@ -1337,18 +1337,23 @@ export class RealtimeCoachSession {
         this.handleAssemblySpeechStart(generation);
       },
       onPartial: (transcript) => {
+        const playbackClassification =
+          this.playbackActive || Date.now() < this.assemblyEchoGuardUntil
+            ? classifyPlaybackTranscript(transcript, this.lastAssemblyCoachSpeech)
+            : null;
         if (
           this.assemblySpeechStartDeferred &&
-          classifyPlaybackTranscript(
-            transcript,
-            this.lastAssemblyCoachSpeech,
-          ) === "user"
+          playbackClassification === "user"
         ) {
           this.assemblySpeechStartDeferred = false;
           // Promote a reliable novel partial immediately so ordinary spoken
           // requests interrupt Coach without waiting for final transcription.
           this.handleAssemblySpeechStart(generation);
         }
+        // Do not display Coach's own reflected audio as an athlete transcript.
+        // Ambiguous one-word partials remain visible and eligible for commands
+        // such as "stop"; a final transcript resolves them safely.
+        if (playbackClassification === "echo") return;
         this.callbacks?.onUserTranscript?.(transcript);
       },
       onTurn: (turn) => {
@@ -3069,7 +3074,7 @@ export class RealtimeCoachSession {
           ? false
           : null;
     const incompleteShotCompletionChoice =
-      /^(?:yes|yeah|yep|sure|ok|okay|mark it complete|complete it|finish it|mark it done)$/.test(
+      /^(?:yes|yeah|yep|sure|ok|okay|mark(?: it)? complete|mark(?: it)? as complete|complete(?: it)?|finish(?: it)?|mark(?: it)? done)$/.test(
         normalizedReply
       )
         ? true
@@ -4385,6 +4390,8 @@ export class RealtimeCoachSession {
           if (speechEpoch !== this.speechEpoch) return;
           this.stopLocalShotPlayback = null;
           this.playbackActive = false;
+          this.assemblyEchoGuardUntil = Date.now() + 1_500;
+          this.callbacks?.onCoachPlaybackFinished?.();
           this.updateStatus();
         });
         if (stop) {

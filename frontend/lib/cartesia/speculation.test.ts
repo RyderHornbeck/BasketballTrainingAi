@@ -90,6 +90,13 @@ test("suppresses substantial assistant echo but permits a user interruption", ()
   );
   equal(
     isLikelyPlaybackEcho(
+      "youre five for eight twelve shots left",
+      "You're 5 for 8, 12 shots left.",
+    ),
+    true,
+  );
+  equal(
+    isLikelyPlaybackEcho(
       "can you move me to set two",
       "Doing great. Do you want to start it?",
     ),

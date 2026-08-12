@@ -428,7 +428,7 @@ export default function OnboardingScreen() {
               setPreferredName(normalized);
               setNameError(validatePreferredName(normalized));
             }}
-            placeholder="Enter your name"
+            placeholder="Enter your preferred name"
             autoCapitalize="words"
             autoComplete="name"
             returnKeyType="done"

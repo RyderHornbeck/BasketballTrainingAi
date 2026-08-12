@@ -929,6 +929,24 @@ export const parseSetPrescriptionIntent: Parser = (text) => {
     );
   }
 
+  const desiredAttempts = text.match(
+    new RegExp(
+      `^(?:i\\s+(?:actually\\s+)?(?:want|would like)\\s+(?:to\\s+)?|can\\s+we\\s+|let'?s\\s+|we\\s+should\\s+)?(?:shoot\\s+|take\\s+)?(${NUMBER})\\s+shots?(?:\\s+(?:for|on)\\s+(?:this|that|the current)\\s+set)?$`
+    )
+  );
+  if (desiredAttempts) {
+    const targetAttempts = parseSpokenNumber(desiredAttempts[1]);
+    if (targetAttempts == null || targetAttempts < 1 || targetAttempts > 500) {
+      return null;
+    }
+    return intent(
+      "set_prescription",
+      { targetAttempts },
+      `Change target attempts to ${targetAttempts} heard`,
+      0.99
+    );
+  }
+
   const singleTarget = text.match(
     new RegExp(
       `^(?:set|change)\\s+(?:(?:set\\s+(${NUMBER})\\s+)|(?:this|the current)\\s+set(?:s)?\\s+|my\\s+)?(target\\s+makes?|target\\s+attempts?|attempts?)\\s+to\\s+(${NUMBER})$`
@@ -1005,6 +1023,10 @@ export function parseCoachSpeechIntent(
 ): CoachSpeechIntent | null {
   const text = normalizeCoachSpeech(transcript);
   if (!text) return null;
+  // A request to shoot a different number of shots is a workout edit, even
+  // though its wording can resemble a general shooting question.
+  const setPrescription = parseSetPrescriptionIntent(text);
+  if (setPrescription) return setPrescription;
   const matches = PARSERS.map((parser) => parser(text)).filter(
     (result): result is CoachSpeechIntent => result != null
   );
