@@ -16,12 +16,18 @@ public final class ExpoDuplexAudioModule: Module {
   private var captureConverter: AVAudioConverter?
   private var inputTapInstalled = false
   private var interruptionObserver: NSObjectProtocol?
+  private var routeChangeObserver: NSObjectProtocol?
   private var isActive = false
   private var isMuted = false
   private var sampleRate = 24_000
   private var frameDurationMs = 20
   private var queuedFrames: Int64 = 0
   private var playbackGeneration: UInt64 = 0
+  private var stoppedForBackground = false
+  // Configuring AVAudioSession can itself generate route and engine
+  // configuration notifications. Those are expected during startup and must
+  // not tear down the session that just finished starting.
+  private var ignoreAudioResetsUntil = Date.distantPast
 
   public func definition() -> ModuleDefinition {
     Name("ExpoDuplexAudio")
@@ -30,6 +36,7 @@ public final class ExpoDuplexAudioModule: Module {
 
     OnCreate {
       self.installInterruptionObserver()
+      self.installAudioResetObservers()
     }
 
     AsyncFunction("requestPermissionsAsync") { (promise: Promise) in
@@ -85,7 +92,19 @@ public final class ExpoDuplexAudioModule: Module {
 
     OnAppEntersBackground {
       self.audioQueue.async {
+        self.stoppedForBackground = self.isActive
         self.stopSession(reason: "stopped")
+      }
+    }
+
+    OnAppEntersForeground {
+      self.audioQueue.async {
+        guard self.stoppedForBackground else { return }
+        self.stoppedForBackground = false
+        // The JavaScript session and provider sockets may still look alive
+        // after iOS suspends this foreground-only AudioEngine. Tell the
+        // coordinator to rebuild the complete route with fresh audio I/O.
+        self.sendEvent("sessionStateChanged", self.state(reason: "interrupted"))
       }
     }
 
@@ -94,6 +113,9 @@ public final class ExpoDuplexAudioModule: Module {
         self.stopSession(reason: "stopped")
       }
       if let observer = self.interruptionObserver {
+        NotificationCenter.default.removeObserver(observer)
+      }
+      if let observer = self.routeChangeObserver {
         NotificationCenter.default.removeObserver(observer)
       }
     }
@@ -122,6 +144,7 @@ public final class ExpoDuplexAudioModule: Module {
     isMuted = options.muted
     queuedFrames = 0
     playbackGeneration &+= 1
+    ignoreAudioResetsUntil = Date().addingTimeInterval(1)
 
     let session = AVAudioSession.sharedInstance()
     var categoryOptions: AVAudioSession.CategoryOptions = [
@@ -365,6 +388,34 @@ public final class ExpoDuplexAudioModule: Module {
       self?.audioQueue.async {
         self?.stopSession(reason: "interrupted")
       }
+    }
+  }
+
+  private func installAudioResetObservers() {
+    routeChangeObserver = NotificationCenter.default.addObserver(
+      forName: AVAudioSession.routeChangeNotification,
+      object: AVAudioSession.sharedInstance(),
+      queue: nil
+    ) { [weak self] notification in
+      guard
+        let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+        let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue),
+        reason != .categoryChange
+      else {
+        return
+      }
+      self?.restartRequiredAfterAudioChange()
+    }
+  }
+
+  private func restartRequiredAfterAudioChange() {
+    audioQueue.async {
+      // A real hardware route change invalidates player buffers and input
+      // formats. Category changes and AVAudioEngine configuration-change
+      // events also occur during ordinary setup, so they must not tear down a
+      // healthy first turn.
+      guard self.isActive, Date() >= self.ignoreAudioResetsUntil else { return }
+      self.stopSession(reason: "interrupted")
     }
   }
 

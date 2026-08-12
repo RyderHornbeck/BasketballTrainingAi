@@ -20,6 +20,10 @@ import {
   type NavigationTarget,
 } from "@/lib/coachSpeech";
 import { mergeShotProgress, parseSpokenShotCount } from "@/lib/shotSpeech";
+import {
+  parseShotProgressReply,
+  playShotProgressAudio,
+} from "@/lib/shotProgressAudio";
 import { getCoachPersonaId } from "@/lib/coachProfiles";
 import {
   CartesiaInkClient,
@@ -589,6 +593,9 @@ export class RealtimeCoachSession {
   private disconnectPromise: Promise<void> | null = null;
   private contextRefreshPromise: Promise<void> | null = null;
   private contextRefreshPending = false;
+  private contextRefreshRequested = 0;
+  private contextRefreshCompleted = 0;
+  private externalWorkoutMutationPromise: Promise<void> | null = null;
   private responseDoneQueue: Promise<void> = Promise.resolve();
   private transcriptRouteQueue: Promise<void> = Promise.resolve();
   private connectionGeneration = 0;
@@ -602,6 +609,7 @@ export class RealtimeCoachSession {
   private shotFlushPromise: Promise<void> | null = null;
   private exactBufferedShotReply: string | null = null;
   private exactCompletedShotReply: string | null = null;
+  private stopLocalShotPlayback: (() => void) | null = null;
   private lastDeterministicReply: string | null = null;
   private cartesiaActive = false;
   private voiceProvider: CoachVoiceProvider = "cartesia";
@@ -609,9 +617,13 @@ export class RealtimeCoachSession {
   private assemblyClient: AssemblyRealtimeClient | null = null;
   private inworldClient: InworldTtsClient | null = null;
   private inworldVoiceId = "";
+  private voicePersona = "tyler";
   private inworldContextId: string | null = null;
   private assemblySpeechStartDeferred = false;
   private assemblyEchoGuardUntil = 0;
+  private assemblyLastServerActivityAt = 0;
+  private assemblyHeartbeatWatchdog: ReturnType<typeof setInterval> | null = null;
+  private assemblyUsageReportingTimer: ReturnType<typeof setInterval> | null = null;
   private lastAssemblyCoachSpeech: string | null = null;
   private streamedCoachTranscript = "";
   private inkClient: CartesiaInkClient | null = null;
@@ -706,8 +718,13 @@ export class RealtimeCoachSession {
     this.sonicReconnectPromise = null;
     this.latestUserTranscript = null;
     this.contextRefreshPending = false;
+    this.contextRefreshRequested = 0;
+    this.contextRefreshCompleted = 0;
+    this.externalWorkoutMutationPromise = null;
     this.exactBufferedShotReply = null;
     this.exactCompletedShotReply = null;
+    this.stopLocalShotPlayback?.();
+    this.stopLocalShotPlayback = null;
     this.stateVersion = 0;
     this.stateFingerprint = "";
     this.ttsInputBuffer = "";
@@ -950,6 +967,7 @@ export class RealtimeCoachSession {
       .select("realtime_coach_voice")
       .maybeSingle();
     const voicePersona = getCoachPersonaId(profile?.realtime_coach_voice);
+    this.voicePersona = voicePersona;
     const { data, error } = await supabase.functions.invoke<{
       error?: string;
       code?: string;
@@ -1215,11 +1233,12 @@ export class RealtimeCoachSession {
       .select("realtime_coach_voice")
       .maybeSingle();
     const voicePersona = getCoachPersonaId(profile?.realtime_coach_voice);
+    this.voicePersona = voicePersona;
     const { data, error } = await supabase.functions.invoke<{
       error?: string;
       provider?: {
-        assembly?: { access_token?: string };
-        inworld?: { access_token?: string };
+        assembly?: { access_token?: string; expires_in?: number };
+        inworld?: { access_token?: string; expires_at?: string };
       };
       voice?: { provider_voice_id?: string };
       workout_context?: string | RealtimeWorkoutState;
@@ -1318,6 +1337,9 @@ export class RealtimeCoachSession {
             console.error("Failed to route AssemblyAI transcript:", routeError);
           });
       },
+      onServerActivity: () => {
+        this.assemblyLastServerActivityAt = Date.now();
+      },
       onError: (providerError) => {
         console.error("AssemblyAI error:", providerError);
         if (generation === this.connectionGeneration) this.callbacks?.onError(providerError.message);
@@ -1336,6 +1358,7 @@ export class RealtimeCoachSession {
     });
     const inworld = new InworldTtsClient({
       accessToken: inworldToken,
+      refreshAccessToken: () => this.refreshInworldAccessToken(),
       voiceId,
       onAudio: (audio, contextId) => {
         if (
@@ -1344,11 +1367,26 @@ export class RealtimeCoachSession {
           !this.active
         ) return;
         this.playbackEnqueue = this.playbackEnqueue
-          .then(() => this.duplexAudio?.enqueuePlaybackAsync(audio))
+          .then(() => {
+            if (
+              generation !== this.connectionGeneration ||
+              contextId !== this.inworldContextId ||
+              !this.active
+            ) return;
+            return this.duplexAudio?.enqueuePlaybackAsync(audio);
+          })
           .then(() => undefined)
-          .catch((playbackError) => console.error("Could not enqueue Inworld speech:", playbackError));
+          .catch((playbackError) => {
+            console.error("Could not enqueue Inworld speech:", playbackError);
+            this.recoverAssemblyInworldTransport(generation, playbackError);
+          });
       },
-      onFirstAudio: () => {
+      onFirstAudio: (contextId) => {
+        if (
+          generation !== this.connectionGeneration ||
+          contextId !== this.inworldContextId ||
+          !this.active
+        ) return;
         this.playbackActive = true;
         this.updateStatus();
       },
@@ -1362,7 +1400,7 @@ export class RealtimeCoachSession {
       },
       onError: (providerError) => {
         console.error("Inworld TTS error:", providerError);
-        if (generation === this.connectionGeneration) this.callbacks?.onError(providerError.message);
+        this.recoverAssemblyInworldTransport(generation, providerError);
       },
       onClose: () => undefined,
     });
@@ -1395,6 +1433,31 @@ export class RealtimeCoachSession {
     }
     this.assemblyInworldActive = true;
     this.assemblySessionStartedAt = Date.now();
+    this.assemblyLastServerActivityAt = Date.now();
+    this.assemblyHeartbeatWatchdog = setInterval(() => {
+      if (
+        generation !== this.connectionGeneration ||
+        !this.active ||
+        !this.assemblyInworldActive
+      ) return;
+      // AssemblyAI sends Heartbeat every five seconds when heartbeat=true.
+      // Three missed heartbeats indicate a half-open mobile WebSocket.
+      if (Date.now() - this.assemblyLastServerActivityAt > 15_000) {
+        this.recoverAssemblyInworldTransport(
+          generation,
+          new Error("AssemblyAI connection stopped responding."),
+        );
+      }
+    }, 5_000);
+    // The provider streams directly to the device, so report the elapsed
+    // provider session while it is active—not only after a model turn or when
+    // the overlay closes. This lets the server close the session at the daily
+    // budget boundary and keeps a reopened overlay from showing stale credit.
+    this.assemblyUsageReportingTimer = setInterval(() => {
+      void this.reportAssemblyInworldUsage(false).catch((usageError) => {
+        console.warn("Failed to persist AssemblyAI/Inworld usage:", usageError);
+      });
+    }, 15_000);
     this.inkAudioGate = new InkAudioGate();
     this.duplexSubscriptions = [
       duplexAudio.addAudioInputListener((event) => {
@@ -1421,10 +1484,80 @@ export class RealtimeCoachSession {
         }
         this.updateStatus();
       }),
+      duplexAudio.addSessionStateListener((event) => {
+        if (
+          generation === this.connectionGeneration &&
+          event.session === "inactive" &&
+          event.reason === "interrupted"
+        ) {
+          this.recoverAssemblyInworldTransport(
+            generation,
+            new Error("The device audio session was interrupted."),
+          );
+        }
+      }),
       duplexAudio.addErrorListener((audioError) => {
-        if (generation === this.connectionGeneration) this.callbacks?.onError(audioError.message);
+        if (audioError.fatal) {
+          this.recoverAssemblyInworldTransport(generation, audioError);
+        } else if (generation === this.connectionGeneration) {
+          this.callbacks?.onError(audioError.message);
+        }
       }),
     ];
+  }
+
+  private async refreshInworldAccessToken(): Promise<string> {
+    const dayId = this.dayId;
+    const sessionKey = this.sessionKey;
+    if (!dayId || !sessionKey || !this.active) {
+      throw new Error("Coach session is not active.");
+    }
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("realtime_coach_voice")
+      .maybeSingle();
+    const { data, error } = await supabase.functions.invoke<{
+      error?: string;
+      provider?: { inworld?: { access_token?: string } };
+      state?: { version?: number };
+      workout_context?: string | RealtimeWorkoutState;
+    }>("coach-assembly-session", {
+      body: {
+        day_id: dayId,
+        session_key: sessionKey,
+        voice_persona: getCoachPersonaId(profile?.realtime_coach_voice),
+        state_version: this.stateVersion,
+        timer: this.timer,
+        conversation_summary: this.conversationSummary,
+      },
+    });
+    if (error) throw new Error(await edgeFunctionErrorMessage(error));
+    const token = data?.provider?.inworld?.access_token;
+    if (!token) throw new Error(data?.error ?? "Inworld did not issue a refreshed access token.");
+    this.stateVersion = Math.max(this.stateVersion, data.state?.version ?? 0);
+    if (data?.workout_context) {
+      this.updateWorkoutState(
+        typeof data.workout_context === "string"
+          ? data.workout_context
+          : JSON.stringify(data.workout_context),
+      );
+    }
+    return token;
+  }
+
+  private recoverAssemblyInworldTransport(generation: number, error: unknown): void {
+    if (
+      generation !== this.connectionGeneration ||
+      !this.active ||
+      !this.assemblyInworldActive
+    ) return;
+    const message = error instanceof Error ? error.message : "Coach audio stopped working.";
+    this.callbacks?.onError(message);
+    // A TTS HTTP failure or native audio interruption cannot be repaired by
+    // keeping the old Assembly socket and AudioEngine alive. Disconnecting
+    // triggers useCoach's existing connection_lost retry with fresh tokens,
+    // a new duplex engine, and a new TTS client.
+    void this.disconnect("connection_lost");
   }
 
   private recoverCartesiaSocket(
@@ -1471,7 +1604,35 @@ export class RealtimeCoachSession {
     this.timer = timer;
   }
 
+  /**
+   * Registers a database write initiated outside Coach tools (currently a
+   * timer expiry). Every subsequent spoken turn waits for the write and its
+   * post-write context pull, so deterministic and model-routed questions see
+   * the same authoritative workout state.
+   */
+  syncExternalWorkoutMutation(mutation: Promise<void>): Promise<void> {
+    const tracked = mutation.then(() => this.refreshWorkoutContext());
+    this.externalWorkoutMutationPromise = tracked;
+    void tracked.finally(() => {
+      if (this.externalWorkoutMutationPromise === tracked) {
+        this.externalWorkoutMutationPromise = null;
+      }
+    });
+    return tracked;
+  }
+
+  private async waitForExternalWorkoutMutation(): Promise<void> {
+    const mutation = this.externalWorkoutMutationPromise;
+    if (!mutation) return;
+    try {
+      await mutation;
+    } catch (error) {
+      console.warn("Timed set completion did not synchronize:", error);
+    }
+  }
+
   async refreshWorkoutContext(): Promise<void> {
+    this.contextRefreshRequested += 1;
     if (this.contextRefreshPromise) return this.contextRefreshPromise;
     if (!this.active || !this.dayId || !this.sessionKey) return;
     if (this.generationActive || this.toolBusy || this.playbackActive) {
@@ -1479,7 +1640,14 @@ export class RealtimeCoachSession {
       return;
     }
     this.contextRefreshPromise = (async () => {
-      const { data, error } = await supabase.functions.invoke<{
+      while (
+        this.active &&
+        this.dayId &&
+        this.sessionKey &&
+        this.contextRefreshCompleted < this.contextRefreshRequested
+      ) {
+        const requestVersion = this.contextRefreshRequested;
+        const { data, error } = await supabase.functions.invoke<{
         client_workout_context?: string | null;
         updated_instructions?: string | null;
         state_version?: number;
@@ -1493,20 +1661,22 @@ export class RealtimeCoachSession {
           refresh_context: true,
         },
       });
-      if (error) throw new Error(await edgeFunctionErrorMessage(error));
-      if (data?.error) throw new Error(data.error);
-      this.updateWorkoutState(data?.client_workout_context);
-      if (typeof data?.state_version === "number") {
-        this.stateVersion = Math.max(this.stateVersion, data.state_version);
-      }
-      if (data?.updated_instructions && !this.cartesiaActive) {
-        this.sendEvent({
-          type: "session.update",
-          session: {
-            type: "realtime",
-            instructions: data.updated_instructions,
-          },
-        });
+        if (error) throw new Error(await edgeFunctionErrorMessage(error));
+        if (data?.error) throw new Error(data.error);
+        this.updateWorkoutState(data?.client_workout_context);
+        this.contextRefreshCompleted = requestVersion;
+        if (typeof data?.state_version === "number") {
+          this.stateVersion = Math.max(this.stateVersion, data.state_version);
+        }
+        if (data?.updated_instructions && !this.cartesiaActive) {
+          this.sendEvent({
+            type: "session.update",
+            session: {
+              type: "realtime",
+              instructions: data.updated_instructions,
+            },
+          });
+        }
       }
     })()
       .catch((err) => {
@@ -1760,7 +1930,10 @@ export class RealtimeCoachSession {
       completed: entry.completed,
       client_request_id: entry.requestId,
     });
-    this.pendingShotSets.delete(key);
+    // Do not erase a newer shot that arrived while this save was in flight.
+    if (this.pendingShotSets.get(key) === entry) {
+      this.pendingShotSets.delete(key);
+    }
     return data;
   }
 
@@ -1883,6 +2056,12 @@ export class RealtimeCoachSession {
     if (!drill) {
       return { kind: "read_only", output: "I couldn't uniquely match that workout drill." };
     }
+    if (!this.acceptsShotResults(drill)) {
+      return {
+        kind: "read_only",
+        output: this.nonShootingShotReply(drill),
+      };
+    }
     const requestedSet = Number(args.set_number);
     const setNumber =
       Number.isInteger(requestedSet) && requestedSet > 0
@@ -1900,17 +2079,21 @@ export class RealtimeCoachSession {
       existing?.attempts ?? (saved?.makes != null ? saved.attempts ?? 0 : 0);
     const reportedMakes = Number(args.makes);
     const reportedAttempts = Number(args.attempts);
-    if (!Number.isInteger(reportedMakes) || reportedMakes < 0) {
-      return { kind: "read_only", output: "Makes must be a whole number zero or greater." };
-    }
-    if (!Number.isInteger(reportedAttempts) || reportedAttempts <= 0) {
-      return { kind: "read_only", output: "Attempts must be a positive whole number." };
-    }
     // Parsed local commands use `mode`; Realtime tool calls use `update_mode`.
     // Treat either increment marker identically so repeated speech adds to the
     // pending set instead of replacing it with the latest phrase.
     const updateMode =
       args.update_mode === "increment" || args.mode === "increment" ? "increment" : "replace";
+    if (!Number.isInteger(reportedMakes) || reportedMakes < 0) {
+      return { kind: "read_only", output: "Makes must be a whole number zero or greater." };
+    }
+    if (
+      !Number.isInteger(reportedAttempts) ||
+      reportedAttempts < 0 ||
+      (reportedAttempts === 0 && (updateMode !== "replace" || reportedMakes !== 0))
+    ) {
+      return { kind: "read_only", output: "Attempts must be a whole number zero or greater." };
+    }
     const merged = mergeShotProgress(
       { makes: baseMakes, attempts: baseAttempts },
       {
@@ -1925,11 +2108,13 @@ export class RealtimeCoachSession {
     const targetAttempts = saved?.target?.attempts ?? drill.target.attempts;
     const completed =
       args.completed === true ||
-      saved?.completed === true ||
-      (targetAttempts != null &&
-        targetAttempts > 0 &&
-        baseAttempts < targetAttempts &&
-        nextAttempts >= targetAttempts);
+      (updateMode === "increment" &&
+        !args.defer_persist &&
+        (saved?.completed === true ||
+          (targetAttempts != null &&
+            targetAttempts > 0 &&
+            baseAttempts < targetAttempts &&
+            nextAttempts >= targetAttempts)));
     const entry: PendingShotSet = {
       exerciseId: drill.exercise_id,
       drillName: drill.name ?? "current drill",
@@ -1973,6 +2158,12 @@ export class RealtimeCoachSession {
         output: this.completedShotReply(entry, nextSetInSameDrill),
       };
     }
+    if (args.persist_session_progress === true) {
+      // Absolute totals and explicit corrections must survive a context refresh
+      // before the next make/miss. This writes incomplete set progress only;
+      // it does not complete or advance the set.
+      await this.persistPendingShotSet(key);
+    }
     return {
       kind: "buffered_shot",
       output: `You're ${nextMakes} for ${nextAttempts}${
@@ -1981,6 +2172,59 @@ export class RealtimeCoachSession {
           : `, ${remainingShots} shot${remainingShots === 1 ? "" : "s"} left.`
       }`,
     };
+  }
+
+  private acceptsShotResults(drill: RealtimeDrillState | null): boolean {
+    return drill?.category === "shooting" || drill?.category === "finishing";
+  }
+
+  private nonShootingShotReply(drill: RealtimeDrillState | null): string {
+    const minutes =
+      drill && this.currentSetState()?.exercise_id === drill.exercise_id
+        ? this.currentSetState()?.target.minutes
+        : drill?.target.minutes;
+    const timerPrompt =
+      minutes != null && minutes > 0
+        ? ` Would you like me to start the ${minutes}-minute set timer?`
+        : "";
+    return `You're not on a shooting or finishing drill. You're on ${
+      drill?.name ?? "the current drill"
+    }.${timerPrompt}`;
+  }
+
+  private async correctLastShot(
+    from: "make" | "miss",
+    to: "make" | "miss",
+    requestId: string,
+  ): Promise<string> {
+    const current = this.currentSetState();
+    const drill = this.resolveRealtimeDrill({
+      exercise_id: current?.exercise_id,
+      drill_name: current?.drill_name,
+    });
+    if (!drill) return "I couldn't identify the current drill.";
+    const setNumber = current?.set_number ?? drill.sets.next_unfinished ?? 1;
+    const pending = this.pendingShotSets.get(this.pendingShotKey(drill.exercise_id, setNumber));
+    const saved = drill.set_results.find((set) => set.set_number === setNumber);
+    const makes = pending?.makes ?? saved?.makes ?? current?.progress.makes ?? 0;
+    const attempts = pending?.attempts ?? saved?.attempts ?? current?.progress.attempts ?? 0;
+    if (attempts < 1) return "There isn't a shot result to correct in this set yet.";
+    if (from === "make" && makes < 1) return "This set does not have a recorded make to change.";
+    if (from === "miss" && makes >= attempts) return "This set does not have a recorded miss to change.";
+
+    const result = await this.bufferShootingResult({
+      exercise_id: drill.exercise_id,
+      drill_name: drill.name,
+      set_number: setNumber,
+      makes: to === "make" ? makes + 1 : makes - 1,
+      attempts,
+      mode: "replace",
+      completed: false,
+      defer_persist: true,
+      persist_session_progress: true,
+      client_request_id: requestId,
+    });
+    return result.output;
   }
 
   private async undoLastShot(): Promise<string> {
@@ -2400,7 +2644,22 @@ export class RealtimeCoachSession {
       return this.undoLastShot();
     }
 
+    if (command.kind === "correct_last_shot") {
+      return this.correctLastShot(
+        command.args.from,
+        command.args.to,
+        turn.requestId,
+      );
+    }
+
     if (command.kind === "shot") {
+      // Validate the active drill before resolving the requested set. Without
+      // this, a missing current-set record can fall back to a different drill
+      // and incorrectly record a make or miss there.
+      const activeDrill = this.currentDrill();
+      if (!this.acceptsShotResults(activeDrill)) {
+        return this.nonShootingShotReply(activeDrill);
+      }
       const current = this.currentSetState();
       const result = await this.bufferShootingResult({
         ...command.args,
@@ -2408,6 +2667,7 @@ export class RealtimeCoachSession {
         drill_name: current?.drill_name,
         set_number: current?.set_number,
         completed: false,
+        persist_session_progress: command.args.mode === "replace",
         ...requestArgs,
       });
       return result.output;
@@ -2713,6 +2973,8 @@ export class RealtimeCoachSession {
     speculation: SpeculativeCoachTurn | null = null,
   ): Promise<void> {
     if (!this.active || generation !== this.connectionGeneration) return;
+    await this.waitForExternalWorkoutMutation();
+    if (!this.active || generation !== this.connectionGeneration) return;
     const turnId = itemId ?? `transcript-${generation}-${Date.now()}`;
     if (this.routedTurns.has(turnId)) return;
     const turn: RoutedCoachTurn = {
@@ -2992,8 +3254,19 @@ export class RealtimeCoachSession {
       this.assemblyClient = null;
       this.inworldClient = null;
       this.inworldContextId = null;
+      this.stopLocalShotPlayback?.();
+      this.stopLocalShotPlayback = null;
       this.assemblySpeechStartDeferred = false;
       this.assemblyEchoGuardUntil = 0;
+      this.assemblyLastServerActivityAt = 0;
+      if (this.assemblyHeartbeatWatchdog) {
+        clearInterval(this.assemblyHeartbeatWatchdog);
+        this.assemblyHeartbeatWatchdog = null;
+      }
+      if (this.assemblyUsageReportingTimer) {
+        clearInterval(this.assemblyUsageReportingTimer);
+        this.assemblyUsageReportingTimer = null;
+      }
       this.lastAssemblyCoachSpeech = null;
       for (const subscription of this.duplexSubscriptions) subscription.remove();
       this.duplexSubscriptions = [];
@@ -3307,6 +3580,8 @@ export class RealtimeCoachSession {
     this.latestUserTranscript = null;
     this.speechEpoch += 1;
     this.playbackGeneration += 1;
+    this.stopLocalShotPlayback?.();
+    this.stopLocalShotPlayback = null;
     this.turnAbortController?.abort();
     this.turnAbortController = null;
     const contextId = this.inworldContextId;
@@ -3998,6 +4273,10 @@ export class RealtimeCoachSession {
       this.dailySpentBaseline = data.daily_usage.spent_usd;
       this.dailyBudgetUsd = data.daily_usage.budget_usd;
       this.callbacks?.onBudgetUpdate?.(data.daily_usage.spent_usd, data.daily_usage.budget_usd);
+      if (data.daily_usage.remaining_usd <= 0 && this.active) {
+        this.callbacks?.onError(COACH_LIMIT_MESSAGES.dailyBudgetExhausted);
+        void this.disconnect("daily_budget");
+      }
     }
   }
 
@@ -4008,6 +4287,30 @@ export class RealtimeCoachSession {
   ): Promise<void> {
     if (speechEpoch !== this.speechEpoch || !this.active) return;
     this.lastDeterministicReply = text;
+    if (this.assemblyInworldActive) {
+      const progress = parseShotProgressReply(text);
+      const persona = this.voicePersona;
+      if (progress && persona) {
+        this.stopLocalShotPlayback?.();
+        this.stopLocalShotPlayback = null;
+        this.generationActive = false;
+        this.playbackActive = true;
+        this.lastAssemblyCoachSpeech = text;
+        this.assemblyClient?.updateAgentContext(text);
+        this.updateStatus();
+        const stop = playShotProgressAudio(persona, progress, () => {
+          if (speechEpoch !== this.speechEpoch) return;
+          this.stopLocalShotPlayback = null;
+          this.playbackActive = false;
+          this.updateStatus();
+        });
+        if (stop) {
+          this.stopLocalShotPlayback = stop;
+          return;
+        }
+        this.playbackActive = false;
+      }
+    }
     if (this.cartesiaActive) {
       const speechGate = gateCoachSpeechText(text, true);
       if (speechGate.status !== "safe") return;

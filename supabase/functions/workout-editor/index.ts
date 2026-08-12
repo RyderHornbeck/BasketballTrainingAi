@@ -12,11 +12,39 @@ const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const MODEL = Deno.env.get("OPENAI_WORKOUT_EDITOR_MODEL") ?? "gpt-4.1-mini";
 const WORKOUT_MESSAGE_LIMIT = 30;
 
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+};
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+function requestedAddCount(message: string): number | null {
+  if (!/\b(?:drill|exercise|workout)\b/i.test(message)) return null;
+  const match = /\badd\s+(?:(\d+)|(one|two|three|four|five|six|seven|eight|nine|ten))\b/i.exec(
+    message,
+  );
+  if (!match) return null;
+  const count = match[1] ? Number(match[1]) : NUMBER_WORDS[match[2].toLowerCase()];
+  return Number.isInteger(count) && count > 0 && count <= 10 ? count : null;
+}
+
+function appliedReply(changes: string[], fallback: string): string {
+  if (!changes.length) return fallback || "I did not make any changes.";
+  return `**Workout updated**\n${changes.map((change) => `- ${change}`).join("\n")}`;
 }
 
 function prescription(clip: any) {
@@ -315,10 +343,15 @@ Deno.serve(async (req: Request) => {
     const currentExercises = workoutState.exercises;
     const currentLogs = workoutState.logs;
     const beforeSnapshot = workoutState.snapshot;
+    const existingWorkoutClipIds = new Set(
+      currentExercises.map((exercise: any) => exercise.video_clip_id).filter(Boolean),
+    );
+    const requestedAdds = requestedAddCount(message!);
 
     const candidates = [...(catalog ?? [])]
       .map((clip) => ({ ...clip, score: candidateScore(clip, message!) }))
       .sort((a, b) => b.score - a.score)
+      .filter((clip) => !existingWorkoutClipIds.has(clip.id))
       .slice(0, 80)
       .map(({ score: _score, ...clip }) => clip);
 
@@ -338,7 +371,7 @@ Deno.serve(async (req: Request) => {
             {
               role: "system",
               content:
-                'You are a friendly basketball workout editor. Return JSON only: {"reply":string,"operations":[{"type":"add","clip_id":string}|{"type":"remove","exercise_id":string}]}. current_workout is authoritative and includes every drill\'s exact prescription, aggregate log, and per-set makes, attempts, minutes, and completion. edit_history records every prior AI edit with timestamps and before/after workout snapshots. Use only IDs supplied below. Make the smallest changes that satisfy the athlete. Never remove every exercise. For greetings or general conversation, reply naturally and warmly with an empty operations array; for example, greet the athlete and ask what they would like to change about their workout. Explain completed changes briefly in reply.',
+                'You are a friendly basketball workout editor. Return JSON only: {"reply":string,"operations":[{"type":"add","clip_id":string}|{"type":"remove","exercise_id":string}]}. The reply may use Markdown bold with **text** and bullet lines beginning with "- ". current_workout is authoritative and includes every drill\'s exact prescription, aggregate log, and per-set makes, attempts, minutes, and completion. edit_history records every prior AI edit with timestamps and before/after workout snapshots. Use only IDs supplied below. Make the smallest changes that satisfy the athlete. Never remove every exercise. Every add must use a distinct clip_id that is not already in the workout. If the athlete requests a number of drills to add, return exactly that many distinct add operations. For greetings or general conversation, reply naturally and warmly with an empty operations array; for example, greet the athlete and ask what they would like to change about their workout. Explain completed changes briefly in reply.',
             },
             ...[...(history ?? [])].reverse().map((entry) => ({
               role: entry.role,
@@ -348,6 +381,7 @@ Deno.serve(async (req: Request) => {
               role: "user",
               content: JSON.stringify({
                 request: message,
+                requested_add_count: requestedAdds,
                 current_workout: beforeSnapshot,
                 edit_history: revisions ?? [],
                 available_catalog_exercises: candidates,
@@ -374,10 +408,7 @@ Deno.serve(async (req: Request) => {
     const currentIds = new Set(
       (currentExercises ?? []).map((exercise: any) => exercise.id),
     );
-    const existingClipIds = new Set(
-      (currentExercises ?? []).map((exercise: any) => exercise.video_clip_id)
-        .filter(Boolean),
-    );
+    const existingClipIds = new Set(existingWorkoutClipIds);
     const candidateById = new Map(candidates.map((clip) => [clip.id, clip]));
     let orderIndex = Math.max(
       0,
@@ -396,8 +427,33 @@ Deno.serve(async (req: Request) => {
     const logsByExercise = new Map(
       currentLogs.map((log: any) => [log.exercise_id, log]),
     );
+    const operations = [...(parsed.operations ?? [])];
+    if (requestedAdds != null) {
+      const uniqueAdds = new Set<string>();
+      const exactAddOperations = operations.filter((operation) => {
+        if (operation.type !== "add") return true;
+        if (!operation.clip_id || uniqueAdds.has(operation.clip_id)) return false;
+        if (uniqueAdds.size >= requestedAdds) return false;
+        uniqueAdds.add(operation.clip_id);
+        return true;
+      });
+      operations.splice(0, operations.length, ...exactAddOperations);
+    }
+    const plannedAddIds = new Set(
+      operations
+        .filter((operation) => operation.type === "add" && operation.clip_id)
+        .map((operation) => operation.clip_id!),
+    );
+    if (requestedAdds != null && plannedAddIds.size < requestedAdds) {
+      for (const clip of candidates) {
+        if (plannedAddIds.size >= requestedAdds) break;
+        if (plannedAddIds.has(clip.id)) continue;
+        plannedAddIds.add(clip.id);
+        operations.push({ type: "add", clip_id: clip.id });
+      }
+    }
 
-    for (const operation of parsed.operations ?? []) {
+    for (const operation of operations) {
       if (
         operation.type === "remove" && operation.exercise_id &&
         currentIds.has(operation.exercise_id)
@@ -467,7 +523,7 @@ Deno.serve(async (req: Request) => {
     if (changes.length) {
       await refreshEstimate(supabase, userId, dayId);
       const afterState = await loadWorkoutState(supabase, userId, day);
-      const replyForRevision = parsed.reply?.trim() || changes.join(". ");
+      const replyForRevision = appliedReply(changes, parsed.reply?.trim() ?? "");
       const { data: revision, error: revisionError } = await supabase
         .from("workout_edit_revisions")
         .insert({
@@ -495,8 +551,7 @@ Deno.serve(async (req: Request) => {
       if (operationsError) throw new Error(operationsError.message);
       canUndo = true;
     }
-    const reply = parsed.reply?.trim() ||
-      (changes.length ? changes.join(". ") : "I did not make any changes.");
+    const reply = appliedReply(changes, parsed.reply?.trim() ?? "");
     await supabase.from("workout_edit_messages").insert({
       user_id: userId,
       day_id: dayId,

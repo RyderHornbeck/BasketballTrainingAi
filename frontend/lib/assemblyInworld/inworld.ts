@@ -12,6 +12,7 @@ const MAXIMUM_UTTERANCE_WAIT_MS = 450;
 
 export interface InworldTtsOptions {
   accessToken: string;
+  refreshAccessToken: () => Promise<string>;
   voiceId: string;
   onAudio: (base64Pcm: string, contextId: string) => void;
   onFirstAudio: (contextId: string) => void;
@@ -39,8 +40,12 @@ export class InworldTtsClient {
     this.close();
     this.client = createClient({
       token: this.options.accessToken,
+      onTokenExpiring: this.options.refreshAccessToken,
       timeout: 10_000,
-      maxRetries: 0,
+      // Retry transient TLS/network failures before reporting a failed turn.
+      // A mobile radio can briefly be between states while the first HTTP
+      // stream is opened.
+      maxRetries: 2,
     });
     return Promise.resolve();
   }

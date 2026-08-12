@@ -100,6 +100,25 @@ test("parses natural requests to undo the latest shot", () => {
   }
 });
 
+test("parses session shot corrections without completing a set", () => {
+  expectIntent("I'm actually 2 for 2", {
+    kind: "shot",
+    args: { mode: "replace", makes: 2, attempts: 2, source: "ratio" },
+  });
+  expectIntent("I'm actually 2 for 2, 18 shots left", {
+    kind: "shot",
+    args: { mode: "replace", makes: 2, attempts: 2, source: "ratio" },
+  });
+  expectIntent("you counted a make instead of a miss", {
+    kind: "correct_last_shot",
+    args: { from: "make", to: "miss" },
+  });
+  expectIntent("you marked a miss as a make", {
+    kind: "correct_last_shot",
+    args: { from: "miss", to: "make" },
+  });
+});
+
 test("removes conversational padding before every command family", () => {
   expectIntent("Bruh, can you start a thirty second timer?", {
     kind: "timer",
@@ -137,6 +156,14 @@ test("distinguishes incremental and absolute shot ratios", () => {
   expectIntent("I'm 6 for 10", { kind: "shot", args: absolute });
   expectIntent("six out of ten", { kind: "shot", args: absolute });
   expectIntent("6/10", { kind: "shot", args: absolute });
+  expectIntent("I'm 0 for 0", {
+    kind: "shot",
+    args: { mode: "replace", makes: 0, attempts: 0, source: "ratio" },
+  });
+  expectIntent("120 for 200", {
+    kind: "shot",
+    args: { mode: "replace", makes: 120, attempts: 200, source: "ratio" },
+  });
   expectIntent("I just made 2 for 3", {
     kind: "shot",
     args: { mode: "increment", makes: 2, attempts: 3, source: "ratio" },
@@ -446,7 +473,6 @@ test("rejects ambiguous, unsafe, impossible, and compound phrases", () => {
     "I made some",
     "three in a row",
     "10 for 6",
-    "0 for 0",
     "start a timer for a while",
     "start a two minute timer and skip this drill",
     "pause",

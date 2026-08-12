@@ -15,6 +15,7 @@ export interface AssemblyClientOptions {
   onSpeechStarted: () => void;
   onPartial: (transcript: string) => void;
   onTurn: (turn: AssemblyTurn) => void;
+  onServerActivity?: () => void;
   onError: (error: Error) => void;
   onClose: (error: Error) => void;
 }
@@ -67,6 +68,7 @@ export class AssemblyRealtimeClient {
       max_turn_silence: "800",
       include_partial_turns: "true",
       continuous_partials: "true",
+      session_heartbeat: "true",
       prompt: this.options.prompt.slice(0, 1_750),
       agent_context: (this.options.agentContext ?? "").slice(0, 1_750),
       voice_focus: this.options.voiceFocus,
@@ -161,6 +163,7 @@ export class AssemblyRealtimeClient {
         end_of_turn?: boolean;
         error?: string;
       };
+      this.options.onServerActivity?.();
       if (message.type === "SpeechStarted") {
         this.options.onSpeechStarted();
         return;

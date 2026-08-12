@@ -563,7 +563,7 @@ export const ADVANCED_COMBO_DRILLS: AdvancedComboDrill[] = [
     requires_both_sides: true,
   },
   {
-    exercise_name: "Pivot Series triple-threat stance (ready to shoot, pass, or drive)",
+    exercise_name: "Pivot Series triple-threat stance",
     category: "footwork",
     difficulty_level: "advanced",
     description:

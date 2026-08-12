@@ -26,6 +26,7 @@ export type CoachStatus = CoachMachineState;
 
 const coachConversationKey = (dayId: string) =>
   `court-coach:conversation:${dayId}`;
+const MAX_AUTOMATIC_RECONNECT_ATTEMPTS = 3;
 
 export interface UseCoachResult {
   status: CoachStatus;
@@ -67,6 +68,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const startSessionRef = useRef<() => Promise<void>>(async () => {});
   const teardownRef = useRef<Promise<void>>(Promise.resolve());
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptsRef = useRef(0);
   const coachTranscriptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const coachTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const coachTranscriptTargetRef = useRef("");
@@ -153,14 +155,16 @@ export function useCoach(dayId: string | null): UseCoachResult {
         t.accumulated = t.durationSeconds ?? elapsed;
         setTimerRunning(false);
         if (dayId && t.exerciseId && t.setNumber && t.durationSeconds) {
-          void completeTimedExerciseSet(
+          const completion = completeTimedExerciseSet(
             dayId,
             t.exerciseId,
             t.setNumber,
             t.durationSeconds
-          )
-            .then(() => sessionRef.current?.refreshWorkoutContext())
-            .catch((error) => {
+          );
+          const synchronized = sessionRef.current
+            ? sessionRef.current.syncExternalWorkoutMutation(completion)
+            : completion;
+          void synchronized.catch((error) => {
               console.error("Failed to complete timed set:", error);
             });
         }
@@ -286,6 +290,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
             if (!mountedRef.current || limitBlockedRef.current) return;
             setStatus(next);
             if (next === "listening" || next === "thinking" || next === "speaking") {
+              reconnectAttemptsRef.current = 0;
               setError(null);
             }
           },
@@ -385,6 +390,12 @@ export function useCoach(dayId: string | null): UseCoachResult {
               return;
             }
             if (reason === "connection_lost") {
+              reconnectAttemptsRef.current += 1;
+              if (reconnectAttemptsRef.current > MAX_AUTOMATIC_RECONNECT_ATTEMPTS) {
+                setStatus("error");
+                setError("Coach audio could not reconnect. Tap to retry.");
+                return;
+              }
               setStatus("connecting");
               if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
               reconnectTimerRef.current = setTimeout(() => {

@@ -3,6 +3,7 @@ const INWORLD_TOKEN_ENDPOINT = "https://api.inworld.ai/auth/v1/tokens/token:gene
 const INWORLD_ENGINE_HOST = "api-engine.inworld.ai";
 const INWORLD_METHOD = "ai.inworld.engine.WorldEngine/GenerateToken";
 
+// Assembly validates this temporary token only while opening a socket.
 export const ASSEMBLY_STREAMING_TOKEN_TTL_SECONDS = 60;
 export const ASSEMBLY_MAX_SESSION_SECONDS = 10_800;
 

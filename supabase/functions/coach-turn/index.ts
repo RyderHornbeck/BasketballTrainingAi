@@ -281,9 +281,6 @@ Deno.serve(async (req: Request) => {
                       `${dynamicContext}${retryInstruction}`,
                     ),
                     messages,
-                    // Anthropic moves this breakpoint through the growing
-                    // message history, so earlier turns become cache reads.
-                    cache_control: { type: "ephemeral" },
                     ...(toolsEnabled
                       ? {
                         tools: anthropicTools,

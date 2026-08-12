@@ -27,6 +27,7 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  animate?: boolean;
 }
 
 const MAX_MESSAGES_PER_WORKOUT = 30;
@@ -76,6 +77,76 @@ function TypingBubble({ colors }: { colors: ReturnType<typeof useTheme>["colors"
       ))}
     </View>
   );
+}
+
+function MarkdownText({
+  content,
+  color,
+}: {
+  content: string;
+  color: string;
+}) {
+  const renderInline = (line: string) => {
+    const segments = line.split(/(\*\*[^*]+\*\*)/g);
+    return segments.map((segment, index) => {
+      const bold = /^\*\*[^*]+\*\*$/.test(segment);
+      return (
+        <Text key={`${index}-${segment}`} style={[styles.messageText, { color, fontWeight: bold ? "700" : "400" }]}>
+          {bold ? segment.slice(2, -2) : segment}
+        </Text>
+      );
+    });
+  };
+
+  return (
+    <View style={styles.markdownContent}>
+      {content.split("\n").map((line, index) => {
+        const bullet = /^[-*]\s+/.exec(line);
+        const text = bullet ? line.slice(bullet[0].length) : line;
+        return (
+          <View key={`${index}-${line}`} style={bullet ? styles.bulletLine : styles.messageLine}>
+            {bullet ? <Text style={[styles.messageText, styles.bulletMarker, { color }]}>•</Text> : null}
+            <Text style={[styles.messageText, bullet ? styles.bulletText : undefined, { color }]}>
+              {renderInline(text)}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function AssistantMessageText({
+  content,
+  animate,
+  color,
+}: {
+  content: string;
+  animate?: boolean;
+  color: string;
+}) {
+  const words = content.match(/\S+\s*/g) ?? [];
+  const [visibleWords, setVisibleWords] = useState(animate ? 0 : words.length);
+
+  useEffect(() => {
+    if (!animate) {
+      setVisibleWords(words.length);
+      return;
+    }
+    setVisibleWords(0);
+    const timer = setInterval(() => {
+      setVisibleWords((current) => {
+        if (current >= words.length) {
+          clearInterval(timer);
+          return current;
+        }
+        return current + 1;
+      });
+    }, 100);
+    return () => clearInterval(timer);
+  }, [animate, content, words.length]);
+
+  return <MarkdownText content={words.slice(0, visibleWords).join("")} color={color} />;
 }
 
 export default function WorkoutEditAIScreen() {
@@ -174,6 +245,7 @@ export default function WorkoutEditAIScreen() {
           id: `assistant-${Date.now()}`,
           role: "assistant",
           content: data?.reply ?? "Your workout has been updated.",
+          animate: true,
         },
       ]);
       setRemaining(data?.remaining_messages ?? Math.max(0, remaining - 1));
@@ -213,6 +285,7 @@ export default function WorkoutEditAIScreen() {
           id: `undo-${Date.now()}`,
           role: "assistant",
           content: data?.reply ?? "Undid the last AI workout edit.",
+          animate: true,
         },
       ]);
       setCanUndo(Boolean(data?.can_undo));
@@ -302,9 +375,15 @@ export default function WorkoutEditAIScreen() {
                 },
               ]}
             >
-              <Text style={{ color: item.role === "user" ? "#FFFFFF" : colors.text }}>
-                {item.content}
-              </Text>
+              {item.role === "assistant" ? (
+                <AssistantMessageText
+                  content={item.content}
+                  animate={item.animate}
+                  color={colors.text}
+                />
+              ) : (
+                <Text style={[styles.messageText, { color: "#FFFFFF" }]}>{item.content}</Text>
+              )}
             </View>
           )}
         />
@@ -374,9 +453,26 @@ const styles = StyleSheet.create({
   emptyCard: { marginTop: 30, borderRadius: 20, padding: 20 },
   emptyTitle: { fontSize: 17, fontWeight: "800" },
   emptyText: { marginTop: 6, fontSize: 13, lineHeight: 19 },
-  bubble: { maxWidth: "84%", borderRadius: 18, paddingHorizontal: 14, paddingVertical: 11 },
+  bubble: {
+    maxWidth: "84%",
+    minWidth: 0,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+  },
+  markdownContent: { width: "100%", flexShrink: 1 },
+  messageLine: { width: "100%", flexShrink: 1 },
+  messageText: { flexShrink: 1, fontSize: 14, lineHeight: 21 },
+  bulletLine: { width: "100%", flexDirection: "row", flexShrink: 1, marginTop: 2 },
+  bulletMarker: { width: 16, fontWeight: "700" },
+  bulletText: { flex: 1, minWidth: 0 },
   userBubble: { alignSelf: "flex-end", borderBottomRightRadius: 5 },
-  assistantBubble: { alignSelf: "flex-start", borderBottomLeftRadius: 5, borderWidth: 1 },
+  assistantBubble: {
+    alignSelf: "flex-start",
+    width: "84%",
+    borderBottomLeftRadius: 5,
+    borderWidth: 1,
+  },
   typingBubble: {
     alignSelf: "flex-start",
     minWidth: 62,

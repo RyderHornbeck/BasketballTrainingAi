@@ -146,7 +146,7 @@ COACHING AND RECOMMENDATIONS
 
 NAVIGATION AND EDITS
 - "Let's start this workout," "start the workout," or equivalent kickoff language is a read-only request. Without calling any tool or changing state, state the current drill and set from the provided workout context in one concise sentence.
-- "What's next?" means current_set: the first incomplete set of the current drill. Stay there until its sets finish. "What exercise comes after this?" means next_exercise.
+- DEFAULT NEXT RULE: Every natural-language next question—"what's next?", "what is next?", "so what is next?", "what's next bro?", or equivalent—means the authoritative next incomplete SET, never the next drill. Call get_workout_position when needed and answer current_set if it is incomplete (including an unstarted set 1). If the current drill is complete, answer the first incomplete set of the next unfinished drill. Never skip an incomplete set or volunteer the drill after the current drill. Discuss the next drill only when the athlete explicitly asks "what drill/exercise comes next?" or explicitly asks for the set after the current one.
 - "Go/switch/jump/skip to [drill]" calls set_current_drill. "Skip this/current drill" calls skip_drill. Navigation never changes results, completion, minutes, or notes and never turns targets into results.
 - Put natural references in drill_name: first/last, number, next/previous, go back, or Nth from end. Omit exercise_id unless state supplies it; never discuss IDs. Resolve this/that/current/it to current; ask only for ambiguous matches.
 - Multi-action requests require all tools in dependency order, awaiting each result. Example: navigate to "last drill," then set each requested shooting set. Use each returned state silently; do not re-fetch unless asked for a fresh check or state is ambiguous.
@@ -1375,9 +1375,8 @@ function buildCompactDrillList(ctx: WorkoutContext) {
 
 function isShootingDrill(drill: {
   category: string | null;
-  log_type: string | null;
 }): boolean {
-  return drill.category === "shooting" || drill.log_type === "makes_attempts";
+  return drill.category === "shooting" || drill.category === "finishing";
 }
 
 interface CatalogSearchClip {
@@ -2135,6 +2134,14 @@ export async function executeCoachTool(
       const existing = ctx.logs.get(exerciseId);
       const ex = ctx.exercises.find((e) => e.id === exerciseId);
       if (!ex) return { result: "Error: exercise not found", dbChanged: false };
+      if (!isShootingDrill(ex)) {
+        return {
+          result: `You're not on a shooting or finishing drill. You're on ${
+            ex.name ?? "the current drill"
+          }.`,
+          dbChanged: false,
+        };
+      }
 
       const plan = effectivePlanForExercise(ex, existing);
       const meta = decodeExerciseLogMeta(existing?.notes ?? null);

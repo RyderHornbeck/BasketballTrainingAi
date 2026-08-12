@@ -248,7 +248,7 @@ export const EXERCISE_CATALOG_METADATA: Record<
     coaching_notes: "Pound at waist height, switch hands smoothly, stay in an athletic stance.",
     requires_both_sides: true,
   },
-  "Half Spin Into Fadeaay": {
+  "Half Spin Into Fadeaway": {
     description:
       "Start on the right block with the ball in both hands, back to the basket. Step 1: Dribble once and spin halfway around toward the middle. Step 2: Face the basket and jump backward slightly to create space. Step 3: Shoot the right-block short-range fadeaway. Complete the right-side set, then mirror every step from the left block for the left-block short-range fadeaway.",
     coaching_notes: "Spin tight, eyes on the rim, fade on balance with high arc.",
@@ -344,7 +344,7 @@ export const EXERCISE_CATALOG_METADATA: Record<
     coaching_notes: "Stay low on the gather, extend fully through the finish, use the glass.",
     requires_both_sides: true,
   },
-  "Lateral Dribble with Thru the Legs": {
+  "Lateral Dribble with between the legs": {
     description:
       "Start at the top of the key with the ball in your right hand in a low stance. Step 1: Shuffle two steps to your right while dribbling. Step 2: Push the ball through your legs to your left hand. Step 3: Shuffle two steps left and push it back through your legs. Keep shuffling and going through your legs for 20 reps, then switch starting direction.",
     coaching_notes: "Stay low in the lateral slide, push the ball through hard, recover quickly.",

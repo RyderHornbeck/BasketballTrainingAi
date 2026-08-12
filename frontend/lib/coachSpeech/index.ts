@@ -79,6 +79,7 @@ interface IntentBase<K extends string, A> {
 export type CoachSpeechIntent =
   | IntentBase<"shot", ShotIntentArgs>
   | IntentBase<"undo_shot", Record<string, never>>
+  | IntentBase<"correct_last_shot", { from: "make" | "miss"; to: "make" | "miss" }>
   | IntentBase<"timer", TimerIntentArgs>
   | IntentBase<"timer_duration_confirmation", TimerDurationConfirmationArgs>
   | IntentBase<"speech_control", SpeechControlIntentArgs>
@@ -293,7 +294,7 @@ function parseOrdinal(value: string): number | null {
 }
 
 function validShotValues(makes: number | null, attempts: number | null): boolean {
-  return makes != null && attempts != null && attempts > 0 && attempts <= 100 && makes <= attempts;
+  return makes != null && attempts != null && attempts >= 0 && attempts <= 500 && makes <= attempts;
 }
 
 function shotLabel(makes: number, attempts: number, mode: ShotIntentArgs["mode"]): string {
@@ -308,12 +309,12 @@ function shotLabel(makes: number, attempts: number, mode: ShotIntentArgs["mode"]
 export const parseShotIntent: Parser = (text) => {
   const ratio = text.match(
     new RegExp(
-      `^(?:(im|i am|currently)\\s+|i\\s+)?(?:(just\\s+)?(?:made|hit)\\s+)?(${NUMBER})\\s*(?:/|for|out of|of)\\s*(${NUMBER})(?:\\s+shots?)?$`
+      `^(?:(?:im|i am|currently)(?:\\s+(?:actually|currently|now))?\\s+|i\\s+)?(?:(just\\s+)?(?:made|hit)\\s+)?(${NUMBER})\\s*(?:/|for|out of|of)\\s*(${NUMBER})(?:\\s+shots?)?(?:\\s*,?\\s*${NUMBER}\\s+shots?\\s+left)?$`
     )
   );
   if (ratio) {
-    const makes = parseSpokenNumber(ratio[3]);
-    const attempts = parseSpokenNumber(ratio[4]);
+    const makes = parseSpokenNumber(ratio[2]);
+    const attempts = parseSpokenNumber(ratio[3]);
     if (!validShotValues(makes, attempts)) return null;
     const mode: ShotIntentArgs["mode"] = /^(?:i\s+)?(?:just\s+)?(?:made|hit)\b/.test(text)
       ? "increment"
@@ -957,10 +958,24 @@ export const parseUndoShotIntent: Parser = (text) => {
   return intent("undo_shot", {}, "Undo last shot heard", 0.99);
 };
 
+export const parseShotCorrectionIntent: Parser = (text) => {
+  const correction = text.match(
+    /^(?:you\s+)?(?:counted|marked|logged)\s+(?:a\s+)?(make|miss)(?:\s+as|\s+instead of)\s+(?:a\s+)?(make|miss)$/,
+  );
+  if (!correction || correction[1] === correction[2]) return null;
+  return intent(
+    "correct_last_shot",
+    { from: correction[1] as "make" | "miss", to: correction[2] as "make" | "miss" },
+    `Correct ${correction[1]} to ${correction[2]} heard`,
+    0.99,
+  );
+};
+
 const PARSERS: readonly Parser[] = [
   parseSaveNoteIntent,
   parseSpeechControlIntent,
   parseUndoShotIntent,
+  parseShotCorrectionIntent,
   parseShotIntent,
   parseTimerIntent,
   parseNavigationIntent,
