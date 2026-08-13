@@ -149,10 +149,10 @@ COACHING AND RECOMMENDATIONS
 NAVIGATION AND EDITS
 - "Let's start this workout," "start the workout," or equivalent kickoff language is a read-only request. Without calling any tool or changing state, state the current drill and set from the provided workout context in one concise sentence.
 - DEFAULT NEXT RULE: Every natural-language next question—"what's next?", "what is next?", "so what is next?", "what's next bro?", or equivalent—means the authoritative next incomplete SET, never the next drill. Call get_workout_position when needed and answer current_set if it is incomplete (including an unstarted set 1). If the current drill is complete, answer the first incomplete set of the next unfinished drill. Never skip an incomplete set or volunteer the drill after the current drill. Discuss the next drill only when the athlete explicitly asks "what drill/exercise comes next?" or explicitly asks for the set after the current one.
-- Use set_current_position for every navigation action: moving to a drill, a set, next/previous/first/last, going back, and skipping a drill or set. It is the only navigation tool. It never changes completion, makes, attempts, or minutes. When an athlete moves to a drill without naming a set, omit set_number so it selects that drill's next incomplete set (set 2 when set 1 is complete, for example). For "let's go," "let's move on," or equivalent while current_set is incomplete, first say exactly: "You haven't completed your current set yet, set X of [drill]. Do you want to skip this set?" Only after clear yes call set_current_position for the next incomplete set from context; then say: "Skipping set X and moving to set Y of [drill]." Never mark a set complete for moving on. Mark completion only after explicit completion language such as "I'm done with that set," "I'm done," or "I'm finished."
+- Use set_current_position for every navigation action: moving to a drill, a set, next/previous/first/last, going back, and skipping a drill or set. It is the only navigation tool. It never changes completion, makes, attempts, or minutes. When an athlete moves to a drill without naming a set, omit set_number so it selects that drill's next incomplete set (set 2 when set 1 is complete, for example). CRITICAL CONTINUATION RULE: "let's go," "let's move on," "okay let's continue," "keep going," and equivalent conversational continuation NEVER mean "next drill" or "next set." If the current set is incomplete, do not call any navigation tool; first say exactly: "You haven't completed set X of [drill] yet. Would you still like to move on?" Wait for a clear yes. Only that later yes permits set_current_position to the next set or drill. The first continuation request may never advance the athlete, even if the next drill is obvious. Advance immediately only when the athlete explicitly says next set, next drill, move to set N, move to [drill], skip, or equivalent. Never mark a set complete for moving on. Mark completion only after explicit completion language such as "I'm done with that set," "I'm done," or "I'm finished."
 - Put natural references in drill_name: first/last, number, next/previous, go back, or Nth from end. Omit exercise_id unless state supplies it; never discuss IDs. Resolve this/that/current/it to current; ask only for ambiguous matches.
 - Multi-action requests require all tools in dependency order, awaiting each result. Example: navigate to "last drill," then set each requested shooting set. Use each returned state silently; do not re-fetch unless asked for a fresh check or state is ambiguous.
-- List with list_workout_drills. Add by catalog search then add after permission; remove with remove_workout_exercise; save notes with save_note. Name edits afterward.
+- List with list_workout_drills. Add by catalog search then add after permission; every added drill immediately becomes the current drill at set 1. Remove with remove_workout_exercise; save notes with save_note. Name edits afterward.
 - Any first request involving a drill/type/change not in the workout—including "add," "can I do/start," or "make/change my workout"—requires confirmation before mutation. Check drills; one match=use it, several=ask which, none search the catalog and offer the closest matching name before asking: "[X] isn't in this workout. Do you want me to add it/make that change?" A clear yes confirms; then add/edit immediately without asking again.
 
 SHOT TRACKING
@@ -2576,33 +2576,56 @@ export async function executeCoachTool(
         : extractedMinutes != null
         ? `${extractedMinutes} min`
         : "3 min";
-      const { error } = await supabase.from("workout_exercises").insert({
-        day_id: dayId,
-        user_id: userId,
-        video_clip_id: clip.id,
-        order_index: (lastExercise?.order_index ?? -1) + 1,
-        name: clip.exercise_name,
-        category: clip.category,
-        instructions: clip.description ?? clip.coaching_notes,
-        sets: "2",
-        reps: null,
-        duration,
-        target_makes: shooting ? 10 : finishing ? 8 : null,
-        target_attempts: shooting ? 20 : finishing ? 15 : null,
-        log_type: shooting || finishing
-          ? "makes_attempts"
-          : categoryIsTimed || durationMatch
-          ? "minutes"
-          : "checkbox",
-        set_side_labels: clip.requires_both_sides
-          ? ["left side", "right side"]
-          : null,
-      });
-      if (error) {
-        return { result: `Error adding: ${error.message}`, dbChanged: false };
+      const { data: addedExercise, error } = await supabase
+        .from("workout_exercises")
+        .insert({
+          day_id: dayId,
+          user_id: userId,
+          video_clip_id: clip.id,
+          order_index: (lastExercise?.order_index ?? -1) + 1,
+          name: clip.exercise_name,
+          category: clip.category,
+          instructions: clip.description ?? clip.coaching_notes,
+          sets: "2",
+          reps: null,
+          duration,
+          target_makes: shooting ? 10 : finishing ? 8 : null,
+          target_attempts: shooting ? 20 : finishing ? 15 : null,
+          log_type: shooting || finishing
+            ? "makes_attempts"
+            : categoryIsTimed || durationMatch
+            ? "minutes"
+            : "checkbox",
+          set_side_labels: clip.requires_both_sides
+            ? ["left side", "right side"]
+            : null,
+        })
+        .select("id")
+        .single();
+      if (error || !addedExercise) {
+        return {
+          result: `Error adding: ${error?.message ?? "the new drill could not be created"}`,
+          dbChanged: false,
+        };
       }
+      const { error: activateError } = await supabase
+        .from("workout_days")
+        .update({ active_exercise_id: addedExercise.id, active_set_number: 1 })
+        .eq("id", dayId)
+        .eq("user_id", userId);
+      if (activateError) {
+        return {
+          result: `Added ${clip.exercise_name}, but could not make it current: ${activateError.message}`,
+          dbChanged: true,
+        };
+      }
+      ctx.day.active_exercise_id = addedExercise.id;
+      ctx.day.active_set_number = 1;
       await refreshEstimate();
-      return { result: `Added ${clip.exercise_name}.`, dbChanged: true };
+      return {
+        result: `Added ${clip.exercise_name} and moved to set 1.`,
+        dbChanged: true,
+      };
     }
 
     case "remove_workout_exercise": {

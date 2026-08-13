@@ -16,6 +16,8 @@ import { supabase } from "@/lib/supabase";
 import { isLikelyNetworkError, reportNetworkFailure } from "@/lib/connectivity";
 import {
   parseCoachSpeechIntent,
+  parseSpeechControlIntent,
+  normalizeCoachSpeech,
   type CoachSpeechIntent,
   type NavigationTarget,
 } from "@/lib/coachSpeech";
@@ -42,7 +44,10 @@ import {
 } from "@/lib/cartesia";
 import {
   AssemblyRealtimeClient,
+  INITIAL_FIRST_AUDIO_TIMEOUT_MS,
   InworldTtsClient,
+  RETRY_FIRST_AUDIO_TIMEOUT_MS,
+  type InworldRequestIdentity,
 } from "@/lib/assemblyInworld";
 import {
   type CoachVoiceProvider,
@@ -226,6 +231,16 @@ interface RoutedCoachTurn {
   backendCompletedAt: number | null;
 }
 
+interface InworldSpeech {
+  turnId: string;
+  speechEpoch: number;
+  contextId: string;
+  text: string;
+  final: boolean;
+  retried: boolean;
+  firstAudioReceived: boolean;
+}
+
 interface SpeculativeCoachTurn {
   inkRequestId: string;
   turnId: string;
@@ -253,6 +268,11 @@ interface PendingTimerDurationChange {
 
 interface PendingIncompleteShotCompletion {
   exerciseId: string;
+  drillName: string | null;
+  setNumber: number;
+}
+
+interface PendingIncompleteSetContinuation {
   drillName: string | null;
   setNumber: number;
 }
@@ -589,6 +609,13 @@ export class RealtimeCoachSession {
   private fallbackTurnCount = 0;
   private pendingTimerDurationChange: PendingTimerDurationChange | null = null;
   private pendingIncompleteShotCompletion: PendingIncompleteShotCompletion | null = null;
+  private pendingIncompleteSetContinuation: PendingIncompleteSetContinuation | null = null;
+  private assemblyPartialFallback: {
+    timer: ReturnType<typeof setTimeout>;
+    transcript: string;
+    generation: number;
+  } | null = null;
+  private lastAssemblyFallbackTranscript: { text: string; at: number } | null = null;
   private speechEpoch = 0;
   private inkTurnSequence = 0;
   private latestUserTranscript: string | null = null;
@@ -624,6 +651,9 @@ export class RealtimeCoachSession {
   private inworldVoiceId = "";
   private voicePersona = "tyler";
   private inworldContextId: string | null = null;
+  private inworldSpeech: InworldSpeech | null = null;
+  private inworldTurnSequence = 0;
+  private inworldRecoveryPromise: Promise<void> | null = null;
   private assemblySpeechStartDeferred = false;
   private assemblyEchoGuardUntil = 0;
   private assemblyLastServerActivityAt = 0;
@@ -715,6 +745,9 @@ export class RealtimeCoachSession {
     this.fallbackTurnCount = 0;
     this.pendingTimerDurationChange = null;
     this.pendingIncompleteShotCompletion = null;
+    this.pendingIncompleteSetContinuation = null;
+    this.clearAssemblyPartialFallback();
+    this.lastAssemblyFallbackTranscript = null;
     this.speechEpoch = 0;
     this.inkTurnSequence = 0;
     this.playbackGeneration = 0;
@@ -749,6 +782,9 @@ export class RealtimeCoachSession {
     this.assemblySpeechStartDeferred = false;
     this.assemblyEchoGuardUntil = 0;
     this.lastAssemblyCoachSpeech = null;
+    this.inworldSpeech = null;
+    this.inworldTurnSequence = 0;
+    this.inworldRecoveryPromise = null;
     this.usageTracker = createUsageTracker(this.model);
     callbacks.onStatus("connecting");
 
@@ -1070,25 +1106,23 @@ export class RealtimeCoachSession {
       const isDeferredBargeIn = this.deferredBargeInRequestIds.delete(
         event.requestId,
       );
-      if (
-        isDeferredBargeIn &&
-        isLikelyPlaybackEcho(
-          event.transcript,
-          this.replayableSonicSpeech?.text,
-        )
-      ) {
+      if (isDeferredBargeIn) {
+        const control = this.parsePlaybackStopCommand(event.transcript);
+        if (
+          control &&
+          !isLikelyPlaybackEcho(
+            event.transcript,
+            this.replayableSonicSpeech?.text,
+          )
+        ) {
+          this.handleCartesiaSpeechStart(generation);
+        }
         console.info("[coach_ink_turn]", {
-          stage: "suppressed_playback_echo",
+          stage: control ? "local_stop_command" : "suppressed_playback_echo",
           request_id: event.requestId,
           transcript_characters: event.transcript.trim().length,
         });
         return;
-      }
-      if (isDeferredBargeIn) {
-        // Wait for the final transcript before interrupting. The strengthened
-        // echo matcher rejects distorted speaker bleed while preserving
-        // natural-language barge-in once the athlete has finished speaking.
-        this.handleCartesiaSpeechStart(generation);
       }
       logInkLifecycle("end", event.requestId, event.transcript);
       const turnSpeechEpoch = this.speechEpoch;
@@ -1159,19 +1193,9 @@ export class RealtimeCoachSession {
         this.handleCartesiaSpeechStart(generation);
       },
       onTurnUpdate: (event) => {
-        if (!this.deferredBargeInRequestIds.has(event.requestId)) return;
-        if (
-          classifyPlaybackTranscript(
-            event.transcript,
-            this.replayableSonicSpeech?.text,
-          ) !== "user"
-        ) {
-          return;
-        }
-        // A novel, substantial partial is enough evidence to barge in. Echo
-        // and short ambiguous fragments keep the current speech intact.
-        this.deferredBargeInRequestIds.delete(event.requestId);
-        this.handleCartesiaSpeechStart(generation);
+        // While Coach speaks, partial ASR is never enough to interrupt.
+        // Exact local stop commands are accepted only from a final turn.
+        void event;
       },
       onTurnEagerEnd: (event) => {
         logInkLifecycle("eager_end", event.requestId, event.transcript);
@@ -1337,6 +1361,10 @@ export class RealtimeCoachSession {
         this.handleAssemblySpeechStart(generation);
       },
       onPartial: (transcript) => {
+        // While Coach is speaking, partial ASR is never an interruption. It
+        // may be room noise or speaker bleed; exact stop commands are only
+        // accepted from a final transcript below.
+        if (this.playbackActive || this.generationActive || this.inworldContextId) return;
         const playbackClassification =
           this.playbackActive || Date.now() < this.assemblyEchoGuardUntil
             ? classifyPlaybackTranscript(transcript, this.lastAssemblyCoachSpeech)
@@ -1355,8 +1383,34 @@ export class RealtimeCoachSession {
         // such as "stop"; a final transcript resolves them safely.
         if (playbackClassification === "echo") return;
         this.callbacks?.onUserTranscript?.(transcript);
+        // Assembly normally follows this with a final turn. If that event is
+        // lost, do not leave a visible athlete request stranded forever.
+        this.scheduleAssemblyPartialFallback(transcript, generation);
       },
       onTurn: (turn) => {
+        this.clearAssemblyPartialFallback();
+        if (this.playbackActive || this.generationActive || this.inworldContextId) {
+          const control = this.parsePlaybackStopCommand(turn.transcript);
+          if (
+            control &&
+            !isLikelyPlaybackEcho(turn.transcript, this.lastAssemblyCoachSpeech)
+          ) {
+            this.handleAssemblySpeechStart(generation);
+          }
+          return;
+        }
+        const fallback = this.lastAssemblyFallbackTranscript;
+        const normalize = (value: string) =>
+          value.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+        if (
+          fallback &&
+          Date.now() - fallback.at < 5_000 &&
+          normalize(fallback.text) === normalize(turn.transcript)
+        ) {
+          this.lastAssemblyFallbackTranscript = null;
+          return;
+        }
+        this.lastAssemblyFallbackTranscript = null;
         if (this.assemblySpeechStartDeferred) {
           this.assemblySpeechStartDeferred = false;
           if (isLikelyPlaybackEcho(turn.transcript, this.lastAssemblyCoachSpeech)) {
@@ -1393,54 +1447,11 @@ export class RealtimeCoachSession {
         }
       },
     });
-    const inworld = new InworldTtsClient({
-      accessToken: inworldToken,
-      refreshAccessToken: () => this.refreshInworldAccessToken(),
-      voiceId,
-      onAudio: (audio, contextId) => {
-        if (
-          generation !== this.connectionGeneration ||
-          contextId !== this.inworldContextId ||
-          !this.active
-        ) return;
-        this.playbackEnqueue = this.playbackEnqueue
-          .then(() => {
-            if (
-              generation !== this.connectionGeneration ||
-              contextId !== this.inworldContextId ||
-              !this.active
-            ) return;
-            return this.duplexAudio?.enqueuePlaybackAsync(audio);
-          })
-          .then(() => undefined)
-          .catch((playbackError) => {
-            console.error("Could not enqueue Inworld speech:", playbackError);
-            this.recoverAssemblyInworldTransport(generation, playbackError);
-          });
-      },
-      onFirstAudio: (contextId) => {
-        if (
-          generation !== this.connectionGeneration ||
-          contextId !== this.inworldContextId ||
-          !this.active
-        ) return;
-        this.playbackActive = true;
-        this.updateStatus();
-      },
-      onDone: (contextId) => {
-        if (contextId !== this.inworldContextId) return;
-        this.generationActive = false;
-        this.updateStatus();
-      },
-      onBilledCharacters: (count) => {
-        this.inworldTtsCharacters += count;
-      },
-      onError: (providerError) => {
-        console.error("Inworld TTS error:", providerError);
-        this.recoverAssemblyInworldTransport(generation, providerError);
-      },
-      onClose: () => undefined,
-    });
+    const inworld = this.createInworldTtsClient(
+      inworldToken,
+      generation,
+      INITIAL_FIRST_AUDIO_TIMEOUT_MS,
+    );
     this.assemblyClient = assembly;
     this.inworldClient = inworld;
     try {
@@ -1519,7 +1530,7 @@ export class RealtimeCoachSession {
           // Keep listening for genuine barge-in, but defer it until transcript
           // evidence arrives. Bluetooth/speaker routes and room reflections
           // commonly outlive the native queue by more than 750 ms.
-          this.assemblyEchoGuardUntil = Date.now() + 1_500;
+          this.assemblyEchoGuardUntil = 0;
           this.callbacks?.onCoachPlaybackFinished?.();
         }
         this.updateStatus();
@@ -1544,6 +1555,170 @@ export class RealtimeCoachSession {
         }
       }),
     ];
+  }
+
+  private createInworldTtsClient(
+    accessToken: string,
+    generation: number,
+    firstAudioTimeoutMs: number,
+  ): InworldTtsClient {
+    let inworld: InworldTtsClient;
+    const ownsActiveSpeech = (identity: InworldRequestIdentity): boolean =>
+      generation === this.connectionGeneration &&
+      this.active &&
+      this.inworldClient === inworld &&
+      identity.contextId === this.inworldContextId &&
+      this.inworldSpeech?.contextId === identity.contextId &&
+      this.inworldSpeech.speechEpoch === this.speechEpoch;
+
+    inworld = new InworldTtsClient({
+      accessToken,
+      refreshAccessToken: () => this.refreshInworldAccessToken(),
+      voiceId: this.inworldVoiceId,
+      firstAudioTimeoutMs,
+      onAudio: (audio, identity) => {
+        if (!ownsActiveSpeech(identity)) return;
+        this.playbackEnqueue = this.playbackEnqueue
+          .then(() => {
+            if (!ownsActiveSpeech(identity)) return;
+            return this.duplexAudio?.enqueuePlaybackAsync(audio);
+          })
+          .then(() => undefined)
+          .catch((playbackError) => {
+            if (!ownsActiveSpeech(identity)) return;
+            console.error("Could not enqueue Inworld speech:", playbackError);
+            this.finishInworldWithError(generation, playbackError);
+          });
+      },
+      onFirstAudio: (identity) => {
+        if (!ownsActiveSpeech(identity)) return;
+        const speech = this.inworldSpeech;
+        if (!speech) return;
+        speech.firstAudioReceived = true;
+        this.playbackActive = true;
+        this.updateStatus();
+      },
+      onDone: (contextId) => {
+        if (
+          generation !== this.connectionGeneration ||
+          this.inworldClient !== inworld ||
+          contextId !== this.inworldContextId
+        ) {
+          return;
+        }
+        this.inworldContextId = null;
+        this.inworldSpeech = null;
+        this.generationActive = false;
+        this.updateStatus();
+      },
+      onBilledCharacters: (count) => {
+        this.inworldTtsCharacters += count;
+      },
+      onError: (providerError, identity) => {
+        if (!ownsActiveSpeech(identity)) return;
+        console.error("Inworld TTS error:", providerError);
+        if (this.inworldSpeech?.firstAudioReceived) {
+          this.finishInworldWithError(generation, providerError);
+          return;
+        }
+        this.recoverInworldFirstAudio(generation, inworld, identity, providerError);
+      },
+      onClose: () => undefined,
+    });
+    return inworld;
+  }
+
+  private recoverInworldFirstAudio(
+    generation: number,
+    failedClient: InworldTtsClient,
+    identity: InworldRequestIdentity,
+    error: Error,
+  ): void {
+    if (this.inworldRecoveryPromise) return;
+    const speech = this.inworldSpeech;
+    if (
+      generation !== this.connectionGeneration ||
+      !this.active ||
+      this.inworldClient !== failedClient ||
+      !speech ||
+      speech.contextId !== identity.contextId
+    ) {
+      return;
+    }
+    if (speech.retried) {
+      this.finishInworldWithError(generation, error);
+      return;
+    }
+    speech.retried = true;
+    const recovery = (async () => {
+      failedClient.cancel(identity.contextId);
+      failedClient.close();
+      this.playbackEnqueue = Promise.resolve();
+      await this.duplexAudio?.clearPlaybackAsync().catch(() => undefined);
+      const accessToken = await this.refreshInworldAccessToken();
+      if (
+        generation !== this.connectionGeneration ||
+        !this.active ||
+        this.inworldClient !== failedClient ||
+        this.inworldSpeech !== speech
+      ) {
+        return;
+      }
+      const replacement = this.createInworldTtsClient(
+        accessToken,
+        generation,
+        RETRY_FIRST_AUDIO_TIMEOUT_MS,
+      );
+      this.inworldClient = replacement;
+      await replacement.connect();
+      if (
+        generation !== this.connectionGeneration ||
+        !this.active ||
+        this.inworldClient !== replacement ||
+        this.inworldSpeech !== speech
+      ) {
+        replacement.close();
+        return;
+      }
+      const retryContextId = `${speech.turnId}:retry`.slice(0, 120);
+      speech.contextId = retryContextId;
+      speech.firstAudioReceived = false;
+      this.inworldContextId = retryContextId;
+      replacement.createContext(retryContextId);
+      replacement.pushText(retryContextId, speech.text, speech.final);
+      if (speech.final && !speech.text.trim()) replacement.finish(retryContextId);
+    })()
+      .catch((recoveryError) => {
+        if (
+          generation === this.connectionGeneration &&
+          this.active &&
+          this.inworldSpeech === speech
+        ) {
+          this.finishInworldWithError(generation, recoveryError);
+        }
+      })
+      .finally(() => {
+        this.inworldRecoveryPromise = null;
+      });
+    this.inworldRecoveryPromise = recovery;
+  }
+
+  private finishInworldWithError(generation: number, error: unknown): void {
+    if (generation !== this.connectionGeneration || !this.active) return;
+    const contextId = this.inworldContextId;
+    const client = this.inworldClient;
+    this.inworldContextId = null;
+    this.inworldSpeech = null;
+    if (contextId) client?.cancel(contextId);
+    client?.close();
+    if (this.inworldClient === client) this.inworldClient = null;
+    this.generationActive = false;
+    this.playbackActive = false;
+    void this.duplexAudio?.clearPlaybackAsync().catch(() => undefined);
+    this.updateStatus();
+    this.callbacks?.onError(
+      error instanceof Error ? error.message : "Inworld TTS could not produce speech.",
+    );
   }
 
   private async refreshInworldAccessToken(): Promise<string> {
@@ -2676,6 +2851,26 @@ export class RealtimeCoachSession {
         turn.requestId,
       );
     }
+    if (command.kind === "continuation_confirmation") {
+      const pending = this.pendingIncompleteSetContinuation;
+      this.pendingIncompleteSetContinuation = null;
+      if (!pending) return null;
+      if (!command.args.accepted) {
+        return `Okay, we'll stay on set ${pending.setNumber} of ${
+          pending.drillName ?? "this drill"
+        }.`;
+      }
+      return this.executeDeterministicIntent(
+        {
+          kind: "navigation",
+          args: { mode: "action", unit: "set", target: { type: "next" }, skip: false },
+          confidence: 1,
+          heardLabel: "Continue past incomplete set confirmed",
+          safeToDelete: true,
+        },
+        turn
+      );
+    }
 
     if (command.kind === "shot") {
       // Validate the active drill before resolving the requested set. Without
@@ -2846,6 +3041,18 @@ export class RealtimeCoachSession {
         const current = this.currentDrill();
         const currentSet = this.currentSetState();
         if (!current || !currentSet) return null;
+        if (
+          command.args.resumeCurrentIfIncomplete &&
+          !currentSet.completed
+        ) {
+          this.pendingIncompleteSetContinuation = {
+            drillName: current.name,
+            setNumber: currentSet.set_number,
+          };
+          return `You haven't completed set ${currentSet.set_number} of ${
+            current.name
+          } yet. Would you still like to move on?`;
+        }
         const orderedSets = [...current.set_results].sort(
           (a, b) => a.set_number - b.set_number
         );
@@ -3027,6 +3234,47 @@ export class RealtimeCoachSession {
     return null;
   }
 
+  private clearAssemblyPartialFallback(): void {
+    if (!this.assemblyPartialFallback) return;
+    clearTimeout(this.assemblyPartialFallback.timer);
+    this.assemblyPartialFallback = null;
+  }
+
+  private parsePlaybackStopCommand(transcript: string): CoachSpeechIntent | null {
+    // During speaker playback, only the exact command is safe to treat as a
+    // barge-in. Broader phrases can be reflected Coach speech or an athlete
+    // beginning a normal request, both of which should wait for playback.
+    const normalized = normalizeCoachSpeech(transcript);
+    return normalized === "stop" ? parseSpeechControlIntent(normalized) : null;
+  }
+
+  private scheduleAssemblyPartialFallback(transcript: string, generation: number): void {
+    const text = transcript.trim();
+    if (!text || generation !== this.connectionGeneration || !this.active) return;
+    this.clearAssemblyPartialFallback();
+    const timer = setTimeout(() => {
+      const pending = this.assemblyPartialFallback;
+      if (
+        !pending ||
+        pending.timer !== timer ||
+        pending.generation !== this.connectionGeneration ||
+        !this.active
+      ) {
+        return;
+      }
+      this.assemblyPartialFallback = null;
+      this.lastAssemblyFallbackTranscript = { text: pending.transcript, at: Date.now() };
+      const itemId = `assembly-partial-fallback-${generation}-${Date.now()}`;
+      this.speechStoppedAtByItem.set(itemId, Date.now());
+      this.transcriptRouteQueue = this.transcriptRouteQueue
+        .then(() => this.routeTranscribedTurn(pending.transcript, itemId, generation))
+        .catch((routeError) => {
+          console.error("Failed to route AssemblyAI fallback transcript:", routeError);
+        });
+    }, 2_200);
+    this.assemblyPartialFallback = { timer, transcript: text, generation };
+  }
+
   private async routeTranscribedTurn(
     transcript: string,
     itemId: string | null,
@@ -3055,6 +3303,16 @@ export class RealtimeCoachSession {
     };
     this.speechStoppedAtByItem.delete(turnId);
     this.routedTurns.set(turnId, turn);
+    if (this.playbackActive || this.generationActive || this.inworldContextId) {
+      const control = this.parsePlaybackStopCommand(transcript);
+      if (
+        control &&
+        !isLikelyPlaybackEcho(transcript, this.lastAssemblyCoachSpeech)
+      ) {
+        this.handleAssemblySpeechStart(generation);
+      }
+      return;
+    }
     // Always show the athlete's actual words, including when the local router
     // consumes the command before it reaches Haiku.
     this.callbacks?.onUserTranscript?.(transcript);
@@ -3083,6 +3341,16 @@ export class RealtimeCoachSession {
             )
           ? false
           : null;
+    const incompleteSetContinuationChoice =
+      /^(?:yes|yeah|yep|sure|ok|okay|continue|move on|go ahead|do it)$/.test(
+        normalizedReply
+      )
+        ? true
+        : /^(?:no|nope|dont|do not|stay|stay here|keep me here)$/.test(
+              normalizedReply
+            )
+          ? false
+          : null;
     const command: CoachSpeechIntent | null =
       this.pendingTimerDurationChange && acceptedDurationChange != null
         ? {
@@ -3104,6 +3372,17 @@ export class RealtimeCoachSession {
                 : "Start incomplete shooting set",
               safeToDelete: true,
             }
+          : this.pendingIncompleteSetContinuation &&
+              incompleteSetContinuationChoice != null
+            ? {
+                kind: "continuation_confirmation",
+                args: { accepted: incompleteSetContinuationChoice },
+                confidence: 1,
+                heardLabel: incompleteSetContinuationChoice
+                  ? "Continue past incomplete set confirmed"
+                  : "Stay on incomplete set",
+                safeToDelete: true,
+              }
         : parseCoachSpeechIntent(transcript);
     if (this.pendingTimerDurationChange && acceptedDurationChange == null) {
       this.pendingTimerDurationChange = null;
@@ -3113,6 +3392,12 @@ export class RealtimeCoachSession {
       incompleteShotCompletionChoice == null
     ) {
       this.pendingIncompleteShotCompletion = null;
+    }
+    if (
+      this.pendingIncompleteSetContinuation &&
+      incompleteSetContinuationChoice == null
+    ) {
+      this.pendingIncompleteSetContinuation = null;
     }
     if (!command) {
       turn.routeDecidedAt = Date.now();
@@ -3297,6 +3582,8 @@ export class RealtimeCoachSession {
       this.speechEpoch += 1;
       this.playbackGeneration += 1;
       this.cancelCartesiaSpeculation("disconnect");
+      this.clearAssemblyPartialFallback();
+      this.lastAssemblyFallbackTranscript = null;
       this.latestUserTranscript = null;
       this.contextRefreshPending = false;
       this.pendingEvents = [];
@@ -3340,6 +3627,8 @@ export class RealtimeCoachSession {
       this.assemblyClient = null;
       this.inworldClient = null;
       this.inworldContextId = null;
+      this.inworldSpeech = null;
+      this.inworldRecoveryPromise = null;
       this.stopLocalShotPlayback?.();
       this.stopLocalShotPlayback = null;
       this.assemblySpeechStartDeferred = false;
@@ -3672,6 +3961,7 @@ export class RealtimeCoachSession {
     this.turnAbortController = null;
     const contextId = this.inworldContextId;
     this.inworldContextId = null;
+    this.inworldSpeech = null;
     if (contextId) {
       this.inworldClient?.cancel(contextId);
     }
@@ -3686,8 +3976,18 @@ export class RealtimeCoachSession {
     if (!text.trim() || speechEpoch !== this.speechEpoch || !this.active) return;
     const inworld = this.inworldClient;
     if (!inworld?.isOpen) throw new Error("Inworld speech is not connected.");
-    const contextId = `${this.sessionKey ?? "session"}:${speechEpoch}:${Date.now()}`.slice(0, 120);
+    const turnId = `${this.sessionKey ?? "session"}:${speechEpoch}:${++this.inworldTurnSequence}`;
+    const contextId = `${turnId}:initial`.slice(0, 120);
     this.inworldContextId = contextId;
+    this.inworldSpeech = {
+      turnId,
+      speechEpoch,
+      contextId,
+      text,
+      final: true,
+      retried: false,
+      firstAudioReceived: false,
+    };
     this.generationActive = true;
     this.updateStatus();
     inworld.createContext(contextId);
@@ -3702,13 +4002,27 @@ export class RealtimeCoachSession {
     if (!inworld?.isOpen) throw new Error("Inworld speech is not connected.");
     let contextId = this.inworldContextId;
     if (!contextId) {
-      contextId = `${this.sessionKey ?? "session"}:${speechEpoch}:${Date.now()}`.slice(0, 120);
+      const turnId = `${this.sessionKey ?? "session"}:${speechEpoch}:${++this.inworldTurnSequence}`;
+      contextId = `${turnId}:initial`.slice(0, 120);
       this.inworldContextId = contextId;
+      this.inworldSpeech = {
+        turnId,
+        speechEpoch,
+        contextId,
+        text: "",
+        final: false,
+        retried: false,
+        firstAudioReceived: false,
+      };
       this.lastAssemblyCoachSpeech = "";
       this.generationActive = true;
       this.updateStatus();
       inworld.createContext(contextId);
     }
+    const speech = this.inworldSpeech;
+    if (!speech || speech.contextId !== contextId) return;
+    speech.text += text;
+    speech.final ||= final;
     this.lastAssemblyCoachSpeech = `${this.lastAssemblyCoachSpeech ?? ""}${text}`;
     inworld.pushText(contextId, text, final);
   }
@@ -3771,7 +4085,13 @@ export class RealtimeCoachSession {
         const gate = gateCoachSpeechText(chunk, true);
         if (gate.status === "safe") this.pushInworldChunk(gate.speech, speechEpoch);
       }
-      if (this.inworldContextId) this.inworldClient?.finish(this.inworldContextId);
+      const contextId = this.inworldContextId;
+      if (contextId) {
+        if (this.inworldSpeech?.contextId === contextId) {
+          this.inworldSpeech.final = true;
+        }
+        this.inworldClient?.finish(contextId);
+      }
       return;
     }
     if (event.type === "error") throw new Error(event.error);
@@ -4390,7 +4710,7 @@ export class RealtimeCoachSession {
           if (speechEpoch !== this.speechEpoch) return;
           this.stopLocalShotPlayback = null;
           this.playbackActive = false;
-          this.assemblyEchoGuardUntil = Date.now() + 1_500;
+          this.assemblyEchoGuardUntil = 0;
           this.callbacks?.onCoachPlaybackFinished?.();
           this.updateStatus();
         });

@@ -22,6 +22,10 @@ export interface SetCompletionConfirmationArgs {
   accepted: boolean;
 }
 
+export interface ContinuationConfirmationArgs {
+  accepted: boolean;
+}
+
 export interface SpeechControlIntentArgs {
   action: "stop_speaking";
 }
@@ -37,6 +41,8 @@ export interface NavigationIntentArgs {
   unit: CoachSpeechUnit;
   target: NavigationTarget;
   skip?: boolean;
+  /** Conversational continuation must retain an unfinished current set. */
+  resumeCurrentIfIncomplete?: boolean;
 }
 
 export interface CompletionIntentArgs {
@@ -87,6 +93,7 @@ export type CoachSpeechIntent =
   | IntentBase<"timer", TimerIntentArgs>
   | IntentBase<"timer_duration_confirmation", TimerDurationConfirmationArgs>
   | IntentBase<"set_completion_confirmation", SetCompletionConfirmationArgs>
+  | IntentBase<"continuation_confirmation", ContinuationConfirmationArgs>
   | IntentBase<"speech_control", SpeechControlIntentArgs>
   | IntentBase<"navigation", NavigationIntentArgs>
   | IntentBase<"completion", CompletionIntentArgs>
@@ -534,8 +541,14 @@ export const parseNavigationIntent: Parser = (text) => {
   if (/^(?:(?:let'?s\s+)?(?:move on|keep going|continue)|let'?s go)$/.test(text)) {
     return intent(
       "navigation",
-      { mode: "action", unit: "set", target: { type: "next" }, skip: false },
-      "Move to next set heard"
+      {
+        mode: "action",
+        unit: "set",
+        target: { type: "next" },
+        skip: false,
+        resumeCurrentIfIncomplete: true,
+      },
+      "Continue current set heard"
     );
   }
   if (/^(?:whats|what is|what do i have) (?:up )?next(?: for me)?$/.test(text)) {
@@ -805,7 +818,7 @@ export const parseRepeatIntent: Parser = (text) =>
     : null;
 
 export const parseSpeechControlIntent: Parser = (text) =>
-  /^(?:stop talking|stop speaking|stop (?:talking|speaking) coach|be quiet|quiet please|shh|hush)$/.test(
+  /^(?:stop|stop talking|stop speaking|stop (?:talking|speaking) coach|be quiet|quiet(?: please)?|pause(?: coach)?|wait|hold on|cancel|never mind|shh|hush)$/.test(
     text
   )
     ? intent("speech_control", { action: "stop_speaking" }, "Stop coach speech heard", 0.99)

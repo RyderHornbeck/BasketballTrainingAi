@@ -273,10 +273,16 @@ test("keeps navigation queries separate from movement", () => {
     kind: "navigation",
     args: { mode: "action", unit: "drill", target: { type: "next" }, skip: false },
   });
-  for (const phrase of ["let's move on", "lets move on", "move on", "let's go"]) {
+  for (const phrase of ["let's move on", "lets move on", "move on", "let's go", "okay lets continue"]) {
     expectIntent(phrase, {
       kind: "navigation",
-      args: { mode: "action", unit: "set", target: { type: "next" }, skip: false },
+      args: {
+        mode: "action",
+        unit: "set",
+        target: { type: "next" },
+        skip: false,
+        resumeCurrentIfIncomplete: true,
+      },
     });
   }
   expectIntent("skip this drill", {
@@ -489,7 +495,6 @@ test("rejects ambiguous, unsafe, impossible, and compound phrases", () => {
     "10 for 6",
     "start a timer for a while",
     "start a two minute timer and skip this drill",
-    "pause",
     "reset everything",
     "what should I do next",
     "should I skip this drill",

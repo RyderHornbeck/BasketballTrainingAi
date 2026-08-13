@@ -9,16 +9,38 @@ import {
 // together while still beginning long answers before generation is complete.
 const MINIMUM_UTTERANCE_CHARACTERS = 240;
 const MAXIMUM_UTTERANCE_WAIT_MS = 450;
+export const INITIAL_FIRST_AUDIO_TIMEOUT_MS = 2_000;
+export const RETRY_FIRST_AUDIO_TIMEOUT_MS = 3_000;
+
+export interface InworldRequestIdentity {
+  clientId: number;
+  requestId: string;
+  contextId: string;
+}
+
+let clientSequence = 0;
+
+export class InworldFirstAudioTimeoutError extends Error {
+  constructor(
+    readonly contextId: string,
+    readonly requestId: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`Inworld did not return audio within ${timeoutMs}ms.`);
+    this.name = "InworldFirstAudioTimeoutError";
+  }
+}
 
 export interface InworldTtsOptions {
   accessToken: string;
   refreshAccessToken: () => Promise<string>;
   voiceId: string;
-  onAudio: (base64Pcm: string, contextId: string) => void;
-  onFirstAudio: (contextId: string) => void;
+  firstAudioTimeoutMs?: number;
+  onAudio: (base64Pcm: string, identity: InworldRequestIdentity) => void;
+  onFirstAudio: (identity: InworldRequestIdentity) => void;
   onDone: (contextId: string) => void;
   onBilledCharacters: (count: number) => void;
-  onError: (error: Error) => void;
+  onError: (error: Error, identity: InworldRequestIdentity) => void;
   onClose: () => void;
 }
 
@@ -29,6 +51,11 @@ export class InworldTtsClient {
   private readonly cancelledContexts = new Set<string>();
   private readonly contextQueues = new Map<string, Promise<void>>();
   private contextsWithAudio = new Set<string>();
+  private lifetime = 0;
+  private requestSequence = 0;
+  private readonly firstAudioTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly requestContexts = new Map<string, string>();
+  private readonly clientId = ++clientSequence;
 
   constructor(private readonly options: InworldTtsOptions) {}
 
@@ -38,6 +65,7 @@ export class InworldTtsClient {
 
   connect(): Promise<void> {
     this.close();
+    this.lifetime += 1;
     this.client = createClient({
       token: this.options.accessToken,
       onTokenExpiring: this.options.refreshAccessToken,
@@ -113,9 +141,17 @@ export class InworldTtsClient {
     this.pendingText.delete(contextId);
     this.contextQueues.delete(contextId);
     this.contextsWithAudio.delete(contextId);
+    for (const [requestId, requestContextId] of this.requestContexts) {
+      if (requestContextId !== contextId) continue;
+      const timer = this.firstAudioTimers.get(requestId);
+      if (timer) clearTimeout(timer);
+      this.firstAudioTimers.delete(requestId);
+      this.requestContexts.delete(requestId);
+    }
   }
 
   close(): void {
+    this.lifetime += 1;
     this.client = null;
     for (const timer of this.flushTimers.values()) clearTimeout(timer);
     this.flushTimers.clear();
@@ -123,6 +159,9 @@ export class InworldTtsClient {
     this.contextQueues.clear();
     this.cancelledContexts.clear();
     this.contextsWithAudio.clear();
+    for (const timer of this.firstAudioTimers.values()) clearTimeout(timer);
+    this.firstAudioTimers.clear();
+    this.requestContexts.clear();
   }
 
   private async streamContext(
@@ -132,6 +171,41 @@ export class InworldTtsClient {
   ): Promise<void> {
     const client = this.client;
     if (!client) return;
+    const lifetime = this.lifetime;
+    const requestId = `${lifetime}:${++this.requestSequence}`;
+    const identity: InworldRequestIdentity = {
+      clientId: this.clientId,
+      requestId,
+      contextId,
+    };
+    const clearFirstAudioTimeout = () => {
+      const timer = this.firstAudioTimers.get(requestId);
+      if (timer) clearTimeout(timer);
+      this.firstAudioTimers.delete(requestId);
+      this.requestContexts.delete(requestId);
+    };
+    this.requestContexts.set(requestId, contextId);
+    this.firstAudioTimers.set(
+      requestId,
+      setTimeout(() => {
+        if (
+          this.lifetime === lifetime &&
+          this.client === client &&
+          !this.cancelledContexts.has(contextId) &&
+          !this.contextsWithAudio.has(contextId)
+        ) {
+          this.cancel(contextId);
+          this.options.onError(
+            new InworldFirstAudioTimeoutError(
+              contextId,
+              requestId,
+              this.options.firstAudioTimeoutMs ?? INITIAL_FIRST_AUDIO_TIMEOUT_MS,
+            ),
+            identity,
+          );
+        }
+      }, this.options.firstAudioTimeoutMs ?? INITIAL_FIRST_AUDIO_TIMEOUT_MS),
+    );
     try {
       const requestText =
         `[warm supportive basketball coach with natural conversational pacing and brief pauses between thoughts] ${text}`;
@@ -149,18 +223,26 @@ export class InworldTtsClient {
         speakingRate: 1.08,
         deliveryMode: "BALANCED",
       })) {
-        if (this.cancelledContexts.has(contextId)) return;
+        if (
+          this.lifetime !== lifetime ||
+          this.client !== client ||
+          this.cancelledContexts.has(contextId)
+        ) return;
         if (!this.contextsWithAudio.has(contextId)) {
+          clearFirstAudioTimeout();
           this.contextsWithAudio.add(contextId);
-          this.options.onFirstAudio(contextId);
+          this.options.onFirstAudio(identity);
         }
-        this.options.onAudio(bytesToBase64(audio), contextId);
+        this.options.onAudio(bytesToBase64(audio), identity);
       }
+      clearFirstAudioTimeout();
       if (final && !this.cancelledContexts.has(contextId)) this.finish(contextId);
     } catch (error) {
-      if (!this.cancelledContexts.has(contextId)) {
+      clearFirstAudioTimeout();
+      if (this.lifetime === lifetime && !this.cancelledContexts.has(contextId)) {
         this.options.onError(
           error instanceof Error ? error : new Error("Inworld TTS request failed."),
+          identity,
         );
       }
     }
