@@ -66,11 +66,6 @@ export interface RemoveDrillIntentArgs {
   match: "exact";
 }
 
-export interface AdjustWorkoutIntentArgs {
-  action: "extend" | "shorten";
-  durationSeconds: number;
-}
-
 export interface SetPrescriptionIntentArgs {
   setNumber?: number;
   durationSeconds?: number;
@@ -102,7 +97,6 @@ export type CoachSpeechIntent =
   | IntentBase<"repeat", Record<string, never>>
   | IntentBase<"save_note", SaveNoteIntentArgs>
   | IntentBase<"remove_drill", RemoveDrillIntentArgs>
-  | IntentBase<"adjust_workout", AdjustWorkoutIntentArgs>
   | IntentBase<"set_prescription", SetPrescriptionIntentArgs>;
 
 type Parser = (text: string) => CoachSpeechIntent | null;
@@ -491,7 +485,7 @@ export const parseTimerIntent: Parser = (text) => {
       "Restart timer heard",
     ],
     [
-      /^(?:timer status|(?:whats|what is|how much|how long) (?:(?:time|it)\s+is|time|is)?\s*(?:left|remaining)(?:\s+on(?:\s+the)?\s+(?:timer|countdown))?|how is (?:the )?(?:timer|countdown)|(?:time|timer) remaining)$/,
+      /^(?:timer status|(?:whats|what is|how much|how long) (?:(?:time|it)\s+is|time|is)?\s*(?:left|remaining)(?:\s+on(?:\s+the)?\s+(?:timer|countdown))?|(?:how much|how long) time (?:do i have|is there|is left|remains)|(?:whats|what is) (?:the )?time|what time is it|(?:whats|what is) (?:the )?(?:timer|countdown) at|what(?:s| is) (?:on )?(?:the )?(?:timer|clock|countdown)|how is (?:the )?(?:timer|countdown)|(?:time|timer) remaining)$/,
       "status",
       "Timer status heard",
     ],
@@ -856,27 +850,6 @@ export const parseRemoveDrillIntent: Parser = (text) => {
   );
 };
 
-export const parseAdjustWorkoutIntent: Parser = (text) => {
-  const match = text.match(
-    new RegExp(
-      `^(extend|lengthen|add|shorten|reduce|cut)\\s+(?:the\\s+|this\\s+|my\\s+)?workout(?:\\s+by|\\s+for)?\\s+(${NUMBER})\\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)$`
-    )
-  );
-  if (!match) return null;
-  const durationSeconds = parseDuration(match[2], match[3]);
-  if (durationSeconds == null) return null;
-  const action: AdjustWorkoutIntentArgs["action"] = /^(?:extend|lengthen|add)$/.test(match[1])
-    ? "extend"
-    : "shorten";
-  return intent(
-    "adjust_workout",
-    { action, durationSeconds },
-    `${action === "extend" ? "Extend" : "Shorten"} workout ${formatDurationLabel(
-      durationSeconds
-    )} heard`
-  );
-};
-
 export const parseSetPrescriptionIntent: Parser = (text) => {
   const duration =
     text.match(
@@ -1028,7 +1001,6 @@ const PARSERS: readonly Parser[] = [
   parseRepeatIntent,
   parseRemoveDrillIntent,
   parseSetPrescriptionIntent,
-  parseAdjustWorkoutIntent,
 ];
 
 export function parseCoachSpeechIntent(

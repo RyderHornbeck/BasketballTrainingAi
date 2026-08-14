@@ -126,14 +126,18 @@ export function useCoach(dayId: string | null): UseCoachResult {
     return Math.round(t.accumulated + (t.running ? (Date.now() - t.startedAt) / 1000 : 0));
   }, []);
 
-  const getTimerState = useCallback(
-    (): TimerState => ({
+  const getTimerState = useCallback((): TimerState => {
+    const elapsedSeconds = currentElapsed();
+    const durationSeconds = timerRef.current.durationSeconds;
+    return {
       running: timerRef.current.running,
-      elapsed_seconds: currentElapsed(),
-      duration_seconds: timerRef.current.durationSeconds,
-    }),
-    [currentElapsed]
-  );
+      elapsed_seconds: elapsedSeconds,
+      duration_seconds: durationSeconds,
+      remaining_seconds: durationSeconds == null
+        ? null
+        : Math.max(0, durationSeconds - elapsedSeconds),
+    };
+  }, [currentElapsed]);
 
   useEffect(() => {
     if (!timerRunning) return;
@@ -304,6 +308,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
             setError(msg);
           },
           onTimerAction: applyTimerAction,
+          getTimerState,
           onUserTranscript: (text) => {
             if (!mountedRef.current) return;
             const isContinuation =

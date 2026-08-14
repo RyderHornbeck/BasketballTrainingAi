@@ -12,6 +12,10 @@ import {
   isCoachLimitMessage,
   logCoachUsage,
 } from "@/lib/coachUsage";
+import {
+  createProviderUsageDelta,
+  type ProviderUsageDelta,
+} from "@/lib/providerUsage";
 import { supabase } from "@/lib/supabase";
 import { isLikelyNetworkError, reportNetworkFailure } from "@/lib/connectivity";
 import {
@@ -42,6 +46,7 @@ import {
   type CartesiaSonicContext,
   type InkTranscriptEvent,
 } from "@/lib/cartesia";
+
 import {
   AssemblyRealtimeClient,
   INITIAL_FIRST_AUDIO_TIMEOUT_MS,
@@ -61,6 +66,14 @@ import {
   startVoiceCallAudio,
   stopVoiceCallAudio,
 } from "@/lib/webrtcAudio";
+
+function isLikelyTimerStatusQuestion(transcript: string): boolean {
+  const text = normalizeCoachSpeech(transcript);
+  return (
+    /\b(?:timer|countdown|clock)\b/.test(text) &&
+    /\b(?:time|left|remaining|status|at)\b/.test(text)
+  ) || /^(?:how much|how long)(?: more)? time\b/.test(text);
+}
 
 // Ink-2 has no free-form transcription prompt. Keyterms are its documented
 // connection-level accuracy control; keep this focused vocabulary below
@@ -169,10 +182,11 @@ export interface TimerState {
   running: boolean;
   elapsed_seconds: number;
   duration_seconds?: number | null;
+  remaining_seconds?: number | null;
 }
 
 export interface ClientTimerAction {
-  type: "start_timer" | "pause_timer" | "resume_timer" | "stop_timer";
+  type: "start_timer" | "pause_timer" | "resume_timer" | "stop_timer" | "get_timer_status";
   duration_seconds?: number | null;
   timer_exercise_id?: string | null;
   timer_set_number?: number | null;
@@ -181,6 +195,7 @@ export interface ClientTimerAction {
 export interface RealtimeCoachCallbacks {
   onStatus: (status: RealtimeCoachStatus) => void;
   onError: (message: string) => void;
+  getTimerState?: () => TimerState;
   onTimerAction: (action: ClientTimerAction) => void;
   onCommandHeard?: (event: RecognizedCoachCommand) => void;
   onUserTranscript?: (text: string) => void;
@@ -264,6 +279,14 @@ interface PendingTimerDurationChange {
   setNumber: number;
   prescribedSeconds: number;
   requestedSeconds: number;
+  startAfterConfirmation?: boolean;
+  restartAfterConfirmation?: boolean;
+}
+
+interface TtsDiagnosticEvent {
+  event_type: string;
+  provider_request_id: string | null;
+  details: Record<string, unknown>;
 }
 
 interface PendingIncompleteShotCompletion {
@@ -658,6 +681,7 @@ export class RealtimeCoachSession {
   private assemblyEchoGuardUntil = 0;
   private assemblyLastServerActivityAt = 0;
   private assemblyHeartbeatWatchdog: ReturnType<typeof setInterval> | null = null;
+  private inworldPlaybackStartWatchdog: ReturnType<typeof setTimeout> | null = null;
   private assemblyUsageReportingTimer: ReturnType<typeof setInterval> | null = null;
   private lastAssemblyCoachSpeech: string | null = null;
   private streamedCoachTranscript = "";
@@ -693,6 +717,11 @@ export class RealtimeCoachSession {
   private reportedTtsCharacters = 0;
   private providerUsageSequence = 0;
   private providerUsagePromise: Promise<void> | null = null;
+  private ttsDiagnosticEvents: TtsDiagnosticEvent[] = [];
+  private ttsDiagnosticFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private ttsDiagnosticFlushPromise: Promise<void> | null = null;
+  private pendingCartesiaUsage: ProviderUsageDelta | null = null;
+  private pendingAssemblyInworldUsage: ProviderUsageDelta | null = null;
   private shotUndoStack: ShotUndoEntry[] = [];
 
   getSessionKey(): string | null {
@@ -778,6 +807,8 @@ export class RealtimeCoachSession {
     this.reportedTtsCharacters = 0;
     this.providerUsageSequence = 0;
     this.providerUsagePromise = null;
+    this.pendingCartesiaUsage = null;
+    this.pendingAssemblyInworldUsage = null;
     this.shotUndoStack = [];
     this.assemblySpeechStartDeferred = false;
     this.assemblyEchoGuardUntil = 0;
@@ -1255,6 +1286,10 @@ export class RealtimeCoachSession {
       duplexAudio.addPlaybackStateListener((event) => {
         if (generation !== this.connectionGeneration) return;
         this.playbackActive = event.state === "playing";
+        if (event.state === "playing" && this.inworldPlaybackStartWatchdog) {
+          clearTimeout(this.inworldPlaybackStartWatchdog);
+          this.inworldPlaybackStartWatchdog = null;
+        }
         this.updateStatus();
         if (!this.playbackActive) {
           this.flushPendingContextRefresh();
@@ -1587,7 +1622,14 @@ export class RealtimeCoachSession {
           .catch((playbackError) => {
             if (!ownsActiveSpeech(identity)) return;
             console.error("Could not enqueue Inworld speech:", playbackError);
-            this.finishInworldWithError(generation, playbackError);
+            this.recoverInworldFirstAudio(
+              generation,
+              inworld,
+              identity,
+              playbackError instanceof Error
+                ? playbackError
+                : new Error("Native playback enqueue failed."),
+            );
           });
       },
       onFirstAudio: (identity) => {
@@ -1595,7 +1637,7 @@ export class RealtimeCoachSession {
         const speech = this.inworldSpeech;
         if (!speech) return;
         speech.firstAudioReceived = true;
-        this.playbackActive = true;
+        this.scheduleInworldPlaybackStartWatchdog(generation, inworld, identity);
         this.updateStatus();
       },
       onDone: (contextId) => {
@@ -1617,15 +1659,110 @@ export class RealtimeCoachSession {
       onError: (providerError, identity) => {
         if (!ownsActiveSpeech(identity)) return;
         console.error("Inworld TTS error:", providerError);
-        if (this.inworldSpeech?.firstAudioReceived) {
-          this.finishInworldWithError(generation, providerError);
-          return;
-        }
         this.recoverInworldFirstAudio(generation, inworld, identity, providerError);
       },
       onClose: () => undefined,
+      onLifecycle: (stage, identity, detail) => {
+        if (!ownsActiveSpeech(identity)) return;
+        const diagnostic = {
+          stage,
+          generation,
+          client_id: identity.clientId,
+          request_id: identity.requestId,
+          context_id: identity.contextId,
+          speech_epoch: this.speechEpoch,
+          ...detail,
+        };
+        console.info("Inworld TTS lifecycle", diagnostic);
+        this.recordInworldDiagnostic(
+          `inworld_tts_${stage}`,
+          identity.requestId,
+          diagnostic,
+        );
+      },
     });
     return inworld;
+  }
+
+  private scheduleInworldPlaybackStartWatchdog(
+    generation: number,
+    client: InworldTtsClient,
+    identity: InworldRequestIdentity,
+  ): void {
+    if (this.inworldPlaybackStartWatchdog) {
+      clearTimeout(this.inworldPlaybackStartWatchdog);
+    }
+    this.inworldPlaybackStartWatchdog = setTimeout(() => {
+      this.inworldPlaybackStartWatchdog = null;
+      if (
+        generation !== this.connectionGeneration ||
+        !this.active ||
+        this.playbackActive ||
+        this.inworldClient !== client ||
+        this.inworldContextId !== identity.contextId
+      ) {
+        return;
+      }
+      this.recoverInworldFirstAudio(
+        generation,
+        client,
+        identity,
+        new Error("Native playback did not start after Inworld returned PCM."),
+      );
+    }, 2_500);
+  }
+
+  private recordInworldDiagnostic(
+    eventType: string,
+    requestId: string | null,
+    details: Record<string, unknown>,
+  ): void {
+    this.ttsDiagnosticEvents.push({
+      event_type: eventType,
+      provider_request_id: requestId,
+      details,
+    });
+    if (this.ttsDiagnosticEvents.length > 200) this.ttsDiagnosticEvents.shift();
+    if (!this.ttsDiagnosticFlushTimer && !this.ttsDiagnosticFlushPromise) {
+      this.ttsDiagnosticFlushTimer = setTimeout(() => {
+        this.ttsDiagnosticFlushTimer = null;
+        void this.flushInworldDiagnostics();
+      }, 750);
+    }
+  }
+
+  private async flushInworldDiagnostics(): Promise<void> {
+    if (this.ttsDiagnosticFlushPromise || !this.dayId || !this.sessionKey) return;
+    const events = this.ttsDiagnosticEvents.splice(0, 50);
+    if (!events.length) return;
+    this.ttsDiagnosticFlushPromise = supabase.functions
+      .invoke("coach-tts-events", {
+        body: {
+          day_id: this.dayId,
+          session_key: this.sessionKey,
+          events,
+        },
+      })
+      .then(({ error }) => {
+        if (error) throw error;
+      })
+      .catch((error) => {
+        console.warn("Could not persist Inworld TTS diagnostics:", error);
+        this.ttsDiagnosticEvents.unshift(...events);
+        if (this.ttsDiagnosticEvents.length > 200) {
+          this.ttsDiagnosticEvents.length = 200;
+        }
+      })
+      .finally(() => {
+        this.ttsDiagnosticFlushPromise = null;
+        if (this.ttsDiagnosticEvents.length && !this.ttsDiagnosticFlushTimer) {
+          this.ttsDiagnosticFlushTimer = setTimeout(() => {
+            this.ttsDiagnosticFlushTimer = null;
+            void this.flushInworldDiagnostics();
+          }, 5_000);
+        }
+      });
+    await this.ttsDiagnosticFlushPromise;
   }
 
   private recoverInworldFirstAudio(
@@ -1709,6 +1846,10 @@ export class RealtimeCoachSession {
     const client = this.inworldClient;
     this.inworldContextId = null;
     this.inworldSpeech = null;
+    if (this.inworldPlaybackStartWatchdog) {
+      clearTimeout(this.inworldPlaybackStartWatchdog);
+      this.inworldPlaybackStartWatchdog = null;
+    }
     if (contextId) client?.cancel(contextId);
     client?.close();
     if (this.inworldClient === client) this.inworldClient = null;
@@ -1817,6 +1958,12 @@ export class RealtimeCoachSession {
 
   updateTimer(timer: TimerState): void {
     this.timer = timer;
+  }
+
+  private currentTimerSnapshot(): TimerState {
+    const snapshot = this.callbacks?.getTimerState?.() ?? this.timer;
+    this.timer = snapshot;
+    return snapshot;
   }
 
   /**
@@ -2101,6 +2248,9 @@ export class RealtimeCoachSession {
             timer_set_number: current.set_number,
           };
         }
+      }
+      if (timerAction.type === "get_timer_status") {
+        return { ...data, result: this.timerStatusReply() };
       }
       this.callbacks?.onTimerAction(timerAction);
     }
@@ -2559,17 +2709,17 @@ export class RealtimeCoachSession {
         const currentResult = current.set_results.find(
           (set) => set.set_number === currentSet.set_number
         );
-        if (!currentSet.completed) {
-          const timedReply = this.timedSetReply(
-            current,
-            currentSet.set_number,
-            currentResult
-          );
-          return timedReply
-            ? `Your next incomplete set is your current set. ${timedReply}`
-            : `Your next incomplete set is your current set, set ${
-                currentSet.set_number
-              } of ${current.name ?? "this drill"}.`;
+        // `current_set_state` can briefly lag the detailed set list after a
+        // local shot/progress update. The detailed record is authoritative for
+        // whether this active set is still unfinished, so never skip it based
+        // on a stale navigation completion flag.
+        const currentSetIncomplete = currentResult
+          ? !currentResult.completed
+          : !currentSet.completed;
+        if (currentSetIncomplete) {
+          return `Your next set is set ${currentSet.set_number} of ${
+            current.name ?? "this drill"
+          }.`;
         }
         const currentIndex = current.set_results.findIndex(
           (set) => set.set_number === currentSet.set_number
@@ -2728,19 +2878,42 @@ export class RealtimeCoachSession {
   private timerStatusReply(): string {
     const elapsed = Math.max(0, Math.round(this.timer.elapsed_seconds));
     const duration = this.timer.duration_seconds;
-    if (duration == null) {
+    const remaining = this.timer.remaining_seconds == null
+      ? duration == null ? null : Math.max(0, Math.round(duration - elapsed))
+      : Math.max(0, Math.round(this.timer.remaining_seconds));
+    const format = (seconds: number) =>
+      seconds < 60
+        ? `${seconds} second${seconds === 1 ? "" : "s"}`
+        : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+    if (remaining != null) {
       return this.timer.running
-        ? `The timer is running at ${elapsed} seconds.`
+        ? `The timer is running with ${format(remaining)} left.`
         : elapsed > 0
-          ? `The timer is paused at ${elapsed} seconds.`
-          : "The timer is stopped.";
+          ? `The timer is paused with ${format(remaining)} left.`
+          : this.noTimerReply();
     }
-    const remaining = Math.max(0, Math.round(duration - elapsed));
     return this.timer.running
-      ? `${remaining} second${remaining === 1 ? "" : "s"} left.`
+      ? `The timer is running at ${format(elapsed)}.`
       : elapsed > 0
-        ? `The timer is paused with ${remaining} second${remaining === 1 ? "" : "s"} left.`
-        : "The timer is stopped.";
+        ? `The timer is paused at ${format(elapsed)}.`
+        : this.noTimerReply();
+  }
+
+  private hasTimer(): boolean {
+    return this.timer.running ||
+      this.timer.elapsed_seconds > 0 ||
+      this.timer.duration_seconds != null;
+  }
+
+  private noTimerReply(): string {
+    const drill = this.currentDrill();
+    const timed = drill != null && (
+      ["ball_handling", "defense", "conditioning"].includes(drill.category ?? "") ||
+      (drill.target.minutes ?? 0) > 0
+    );
+    return timed
+      ? "No timer is running right now."
+      : "No timer is running right now, and you're not on a timed drill.";
   }
 
   private timerStartedReply(durationSeconds: number): string {
@@ -2797,6 +2970,25 @@ export class RealtimeCoachSession {
       const pending = this.pendingTimerDurationChange;
       this.pendingTimerDurationChange = null;
       if (!pending) return null;
+      if (pending.startAfterConfirmation) {
+        if (!command.args.accepted) {
+          return pending.restartAfterConfirmation
+            ? "Okay, I'll leave the current timer running."
+            : "Okay, I won't start the timer.";
+        }
+        this.callbacks?.onTimerAction({
+          type: "start_timer",
+          duration_seconds: pending.requestedSeconds,
+          timer_exercise_id: pending.exerciseId,
+          timer_set_number: pending.setNumber,
+        });
+        return pending.restartAfterConfirmation
+          ? this.timerStartedReply(pending.requestedSeconds).replace(
+            "has been started",
+            "has been restarted",
+          )
+          : this.timerStartedReply(pending.requestedSeconds);
+      }
       const durationSeconds = command.args.accepted
         ? pending.requestedSeconds
         : pending.prescribedSeconds;
@@ -2897,14 +3089,34 @@ export class RealtimeCoachSession {
       const current = this.currentSetState();
       const currentDrill = this.currentDrill();
       const action = command.args.action;
+      const isTimedSet = Boolean(
+        current &&
+          currentDrill &&
+          (
+            (current.target.minutes ?? currentDrill.target.minutes ?? 0) > 0 ||
+            ["ball_handling", "defense", "conditioning"].includes(
+              currentDrill.category ?? ""
+            )
+          )
+      );
+      // Recognized timer-status questions bypass the model for an immediate,
+      // exact reply from the same live local timer used by the UI. The
+      // get_timer_status tool remains available for questions that reach
+      // Coach's model through another route.
       if (action === "status") return this.timerStatusReply();
       if (action === "pause") {
         const wasRunning = this.timer.running;
+        if (!wasRunning && !this.hasTimer()) {
+          return `You can't pause the timer because ${this.noTimerReply().toLowerCase()}`;
+        }
         if (wasRunning) this.callbacks?.onTimerAction({ type: "pause_timer" });
         return wasRunning ? "Timer paused." : "The timer is already paused.";
       }
       if (action === "resume") {
         const canResume = !this.timer.running && this.timer.elapsed_seconds > 0;
+        if (!canResume && !this.hasTimer()) {
+          return `You can't resume the timer because ${this.noTimerReply().toLowerCase()}`;
+        }
         if (canResume) this.callbacks?.onTimerAction({ type: "resume_timer" });
         return canResume ? "Timer resumed." : "There isn't a paused timer.";
       }
@@ -2932,16 +3144,9 @@ export class RealtimeCoachSession {
           : "Timer restarted.";
       }
       if (command.args.durationSeconds) {
-        const isTimedSet = Boolean(
-          current &&
-            currentDrill &&
-            (
-              (current.target.minutes ?? currentDrill.target.minutes ?? 0) > 0 ||
-              ["ball_handling", "defense", "conditioning"].includes(
-                currentDrill.category ?? ""
-              )
-            )
-        );
+        if (!isTimedSet) {
+          return "That set does not use timed sets, so I won't start a timer.";
+        }
         const prescribedSeconds =
           current?.target.minutes != null && current.target.minutes > 0
             ? Math.round(current.target.minutes * 60)
@@ -2981,6 +3186,9 @@ export class RealtimeCoachSession {
         });
         return this.timerStartedReply(command.args.durationSeconds);
       }
+      if (!isTimedSet) {
+        return "That set does not use timed sets, so I won't start a timer.";
+      }
       const setMinutes = current?.target.minutes ?? currentDrill?.target.minutes;
       const setDurationSeconds =
         setMinutes && setMinutes > 0
@@ -3010,15 +3218,27 @@ export class RealtimeCoachSession {
         return "I couldn't find that set in the current drill.";
       }
       if (command.args.durationSeconds != null) {
-        return (
-          await this.invokeCoachTool("set_timed_set_duration", {
+        const result = await this.invokeCoachTool("set_timed_set_duration", {
             exercise_id: current.exercise_id,
             drill_name: current.name,
             set_number: setNumber,
             duration_seconds: command.args.durationSeconds,
             ...requestArgs,
-          })
-        ).result;
+          });
+        if (result.result.startsWith("Error:")) return result.result;
+        const restart = this.timer.running;
+        this.pendingTimerDurationChange = {
+          exerciseId: current.exercise_id,
+          drillName: current.name,
+          setNumber,
+          prescribedSeconds: command.args.durationSeconds,
+          requestedSeconds: command.args.durationSeconds,
+          startAfterConfirmation: true,
+          restartAfterConfirmation: restart,
+        };
+        return `${result.result} Would you like me to ${
+          restart ? "restart" : "start"
+        } the timer?`;
       }
       await this.flushPendingShotSets();
       return (
@@ -3220,17 +3440,6 @@ export class RealtimeCoachSession {
         })
       ).result;
     }
-    if (command.kind === "adjust_workout") {
-      return (
-        await this.invokeCoachTool(
-          command.args.action === "extend" ? "extend_workout" : "shorten_workout",
-          {
-            minutes: command.args.durationSeconds / 60,
-            ...requestArgs,
-          }
-        )
-      ).result;
-    }
     return null;
   }
 
@@ -3316,35 +3525,31 @@ export class RealtimeCoachSession {
     // Always show the athlete's actual words, including when the local router
     // consumes the command before it reaches Haiku.
     this.callbacks?.onUserTranscript?.(transcript);
-    const normalizedReply = transcript
-      .toLowerCase()
-      .replace(/[^\w\s']/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
+    const normalizedReply = normalizeCoachSpeech(transcript);
+    const acceptedConfirmation =
+      /^(?:(?:i )?(?:say|said)\s+)?(?:yes|yeah|yep|sure|ok|okay|sounds good|do it|use it|change it|change the time|please do|start it|restart it)$/
+        .test(normalizedReply);
+    const declinedConfirmation =
+      /^(?:(?:i )?(?:say|said)\s+)?(?:no|nope|dont|do not|keep it|leave it|keep the time|keep the original)$/
+        .test(normalizedReply);
     const acceptedDurationChange =
-      /^(?:yes|yeah|yep|sure|ok|okay|sounds good|do it|use it|change it|change the time|please do)$/.test(
-        normalizedReply
-      )
-        ? true
-        : /^(?:no|nope|don't|do not|keep it|leave it|keep the time|keep the original)$/.test(
-              normalizedReply
-            )
-          ? false
-          : null;
+      acceptedConfirmation ? true : declinedConfirmation ? false : null;
     const incompleteShotCompletionChoice =
-      /^(?:yes|yeah|yep|sure|ok|okay|mark(?: it)? complete|mark(?: it)? as complete|complete(?: it)?|finish(?: it)?|mark(?: it)? done)$/.test(
+      (acceptedConfirmation ||
+        /^(?:mark(?: it)? complete|mark(?: it)? as complete|complete(?: it)?|finish(?: it)?|mark(?: it)? done)$/.test(
         normalizedReply
-      )
+      ))
         ? true
-        : /^(?:no|nope|start|start it|lets start|let's start|begin)$/.test(
+        : /^(?:no|nope|start|start it|lets start|begin)$/.test(
               normalizedReply
             )
           ? false
           : null;
     const incompleteSetContinuationChoice =
-      /^(?:yes|yeah|yep|sure|ok|okay|continue|move on|go ahead|do it)$/.test(
+      (acceptedConfirmation ||
+        /^(?:continue|move on|go ahead)$/.test(
         normalizedReply
-      )
+      ))
         ? true
         : /^(?:no|nope|dont|do not|stay|stay here|keep me here)$/.test(
               normalizedReply
@@ -3352,7 +3557,15 @@ export class RealtimeCoachSession {
           ? false
           : null;
     const command: CoachSpeechIntent | null =
-      this.pendingTimerDurationChange && acceptedDurationChange != null
+      isLikelyTimerStatusQuestion(transcript)
+        ? {
+          kind: "timer",
+          args: { action: "status" },
+          confidence: 1,
+          heardLabel: "Live timer status heard",
+          safeToDelete: true,
+        }
+        : this.pendingTimerDurationChange && acceptedDurationChange != null
         ? {
             kind: "timer_duration_confirmation",
             args: { accepted: acceptedDurationChange },
@@ -3565,6 +3778,7 @@ export class RealtimeCoachSession {
       const sessionKey = this.sessionKey;
       const dayId = this.dayId;
       callbacks?.onStatus("disconnecting");
+      await this.flushInworldDiagnostics().catch(() => undefined);
       ++this.connectionGeneration;
       this.active = false;
       this.connecting = false;
@@ -3827,6 +4041,7 @@ export class RealtimeCoachSession {
       generation !== this.connectionGeneration ||
       !this.active ||
       !isSafeSpeculativeTranscript(transcript) ||
+      isLikelyTimerStatusQuestion(transcript) ||
       parseCoachSpeechIntent(transcript)
     ) {
       return;
@@ -4064,6 +4279,12 @@ export class RealtimeCoachSession {
     }
     if (event.type === "tool_result") {
       const action = event.client_action as ClientTimerAction | null;
+      if (action?.type === "get_timer_status") {
+        const reply = this.timerStatusReply();
+        this.lastDeterministicReply = reply;
+        this.callbacks?.onCoachTranscript?.(reply);
+        void this.speakDeterministic(reply, event.turn_id, speechEpoch);
+      }
       if (action && ["start_timer", "pause_timer", "resume_timer", "stop_timer"].includes(action.type)) {
         this.callbacks?.onTimerAction(action);
       }
@@ -4388,6 +4609,12 @@ export class RealtimeCoachSession {
     if (event.type === "tool_result") {
       if (event.client_action && typeof event.client_action === "object") {
         let action = event.client_action as ClientTimerAction;
+        if (action.type === "get_timer_status") {
+          const reply = this.timerStatusReply();
+          this.lastDeterministicReply = reply;
+          this.callbacks?.onCoachTranscript?.(reply);
+          void this.speakDeterministic(reply, event.turn_id, speechEpoch);
+        }
         if (
           action.type === "start_timer" &&
           (!action.timer_exercise_id || !action.timer_set_number)
@@ -4586,19 +4813,24 @@ export class RealtimeCoachSession {
 
   private async reportCartesiaUsage(force: boolean): Promise<void> {
     if (this.providerUsagePromise) {
-      if (force) await this.providerUsagePromise;
-      else return;
+      if (!force) return;
+      await this.providerUsagePromise;
     }
     const dayId = this.dayId;
     const sessionKey = this.sessionKey;
     if (!this.cartesiaActive || !dayId || !sessionKey) return;
-    const sttDelta = Math.max(0, this.cartesiaSttSeconds - this.reportedSttSeconds);
-    const ttsDelta = Math.max(0, this.cartesiaTtsCharacters - this.reportedTtsCharacters);
-    if (!force && sttDelta < 15 && ttsDelta < 300) return;
-    if (sttDelta <= 0 && ttsDelta <= 0) return;
-    const sentStt = Math.round(sttDelta * 1000) / 1000;
-    const sentTts = Math.round(ttsDelta);
-    const requestId = `cartesia-usage-${++this.providerUsageSequence}-${Date.now()}`;
+    let usage = this.pendingCartesiaUsage;
+    if (!usage) {
+      const sttDelta = Math.max(0, this.cartesiaSttSeconds - this.reportedSttSeconds);
+      const ttsDelta = Math.max(0, this.cartesiaTtsCharacters - this.reportedTtsCharacters);
+      if (!force && sttDelta < 15 && ttsDelta < 300) return;
+      if (sttDelta <= 0 && ttsDelta <= 0) return;
+      usage = createProviderUsageDelta("cartesia", ++this.providerUsageSequence, {
+        sttSeconds: Math.round(sttDelta * 1000) / 1000,
+        ttsCharacters: Math.round(ttsDelta),
+      });
+      this.pendingCartesiaUsage = usage;
+    }
     this.providerUsagePromise = (async () => {
       const { data, error } = await supabase.functions.invoke<{
         daily_usage?: {
@@ -4611,15 +4843,16 @@ export class RealtimeCoachSession {
         body: {
           day_id: dayId,
           session_key: sessionKey,
-          request_id: requestId,
-          stt_audio_seconds: sentStt,
-          tts_characters: sentTts,
+          request_id: usage.requestId,
+          stt_audio_seconds: usage.sttSeconds ?? 0,
+          tts_characters: usage.ttsCharacters ?? 0,
         },
       });
       if (error) throw new Error(await edgeFunctionErrorMessage(error));
       if (data?.error) throw new Error(data.error);
-      this.reportedSttSeconds += sentStt;
-      this.reportedTtsCharacters += sentTts;
+      this.reportedSttSeconds += usage.sttSeconds ?? 0;
+      this.reportedTtsCharacters += usage.ttsCharacters ?? 0;
+      this.pendingCartesiaUsage = null;
       if (data?.daily_usage) {
         this.dailySpentBaseline = data.daily_usage.spent_usd;
         this.dailyBudgetUsd = data.daily_usage.budget_usd;
@@ -4643,49 +4876,74 @@ export class RealtimeCoachSession {
   }
 
   private async reportAssemblyInworldUsage(force: boolean): Promise<void> {
+    // Timer ticks, model-turn completion, and disconnect can overlap. Only
+    // one frozen delta may be in flight so they cannot all charge the same
+    // elapsed provider time.
+    if (this.providerUsagePromise) {
+      if (!force) return;
+      await this.providerUsagePromise;
+    }
     const dayId = this.dayId;
     const sessionKey = this.sessionKey;
     if (!this.assemblyInworldActive || !dayId || !sessionKey || !this.assemblySessionStartedAt) return;
-    const sessionSeconds = Math.max(
-      0,
-      (Date.now() - this.assemblySessionStartedAt) / 1000 -
-        this.reportedAssemblySessionSeconds,
-    );
-    const ttsCharacters = Math.max(
-      0,
-      this.inworldTtsCharacters - this.reportedInworldTtsCharacters,
-    );
-    if (!force && sessionSeconds < 15 && ttsCharacters < 300) return;
-    if (sessionSeconds <= 0 && ttsCharacters <= 0) return;
-    const sentSessionSeconds = Math.round(sessionSeconds * 1000) / 1000;
-    const sentTtsCharacters = Math.round(ttsCharacters);
-    const requestId = `assembly-inworld-usage-${++this.providerUsageSequence}-${Date.now()}`;
-    const { data, error } = await supabase.functions.invoke<{
-      daily_usage?: { spent_usd: number; budget_usd: number; remaining_usd: number };
-      error?: string;
-    }>("coach-provider-usage", {
-      body: {
-        day_id: dayId,
-        session_key: sessionKey,
-        request_id: requestId,
-        provider: "assembly_inworld",
-        assembly_session_seconds: sentSessionSeconds,
-        inworld_tts_characters: sentTtsCharacters,
-      },
-    });
-    if (error) throw new Error(await edgeFunctionErrorMessage(error));
-    if (data?.error) throw new Error(data.error);
-    this.reportedAssemblySessionSeconds += sentSessionSeconds;
-    this.reportedInworldTtsCharacters += sentTtsCharacters;
-    if (data?.daily_usage) {
-      this.dailySpentBaseline = data.daily_usage.spent_usd;
-      this.dailyBudgetUsd = data.daily_usage.budget_usd;
-      this.callbacks?.onBudgetUpdate?.(data.daily_usage.spent_usd, data.daily_usage.budget_usd);
-      if (data.daily_usage.remaining_usd <= 0 && this.active) {
-        this.callbacks?.onError(COACH_LIMIT_MESSAGES.dailyBudgetExhausted);
-        void this.disconnect("daily_budget");
-      }
+    let usage = this.pendingAssemblyInworldUsage;
+    if (!usage) {
+      const sessionSeconds = Math.max(
+        0,
+        (Date.now() - this.assemblySessionStartedAt) / 1000 -
+          this.reportedAssemblySessionSeconds,
+      );
+      const ttsCharacters = Math.max(
+        0,
+        this.inworldTtsCharacters - this.reportedInworldTtsCharacters,
+      );
+      if (!force && sessionSeconds < 15 && ttsCharacters < 300) return;
+      if (sessionSeconds <= 0 && ttsCharacters <= 0) return;
+      usage = createProviderUsageDelta("assembly-inworld", ++this.providerUsageSequence, {
+        assemblySessionSeconds: Math.round(sessionSeconds * 1000) / 1000,
+        inworldTtsCharacters: Math.round(ttsCharacters),
+      });
+      this.pendingAssemblyInworldUsage = usage;
     }
+    this.providerUsagePromise = (async () => {
+      const { data, error } = await supabase.functions.invoke<{
+        daily_usage?: { spent_usd: number; budget_usd: number; remaining_usd: number };
+        error?: string;
+      }>("coach-provider-usage", {
+        body: {
+          day_id: dayId,
+          session_key: sessionKey,
+          request_id: usage.requestId,
+          provider: "assembly_inworld",
+          assembly_session_seconds: usage.assemblySessionSeconds ?? 0,
+          inworld_tts_characters: usage.inworldTtsCharacters ?? 0,
+        },
+      });
+      if (error) throw new Error(await edgeFunctionErrorMessage(error));
+      if (data?.error) throw new Error(data.error);
+      this.reportedAssemblySessionSeconds += usage.assemblySessionSeconds ?? 0;
+      this.reportedInworldTtsCharacters += usage.inworldTtsCharacters ?? 0;
+      this.pendingAssemblyInworldUsage = null;
+      if (data?.daily_usage) {
+        this.dailySpentBaseline = data.daily_usage.spent_usd;
+        this.dailyBudgetUsd = data.daily_usage.budget_usd;
+        this.callbacks?.onBudgetUpdate?.(data.daily_usage.spent_usd, data.daily_usage.budget_usd);
+        if (data.daily_usage.remaining_usd <= 0 && this.active) {
+          this.callbacks?.onError(COACH_LIMIT_MESSAGES.dailyBudgetExhausted);
+          void this.disconnect("daily_budget");
+        }
+      }
+    })()
+      .catch((error) => {
+        // Retain the frozen delta and its request ID. A later timer tick or
+        // forced disconnect retry is safe even if the server committed before
+        // the original response was lost.
+        console.warn("Failed to persist AssemblyAI/Inworld usage:", error);
+      })
+      .finally(() => {
+        this.providerUsagePromise = null;
+      });
+    await this.providerUsagePromise;
   }
 
   private async speakDeterministic(
@@ -5167,6 +5425,38 @@ export class RealtimeCoachSession {
           kind = "read_only";
           output = bufferedProgress;
           summary = bufferedProgress;
+        } else if (call.name === "get_timer_status") {
+          kind = "read_only";
+          output = this.timerStatusReply();
+          summary = output;
+        } else if (call.name === "pause_timer" || call.name === "resume_timer") {
+          const timer = this.currentTimerSnapshot();
+          const hasTimer = timer.running ||
+            timer.elapsed_seconds > 0 ||
+            timer.duration_seconds != null;
+          const canPause = call.name === "pause_timer" && timer.running;
+          const canResume = call.name === "resume_timer" && !timer.running &&
+            timer.elapsed_seconds > 0;
+          if (!hasTimer) {
+            kind = "read_only";
+            output = call.name === "pause_timer"
+              ? "You can't pause the timer because no timer is running."
+              : "You can't resume the timer because no timer is running.";
+            summary = output;
+          } else if (!canPause && !canResume) {
+            kind = "read_only";
+            output = call.name === "pause_timer"
+              ? "The timer is already paused."
+              : "The timer is already running.";
+            summary = output;
+          } else {
+            const data = await this.invokeCoachTool(call.name, args);
+            kind = data.tool_kind === "read_only" ? "read_only" : "mutation";
+            output = data.updated_context
+              ? `${data.result}\n\nAuthoritative workout state after this call: ${data.updated_context}`
+              : data.result;
+            summary = data.result;
+          }
         } else {
           if (FLUSH_BEFORE_TOOLS.has(call.name)) {
             await this.flushPendingShotSets();

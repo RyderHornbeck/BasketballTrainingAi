@@ -17,6 +17,7 @@ export interface CoachAgentSessionRequest {
     running: boolean;
     elapsed_seconds: number;
     duration_seconds?: number | null;
+    remaining_seconds?: number | null;
     started_at?: string | null;
   };
 }
@@ -89,6 +90,15 @@ export function validateCoachAgentSessionRequest(
         )
       ) ||
       (
+        rawTimer.remaining_seconds != null &&
+        (
+          typeof rawTimer.remaining_seconds !== "number" ||
+          !Number.isFinite(rawTimer.remaining_seconds) ||
+          rawTimer.remaining_seconds < 0 ||
+          rawTimer.remaining_seconds > 86_400
+        )
+      ) ||
+      (
         rawTimer.started_at != null &&
         (
           typeof rawTimer.started_at !== "string" ||
@@ -104,6 +114,10 @@ export function validateCoachAgentSessionRequest(
       duration_seconds:
         typeof rawTimer.duration_seconds === "number"
           ? Math.floor(rawTimer.duration_seconds)
+          : null,
+      remaining_seconds:
+        typeof rawTimer.remaining_seconds === "number"
+          ? Math.floor(rawTimer.remaining_seconds)
           : null,
       started_at: rawTimer.started_at as string | null | undefined,
     };

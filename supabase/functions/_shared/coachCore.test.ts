@@ -662,6 +662,26 @@ Deno.test("timer without minutes uses the active timed set duration", async () =
   );
 });
 
+Deno.test("shooting sets cannot start timers", async () => {
+  const ctx = contextWithPartialShootingSet();
+  ctx.day.active_exercise_id = "shoot";
+
+  const outcome = await executeCoachTool(
+    successfulSupabaseMock(),
+    "user",
+    "day",
+    ctx,
+    "start_timer",
+    { minutes: 2 },
+  );
+
+  assert(
+    outcome.clientAction == null &&
+      outcome.result === "That set does not use timed sets, so I won't start a timer.",
+    "shooting sets must reject timer starts even when a duration is requested",
+  );
+});
+
 Deno.test("second-based timer requests stay in seconds", async () => {
   const ctx = contextWithPartialShootingSet();
   const timedExercise = ctx.exercises.find((exercise) =>
@@ -913,7 +933,7 @@ Deno.test("workout kickoff asks Haiku to report the current drill without tools"
   );
 });
 
-Deno.test("timed drills offer their saved timer but shooting and finishing do not", () => {
+Deno.test("timed drills require the live-status tool for direct timer questions", () => {
   assert(
     COACH_SYSTEM_PROMPT.includes(
       'ask: "Would you like me to start the [X]-minute set timer?"',
@@ -921,10 +941,20 @@ Deno.test("timed drills offer their saved timer but shooting and finishing do no
       COACH_SYSTEM_PROMPT.includes(
         "Never ask or offer timers for shooting/finishing",
       ) &&
-      COACH_SYSTEM_PROMPT.includes(
-        "never say a timer is running, almost done, paused",
-      ),
-    "timer offers must apply only to eligible timed drills",
+      COACH_SYSTEM_PROMPT.includes("ALWAYS call get_timer_status"),
+    "timer offers and direct status questions must use the live-status tool",
+  );
+});
+
+Deno.test("model context never includes live timer state", () => {
+  const ctx = contextWithPartialShootingSet();
+  const noTimer = JSON.parse(buildRealtimeModelContext(ctx, null, {
+    running: false,
+    elapsed_seconds: 0,
+  }));
+  assert(
+    !("timer_status" in noTimer) && !("timer" in noTimer),
+    "live timer state must be retrieved only through get_timer_status",
   );
 });
 
@@ -1024,6 +1054,7 @@ Deno.test("coach turn prompt separates cached policy from bounded dynamic state"
     { main_goal: "Improve shooting" },
     `User: ${"x".repeat(1_500)}`,
     "Coach Maya",
+    undefined,
     true,
   );
   const parsed = JSON.parse(dynamic.slice(dynamic.indexOf("{")));
@@ -1049,6 +1080,7 @@ Deno.test("coach turn prompt separates cached policy from bounded dynamic state"
     null,
     null,
     "Coach Maya",
+    undefined,
     false,
     false,
   );

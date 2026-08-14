@@ -11,6 +11,7 @@ import {
   buildAnthropicConversationMessages,
   buildAnthropicSystemBlocks,
   buildAnthropicTools,
+  coachToolFailureSpeech,
   coachToolPreamble,
   consumeAnthropicSse,
   createAbortTimeout,
@@ -20,6 +21,7 @@ import {
   sanitizeCoachConversationSummary,
   selectCoachResponseModel,
   successfulCoachToolConfirmation,
+  usesOptimisticToolPreamble,
   shouldForceCoachTool,
   validateCoachTurnRequest,
 } from "../_shared/coachResponse.ts";
@@ -54,6 +56,35 @@ async function sha256(value: unknown): Promise<string> {
   return [...new Uint8Array(digest)]
     .map((part) => part.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function guardTimerControl(
+  toolName: string,
+  timer: { running: boolean; elapsed_seconds: number; duration_seconds?: number | null } | undefined,
+) {
+  if ((toolName !== "pause_timer" && toolName !== "resume_timer") || !timer) {
+    return null;
+  }
+  const hasTimer = timer.running || timer.elapsed_seconds > 0 ||
+    timer.duration_seconds != null;
+  const result = !hasTimer
+    ? toolName === "pause_timer"
+      ? "You can't pause the timer because no timer is running."
+      : "You can't resume the timer because no timer is running."
+    : toolName === "pause_timer" && !timer.running
+    ? "The timer is already paused."
+    : toolName === "resume_timer" && timer.running
+    ? "The timer is already running."
+    : null;
+  return result == null
+    ? null
+    : {
+      result,
+      db_changed: false,
+      client_action: null,
+      continuation: "speak_exact",
+      say: result,
+    };
 }
 
 Deno.serve(async (req: Request) => {
@@ -187,6 +218,7 @@ Deno.serve(async (req: Request) => {
     { ...(answers ?? {}), preferred_name: profile?.preferred_name ?? null },
     undefined,
     coachName,
+    undefined,
     speculativeReadOnly,
     !confidentlyToolFree,
   );
@@ -426,61 +458,82 @@ Deno.serve(async (req: Request) => {
           }
           const validated = validateCoachToolArguments(call.name, toolArgs);
           if (!validated.ok) throw new Error(validated.error);
-          const preamble = coachToolPreamble(call.name, validated.value);
-          if (preamble && !announcedPreambles.has(preamble)) {
-            announcedPreambles.add(preamble);
-            emittedSpeech = true;
-            outputCharacters += preamble.length;
-            await send({
-              type: "text_delta",
-              turn_id: turn.turnId,
-              state_version: nextStateVersion,
-              delta: `${preamble} `,
-            });
-          }
           assistantToolUses.push({
             type: "tool_use",
             id: call.callId,
             name: call.name,
             input: validated.value,
           });
-          const clientRequestId = `${turn.turnId}:${
-            call.callId || crypto.randomUUID()
-          }`.slice(0, 200);
-          const toolResponse = await fetch(
-            `${SUPABASE_URL}/functions/v1/coach-tools`,
-            {
-              method: "POST",
-              signal: req.signal,
-              headers: {
-                Authorization: authHeader,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                day_id: turn.dayId,
-                session_key: turn.sessionKey,
-                tool_name: call.name,
-                arguments: {
-                  ...validated.value,
-                  client_request_id: clientRequestId,
+          let toolResult = guardTimerControl(call.name, turn.timer);
+          let optimisticPreambleSpoken = false;
+          if (!toolResult) {
+            const preamble = coachToolPreamble(call.name, validated.value);
+            if (preamble && !announcedPreambles.has(preamble)) {
+              announcedPreambles.add(preamble);
+              optimisticPreambleSpoken = usesOptimisticToolPreamble(call.name);
+              emittedSpeech = true;
+              outputCharacters += preamble.length;
+              await send({
+                type: "text_delta",
+                turn_id: turn.turnId,
+                state_version: nextStateVersion,
+                delta: `${preamble} `,
+              });
+            }
+            const clientRequestId = `${turn.turnId}:${
+              call.callId || crypto.randomUUID()
+            }`.slice(0, 200);
+            try {
+              const toolResponse = await fetch(
+                `${SUPABASE_URL}/functions/v1/coach-tools`,
+                {
+                  method: "POST",
+                  signal: req.signal,
+                  headers: {
+                    Authorization: authHeader,
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    day_id: turn.dayId,
+                    session_key: turn.sessionKey,
+                    tool_name: call.name,
+                    arguments: {
+                      ...validated.value,
+                      client_request_id: clientRequestId,
+                    },
+                    refresh_context: true,
+                  }),
                 },
-                refresh_context: true,
-              }),
-            },
-          );
-          const toolResult = await toolResponse.json().catch(() => ({}));
-          if (!toolResponse.ok) {
-            throw new Error(
-              typeof toolResult?.error === "string"
-                ? toolResult.error
-                : "Coach tool failed.",
-            );
+              );
+              toolResult = await toolResponse.json().catch(() => ({}));
+              if (!toolResponse.ok) {
+                toolResult = {
+                  result: coachToolFailureSpeech(call.name),
+                  db_changed: false,
+                  client_action: null,
+                  continuation: "speak_exact",
+                  say: coachToolFailureSpeech(call.name),
+                };
+              }
+            } catch (error) {
+              if (req.signal.aborted) throw error;
+              toolResult = {
+                result: coachToolFailureSpeech(call.name),
+                db_changed: false,
+                client_action: null,
+                continuation: "speak_exact",
+                say: coachToolFailureSpeech(call.name),
+              };
+            }
           }
           mutationApplied = mutationApplied ||
             Boolean(toolResult.db_changed || toolResult.client_action);
-          if (toolResult.db_changed || toolResult.client_action) {
+          const toolApplied = Boolean(
+            toolResult.db_changed || toolResult.client_action,
+          );
+          if (toolApplied) {
             const confirmation = successfulCoachToolConfirmation(toolResult);
-            if (confirmation) {
+            if (confirmation && !optimisticPreambleSpoken) {
               lastSuccessfulToolConfirmation = confirmation;
               lastSuccessfulToolName = call.name;
             }
@@ -492,7 +545,27 @@ Deno.serve(async (req: Request) => {
             });
           }
           const continuation = resolveCoachToolContinuation(toolResult);
-          if (continuation.type === "none") {
+          if (optimisticPreambleSpoken && toolApplied) {
+            // The action is already being spoken while this request runs.
+            // Suppress a redundant model/result confirmation after success.
+            modelResponseSkipped = true;
+          } else if (
+            optimisticPreambleSpoken &&
+            continuation.type === "model" &&
+            typeof toolResult.result === "string"
+          ) {
+            // The mutation was rejected without a transport error (for
+            // example, a timer requested for a shooting set). State its
+            // authoritative reason directly instead of asking the model to
+            // narrate a second, potentially stale response.
+            const speech = assessCoachSpeech(toolResult.result);
+            if (speech.ok) {
+              exactSpeech.add(speech.text);
+              modelResponseSkipped = true;
+            } else {
+              continueWithModel = true;
+            }
+          } else if (continuation.type === "none") {
             modelResponseSkipped = true;
           } else if (continuation.type === "speak_exact") {
             exactSpeech.add(continuation.speech);

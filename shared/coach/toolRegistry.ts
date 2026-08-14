@@ -269,6 +269,16 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
     }),
   }),
   tool({
+    name: "get_timer_status",
+    description:
+      "Get the exact live timer status from the athlete's device when they ask about time left, current timer time, or whether it is running or paused.",
+    capability: "timers",
+    execution: "server",
+    kind: "read_only",
+    realtime: true,
+    exactSpeech: true,
+  }),
+  tool({
     name: "pause_timer",
     description: "Pause the timer.",
     capability: "timers",
@@ -374,32 +384,6 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
       ...drillReference,
       confirmation_token: { type: "string", maxLength: 240 },
     }),
-  }),
-  tool({
-    name: "extend_workout",
-    description: "Add minutes to the workout.",
-    capability: "edits",
-    execution: "server",
-    kind: "mutation",
-    realtime: true,
-    exactSpeech: true,
-    parameters: args(
-      { minutes: { type: "number", exclusiveMinimum: 0, maximum: 180 } },
-      ["minutes"]
-    ),
-  }),
-  tool({
-    name: "shorten_workout",
-    description: "Remove minutes while preserving the five-minute floor.",
-    capability: "edits",
-    execution: "server",
-    kind: "mutation",
-    realtime: true,
-    exactSpeech: true,
-    parameters: args(
-      { minutes: { type: "number", exclusiveMinimum: 0, maximum: 180 } },
-      ["minutes"]
-    ),
   }),
   tool({
     name: "save_note",

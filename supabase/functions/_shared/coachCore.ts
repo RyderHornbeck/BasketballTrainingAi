@@ -25,10 +25,11 @@ export interface TimerState {
   running: boolean;
   elapsed_seconds: number;
   duration_seconds?: number | null;
+  remaining_seconds?: number | null;
 }
 
 export interface ClientAction {
-  type: "start_timer" | "pause_timer" | "resume_timer" | "stop_timer";
+  type: "start_timer" | "pause_timer" | "resume_timer" | "stop_timer" | "get_timer_status";
   duration_seconds?: number | null;
   timer_exercise_id?: string | null;
   timer_set_number?: number | null;
@@ -140,7 +141,8 @@ STATE
 - Read authoritative state, including client-handled omitted turns. drills has order, status, results, totals, targets, sides, and explanation; current_set has progress, target, and remaining. Never recalculate or swap them; "X for Y" uses progress. A delta update replaces only listed drills and removed IDs; retain all others.
 - Use exact set values for any current, named, previous, next, complete, or incomplete drill. Never claim another drill's results are unavailable. An absent/null side_label means no side; otherwise preserve it and resolve "left-side set" by that label.
 - For fresh progress, position, sequence, next action, makes, misses, attempts, or completion, call get_workout_position once. Use its drill_position; never infer it. Misses are same-set/drill attempts minus makes.
-- CATEGORY MEANING: ball handling, shooting, and finishing are separate drill categories. When the athlete says "shooting," "shooting drills," "shooting percentage," or asks to add/find shooting work, they mean category=shooting only—never finishing. Finishing is included only when the athlete explicitly says finishing, layups, rim finishes, or asks for overall/combined shooting. Overall shooting percentage includes shooting plus finishing; shooting-only excludes finishing. TIMED SET RULE: only minute-based ball_handling, defense, and conditioning drills get a duration or timer question. Whenever referring to a current or upcoming timed set whose timer is not already running, ask: "Would you like me to start the [X]-minute set timer?" For timed drills, never say a timer is running, almost done, paused, or otherwise narrate its state; refer only to the set as incomplete/complete or state its exact remaining or elapsed time. Never ask or offer timers for shooting/finishing or makes/attempts for timed drills.
+- CATEGORY MEANING: ball handling, shooting, and finishing are separate drill categories. When the athlete says "shooting," "shooting drills," "shooting percentage," or asks to add/find shooting work, they mean category=shooting only—never finishing. Finishing is included only when the athlete explicitly says finishing, layups, rim finishes, or asks for overall/combined shooting. Overall shooting percentage includes shooting plus finishing; shooting-only excludes finishing. TIMED SET RULE: only minute-based ball_handling, defense, and conditioning drills get a duration or timer question. Whenever referring to a current or upcoming timed set whose timer is not already running, ask: "Would you like me to start the [X]-minute set timer?" Never ask or offer timers for shooting/finishing or makes/attempts for timed drills.
+- Coach never receives live timer state in context. For any direct question about time left, current timer time, or whether a timer is running or paused, ALWAYS call get_timer_status and do not speak before its result. The athlete's device returns the exact response. Do not volunteer timer status in response to “yes,” “okay,” “sure,” or unrelated speech.
 
 COACHING AND RECOMMENDATIONS
 - Judge shooting against its makes target. Below target needs work; never agree that a below-target result is good. At/below half is significantly low. Be candid.
@@ -150,6 +152,7 @@ NAVIGATION AND EDITS
 - "Let's start this workout," "start the workout," or equivalent kickoff language is a read-only request. Without calling any tool or changing state, state the current drill and set from the provided workout context in one concise sentence.
 - DEFAULT NEXT RULE: Every natural-language next question—"what's next?", "what is next?", "so what is next?", "what's next bro?", or equivalent—means the authoritative next incomplete SET, never the next drill. Call get_workout_position when needed and answer current_set if it is incomplete (including an unstarted set 1). If the current drill is complete, answer the first incomplete set of the next unfinished drill. Never skip an incomplete set or volunteer the drill after the current drill. Discuss the next drill only when the athlete explicitly asks "what drill/exercise comes next?" or explicitly asks for the set after the current one.
 - Use set_current_position for every navigation action: moving to a drill, a set, next/previous/first/last, going back, and skipping a drill or set. It is the only navigation tool. It never changes completion, makes, attempts, or minutes. When an athlete moves to a drill without naming a set, omit set_number so it selects that drill's next incomplete set (set 2 when set 1 is complete, for example). CRITICAL CONTINUATION RULE: "let's go," "let's move on," "okay let's continue," "keep going," and equivalent conversational continuation NEVER mean "next drill" or "next set." If the current set is incomplete, do not call any navigation tool; first say exactly: "You haven't completed set X of [drill] yet. Would you still like to move on?" Wait for a clear yes. Only that later yes permits set_current_position to the next set or drill. The first continuation request may never advance the athlete, even if the next drill is obvious. Advance immediately only when the athlete explicitly says next set, next drill, move to set N, move to [drill], skip, or equivalent. Never mark a set complete for moving on. Mark completion only after explicit completion language such as "I'm done with that set," "I'm done," or "I'm finished."
+- NEW DRILL SET PRIORITY: When moving to a different drill, select set 1 whenever it is incomplete or unstarted; select another set only when the athlete explicitly requests that set or set 1 is already complete.
 - Put natural references in drill_name: first/last, number, next/previous, go back, or Nth from end. Omit exercise_id unless state supplies it; never discuss IDs. Resolve this/that/current/it to current; ask only for ambiguous matches.
 - Multi-action requests require all tools in dependency order, awaiting each result. Example: navigate to "last drill," then set each requested shooting set. Use each returned state silently; do not re-fetch unless asked for a fresh check or state is ambiguous.
 - List with list_workout_drills. Add by catalog search then add after permission; every added drill immediately becomes the current drill at set 1. Remove with remove_workout_exercise; save notes with save_note. Name edits afterward.
@@ -181,7 +184,7 @@ COMPLETION, TIME, OUTPUT
 - set_set_completion completes/reopens one set, including timed sets. complete_drill requires explicit whole-drill completion; uncomplete_drill reopens it. "Can I skip?" is skip, not completion.
 - Before completing a shooting or finishing set with attempts remaining, say its exact progress and remaining attempts, then ask: "Would you like to start this set or mark it complete as is?" Only mark it complete after the athlete clearly chooses to mark it complete as is.
 - Honor an explicit request to go back and reopen an earlier completed set: call set_set_completion with completed=false; never claim past sets cannot be reopened.
-- extend_workout/shorten_workout change time. start_timer targets the named/current timed set and includes its reference; omit duration for saved time. Preserve seconds/minutes. After success say "A X-minute/second timer has been started." Ask duration for untimed drills. set_timed_set_duration applies to any drill configured with minute-based sets.
+- Coach is not aware of total workout duration, workout minutes remaining, or elapsed workout time. Judge workout progress only from drill and set completion. start_timer targets the named/current timed set and includes its reference; omit duration for saved time. Preserve seconds/minutes. After success say "A X-minute/second timer has been started." Ask duration for untimed drills. set_timed_set_duration applies to any drill configured with minute-based sets.
 `;
 
 // Keep the proven, detailed coaching policy in the cacheable prefix. Workout
@@ -202,6 +205,7 @@ TOOL EXECUTION EXAMPLES AND EDGE CASES
 - For "start a five-minute timer for this set," first save the exact set duration, then start the timer for that same set. Do not reverse those actions or replace minutes with seconds in speech.
 - For "I actually want to shoot 50 shots" or "can we shoot 50 shots," call set_shooting_set_targets for the current shooting/finishing set with target_attempts=50 before replying. This is a requested workout edit, not a shot result or a question about remaining shots.
 - For "start the timer," use the saved timed-set duration when one exists. If the current drill is not timed and no duration was given, ask for a duration instead of inventing one.
+- After Coach asks whether to start a set timer, any clear affirmative—"yes," "yeah," "sure," "okay," "do it," "start it," or equivalent—MUST call start_timer for that referenced set before speaking. Never claim a timer is starting or has started without the successful start_timer result.
 - For "add V dribbles," first search. Present the closest matching option(s) and ask permission once. A later clear yes or named/numbered option selection is permission for that exact match; add it directly without another search or question.
 - For a completed drill or workout that the athlete wants to revisit, reopen the requested scope without erasing actual makes, attempts, or completed minutes.
 - When a reference can resolve to exactly one workout drill, act on it. When it can resolve to several drills, ask one concise disambiguation question; never guess.
@@ -484,28 +488,6 @@ const REALTIME_TOOL_DEFS = [
     parameters: { type: "object", properties: {} },
   },
   {
-    name: "extend_workout",
-    description: "Add minutes to today's workout.",
-    parameters: {
-      type: "object",
-      properties: {
-        minutes: { type: "number" },
-      },
-      required: ["minutes"],
-    },
-  },
-  {
-    name: "shorten_workout",
-    description: "Reduce remaining workout time.",
-    parameters: {
-      type: "object",
-      properties: {
-        minutes: { type: "number" },
-      },
-      required: ["minutes"],
-    },
-  },
-  {
     name: "start_timer",
     description:
       "Start a countdown bound to the named set or active timed set. Include its exercise and set reference. Omit duration for its saved time and preserve units.",
@@ -568,6 +550,11 @@ const REALTIME_TOOL_DEFS = [
         },
       },
     },
+  },
+  {
+    name: "get_timer_status",
+    description: "Get exact live timer status from the athlete's device.",
+    parameters: { type: "object", properties: {} },
   },
   {
     name: "pause_timer",
@@ -645,28 +632,6 @@ const TOOL_DEFS = [
     },
   },
   {
-    name: "extend_workout",
-    description:
-      "Add minutes to today's workout when the user wants more time.",
-    parameters: {
-      type: "object",
-      properties: { minutes: { type: "number" } },
-      required: ["minutes"],
-    },
-  },
-  {
-    name: "shorten_workout",
-    description:
-      "Reduce today's workout when the user is short on time (e.g. 'I only have twenty minutes left').",
-    parameters: {
-      type: "object",
-      properties: {
-        minutes: { type: "number", description: "Minutes to remove" },
-      },
-      required: ["minutes"],
-    },
-  },
-  {
     name: "start_timer",
     description:
       "Start a countdown bound to the named set or active timed set. Include its exercise and set reference. Omit duration for its saved time and preserve units.",
@@ -713,6 +678,11 @@ const TOOL_DEFS = [
     },
   },
   {
+    name: "get_timer_status",
+    description: "Get exact live timer status from the athlete's device.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
     name: "pause_timer",
     description: "Pause the workout timer.",
     parameters: { type: "object", properties: {} },
@@ -745,10 +715,9 @@ const REALTIME_TOOL_DESCRIPTIONS: Record<string, string> = {
   get_workout_position: "Fetch current set, progress, targets, and order.",
   set_current_position: "Select a drill and set without changing completion.",
   get_progress: "Fetch workout progress.",
-  extend_workout: "Add workout minutes.",
-  shorten_workout: "Remove remaining workout minutes.",
   start_timer:
     "Start a timer bound to a workout exercise/set; seconds and minutes keep their units.",
+  get_timer_status: "Get exact live timer status from the athlete device.",
   set_timed_set_duration:
     "Save one timed set's new duration; not a one-off timer.",
   set_shooting_set_targets: "Change one set's shot targets, not its results.",
@@ -987,16 +956,10 @@ export function buildContextSummary(
     if (d.logged_attempts != null) totalAttempts += d.logged_attempts;
   }
 
-  const elapsedMin = timer ? Math.round(timer.elapsed_seconds / 60) : 0;
-  const remainingMin = ctx.day.estimated_minutes != null
-    ? Math.max(0, ctx.day.estimated_minutes - elapsedMin)
-    : null;
-
   return JSON.stringify({
     workout_day: {
       title: ctx.day.title,
       focus: ctx.day.focus,
-      estimated_minutes: ctx.day.estimated_minutes,
       coach_notes: ctx.day.coach_notes,
       day_completed: ctx.day.completed,
     },
@@ -1024,11 +987,6 @@ export function buildContextSummary(
       shooting_pct_today: totalAttempts > 0
         ? Math.round((totalMakes / totalAttempts) * 100)
         : null,
-    },
-    timer: {
-      running: timer?.running ?? false,
-      elapsed_minutes: elapsedMin,
-      remaining_minutes: remainingMin,
     },
     athlete_profile: profile,
   });
@@ -1622,11 +1580,6 @@ export function buildCompactContextSummary(
     }
   }
 
-  const elapsedMin = timer ? Math.round(timer.elapsed_seconds / 60) : 0;
-  const remainingMin = ctx.day.estimated_minutes != null
-    ? Math.max(0, ctx.day.estimated_minutes - elapsedMin)
-    : null;
-
   const goal = typeof profile?.main_goal === "string"
     ? profile.main_goal.slice(0, 120)
     : null;
@@ -1655,7 +1608,6 @@ export function buildCompactContextSummary(
         ? Math.round((totalMakes / totalAttempts) * 100)
         : null,
     },
-    remaining_minutes: remainingMin,
     goal,
     recent_conversation: (conversationSummary ?? "").slice(-1_200) || null,
   });
@@ -1719,8 +1671,6 @@ export function buildRealtimeModelContext(
     (sum, drill) => sum + (drill.logged_totals.attempts ?? 0),
     0,
   );
-  const elapsedMinutes = timer ? Math.round(timer.elapsed_seconds / 60) : 0;
-
   return JSON.stringify({
     workout: {
       title: ctx.day.title,
@@ -1728,9 +1678,6 @@ export function buildRealtimeModelContext(
       goal: typeof profile?.main_goal === "string"
         ? profile.main_goal.slice(0, 120)
         : null,
-      remaining_minutes: ctx.day.estimated_minutes == null
-        ? null
-        : Math.max(0, ctx.day.estimated_minutes - elapsedMinutes),
     },
     drills,
     current_set: navigation.current_set_state,
@@ -1766,6 +1713,7 @@ export function buildCoachTurnDynamicContext(
   profile: Record<string, unknown> | null,
   conversationSummary: string | null | undefined,
   coachName: string,
+  timer?: TimerState,
   _speculativeReadOnly = false,
   includeWorkoutState = true,
 ): string {
@@ -1779,7 +1727,7 @@ export function buildCoachTurnDynamicContext(
   if (!includeWorkoutState) return identity;
   return `${identity}
 Authoritative workout state follows. Use it silently and prefer newer state from tool results:
-${buildRealtimeModelContext(ctx, profile, undefined, conversationSummary)}`;
+${buildRealtimeModelContext(ctx, profile, timer, conversationSummary)}`;
 }
 
 export function buildRealtimeInstructions(
@@ -3112,25 +3060,6 @@ export async function executeCoachTool(
       };
     }
 
-    case "extend_workout":
-    case "shorten_workout": {
-      const minutes = Math.abs(Number(args.minutes ?? 0));
-      if (!minutes) {
-        return { result: "Error: minutes required", dbChanged: false };
-      }
-      const current = ctx.day.estimated_minutes ?? 45;
-      const updated = name === "extend_workout"
-        ? current + minutes
-        : Math.max(5, current - minutes);
-      const { error } = await supabase
-        .from("workout_days")
-        .update({ estimated_minutes: updated })
-        .eq("id", dayId)
-        .eq("user_id", userId);
-      if (error) return { result: `Error: ${error.message}`, dbChanged: false };
-      return { result: `Workout is now ${updated} minutes.`, dbChanged: true };
-    }
-
     case "start_timer": {
       const requestedMinutes = Number(args.minutes);
       const requestedSeconds = Number(args.seconds);
@@ -3151,6 +3080,12 @@ export async function executeCoachTool(
         ? ctx.exercises.find((exercise) => exercise.id === timerExerciseId) ??
           null
         : findCurrentExercise(ctx);
+      if (!currentExercise || !isTimedExercise(currentExercise)) {
+        return {
+          result: "That set does not use timed sets, so I won't start a timer.",
+          dbChanged: false,
+        };
+      }
       const currentLog = currentExercise
         ? ctx.logs.get(currentExercise.id)
         : undefined;
@@ -3225,6 +3160,13 @@ export async function executeCoachTool(
         },
       };
     }
+    case "get_timer_status":
+      return {
+        result: "Fetching exact live timer status from the athlete device.",
+        dbChanged: false,
+        clientAction: { type: "get_timer_status" },
+        skipModelResponse: true,
+      };
     case "pause_timer":
       return {
         result: "Timer paused.",

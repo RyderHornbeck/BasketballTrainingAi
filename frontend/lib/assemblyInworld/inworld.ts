@@ -11,6 +11,7 @@ const MINIMUM_UTTERANCE_CHARACTERS = 240;
 const MAXIMUM_UTTERANCE_WAIT_MS = 450;
 export const INITIAL_FIRST_AUDIO_TIMEOUT_MS = 2_000;
 export const RETRY_FIRST_AUDIO_TIMEOUT_MS = 3_000;
+export const AUDIO_PROGRESS_TIMEOUT_MS = 4_000;
 
 export interface InworldRequestIdentity {
   clientId: number;
@@ -31,17 +32,43 @@ export class InworldFirstAudioTimeoutError extends Error {
   }
 }
 
+export class InworldAudioProgressTimeoutError extends Error {
+  constructor(
+    readonly contextId: string,
+    readonly requestId: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`Inworld audio stream stalled for ${timeoutMs}ms.`);
+    this.name = "InworldAudioProgressTimeoutError";
+  }
+}
+
+export type InworldLifecycleStage =
+  | "request_started"
+  | "first_audio"
+  | "audio_chunk"
+  | "request_completed"
+  | "request_cancelled"
+  | "request_error"
+  | "request_stalled";
+
 export interface InworldTtsOptions {
   accessToken: string;
   refreshAccessToken: () => Promise<string>;
   voiceId: string;
   firstAudioTimeoutMs?: number;
+  audioProgressTimeoutMs?: number;
   onAudio: (base64Pcm: string, identity: InworldRequestIdentity) => void;
   onFirstAudio: (identity: InworldRequestIdentity) => void;
   onDone: (contextId: string) => void;
   onBilledCharacters: (count: number) => void;
   onError: (error: Error, identity: InworldRequestIdentity) => void;
   onClose: () => void;
+  onLifecycle?: (
+    stage: InworldLifecycleStage,
+    identity: InworldRequestIdentity,
+    detail?: Record<string, unknown>,
+  ) => void;
 }
 
 export class InworldTtsClient {
@@ -50,10 +77,11 @@ export class InworldTtsClient {
   private readonly flushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly cancelledContexts = new Set<string>();
   private readonly contextQueues = new Map<string, Promise<void>>();
-  private contextsWithAudio = new Set<string>();
+  private requestsWithAudio = new Set<string>();
   private lifetime = 0;
   private requestSequence = 0;
   private readonly firstAudioTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly progressTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly requestContexts = new Map<string, string>();
   private readonly clientId = ++clientSequence;
 
@@ -127,7 +155,6 @@ export class InworldTtsClient {
     this.contextQueues.set(
       contextId,
       previous.then(() => {
-        this.contextsWithAudio.delete(contextId);
         this.options.onDone(contextId);
       }),
     );
@@ -140,12 +167,15 @@ export class InworldTtsClient {
     this.flushTimers.delete(contextId);
     this.pendingText.delete(contextId);
     this.contextQueues.delete(contextId);
-    this.contextsWithAudio.delete(contextId);
     for (const [requestId, requestContextId] of this.requestContexts) {
       if (requestContextId !== contextId) continue;
       const timer = this.firstAudioTimers.get(requestId);
       if (timer) clearTimeout(timer);
       this.firstAudioTimers.delete(requestId);
+      const progressTimer = this.progressTimers.get(requestId);
+      if (progressTimer) clearTimeout(progressTimer);
+      this.progressTimers.delete(requestId);
+      this.requestsWithAudio.delete(requestId);
       this.requestContexts.delete(requestId);
     }
   }
@@ -158,9 +188,11 @@ export class InworldTtsClient {
     this.pendingText.clear();
     this.contextQueues.clear();
     this.cancelledContexts.clear();
-    this.contextsWithAudio.clear();
+    this.requestsWithAudio.clear();
     for (const timer of this.firstAudioTimers.values()) clearTimeout(timer);
     this.firstAudioTimers.clear();
+    for (const timer of this.progressTimers.values()) clearTimeout(timer);
+    this.progressTimers.clear();
     this.requestContexts.clear();
   }
 
@@ -184,6 +216,38 @@ export class InworldTtsClient {
       this.firstAudioTimers.delete(requestId);
       this.requestContexts.delete(requestId);
     };
+    const clearProgressTimeout = () => {
+      const timer = this.progressTimers.get(requestId);
+      if (timer) clearTimeout(timer);
+      this.progressTimers.delete(requestId);
+    };
+    const scheduleProgressTimeout = () => {
+      clearProgressTimeout();
+      this.progressTimers.set(
+        requestId,
+        setTimeout(() => {
+          if (
+            this.lifetime === lifetime &&
+            this.client === client &&
+            !this.cancelledContexts.has(contextId) &&
+            this.requestsWithAudio.has(requestId)
+          ) {
+            this.options.onLifecycle?.("request_stalled", identity, {
+              timeout_ms: this.options.audioProgressTimeoutMs ?? AUDIO_PROGRESS_TIMEOUT_MS,
+            });
+            this.cancel(contextId);
+            this.options.onError(
+              new InworldAudioProgressTimeoutError(
+                contextId,
+                requestId,
+                this.options.audioProgressTimeoutMs ?? AUDIO_PROGRESS_TIMEOUT_MS,
+              ),
+              identity,
+            );
+          }
+        }, this.options.audioProgressTimeoutMs ?? AUDIO_PROGRESS_TIMEOUT_MS),
+      );
+    };
     this.requestContexts.set(requestId, contextId);
     this.firstAudioTimers.set(
       requestId,
@@ -192,7 +256,7 @@ export class InworldTtsClient {
           this.lifetime === lifetime &&
           this.client === client &&
           !this.cancelledContexts.has(contextId) &&
-          !this.contextsWithAudio.has(contextId)
+          !this.requestsWithAudio.has(requestId)
         ) {
           this.cancel(contextId);
           this.options.onError(
@@ -210,6 +274,10 @@ export class InworldTtsClient {
       const requestText =
         `[warm supportive basketball coach with natural conversational pacing and brief pauses between thoughts] ${text}`;
       this.options.onBilledCharacters(requestText.length);
+      this.options.onLifecycle?.("request_started", identity, {
+        characters: requestText.length,
+        final,
+      });
       for await (const audio of client.stream({
         // TTS-2 interprets this steering tag instead of voicing it. Keeping the
         // direction transport-side makes every streamed phrase consistent
@@ -228,18 +296,33 @@ export class InworldTtsClient {
           this.client !== client ||
           this.cancelledContexts.has(contextId)
         ) return;
-        if (!this.contextsWithAudio.has(contextId)) {
+        if (!this.requestsWithAudio.has(requestId)) {
           clearFirstAudioTimeout();
-          this.contextsWithAudio.add(contextId);
+          this.requestsWithAudio.add(requestId);
           this.options.onFirstAudio(identity);
+          this.options.onLifecycle?.("first_audio", identity, {
+            bytes: audio.byteLength,
+          });
         }
+        scheduleProgressTimeout();
+        this.options.onLifecycle?.("audio_chunk", identity, {
+          bytes: audio.byteLength,
+        });
         this.options.onAudio(bytesToBase64(audio), identity);
       }
       clearFirstAudioTimeout();
+      clearProgressTimeout();
+      this.options.onLifecycle?.("request_completed", identity);
+      this.requestsWithAudio.delete(requestId);
       if (final && !this.cancelledContexts.has(contextId)) this.finish(contextId);
     } catch (error) {
       clearFirstAudioTimeout();
+      clearProgressTimeout();
+      this.requestsWithAudio.delete(requestId);
       if (this.lifetime === lifetime && !this.cancelledContexts.has(contextId)) {
+        this.options.onLifecycle?.("request_error", identity, {
+          error: error instanceof Error ? error.message : String(error),
+        });
         this.options.onError(
           error instanceof Error ? error : new Error("Inworld TTS request failed."),
           identity,

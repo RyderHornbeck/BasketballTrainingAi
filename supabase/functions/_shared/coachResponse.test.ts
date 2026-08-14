@@ -3,6 +3,7 @@ import {
   buildAnthropicConversationMessages,
   buildAnthropicSystemBlocks,
   buildAnthropicTools,
+  coachToolFailureSpeech,
   coachToolPreamble,
   consumeAnthropicSse,
   consumeResponsesSse,
@@ -15,6 +16,7 @@ import {
   selectCoachResponseModel,
   successfulCoachToolConfirmation,
   shouldForceCoachTool,
+  usesOptimisticToolPreamble,
   validateCoachTurnRequest,
 } from "./coachResponse.ts";
 import { COACH_TURN_STABLE_SYSTEM_PROMPT } from "./coachCore.ts";
@@ -311,6 +313,24 @@ Deno.test("catalog search preamble is natural and hides query mechanics", () => 
       query: "function_call invoke get_progress",
     }) === "I'm searching for that drill.",
     "pseudo tool syntax in a query must not enter a preamble",
+  );
+});
+
+Deno.test("timer duration preamble is specific and optimistic tool mutations suppress success narration", () => {
+  assert(
+    coachToolPreamble("set_timed_set_duration", { duration_seconds: 45 }) ===
+      "Changing it to 45 seconds.",
+    "duration changes should announce the requested timer value immediately",
+  );
+  assert(
+    usesOptimisticToolPreamble("set_timed_set_duration") &&
+      !usesOptimisticToolPreamble("get_progress"),
+    "only mutation tools should suppress post-success narration",
+  );
+  assert(
+    coachToolFailureSpeech("set_timed_set_duration") ===
+      "Couldn't change it. Try again.",
+    "failed duration changes should have one concise fallback",
   );
 });
 

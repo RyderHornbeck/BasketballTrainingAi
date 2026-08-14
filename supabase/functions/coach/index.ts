@@ -250,16 +250,10 @@ function buildContextSummary(
     if (d.logged_attempts != null) totalAttempts += d.logged_attempts;
   }
 
-  const elapsedMin = timer ? Math.round(timer.elapsed_seconds / 60) : 0;
-  const remainingMin = ctx.day.estimated_minutes != null
-    ? Math.max(0, ctx.day.estimated_minutes - elapsedMin)
-    : null;
-
   return JSON.stringify({
     workout_day: {
       title: ctx.day.title,
       focus: ctx.day.focus,
-      estimated_minutes: ctx.day.estimated_minutes,
       coach_notes: ctx.day.coach_notes,
       day_completed: ctx.day.completed,
     },
@@ -278,8 +272,6 @@ function buildContextSummary(
     },
     timer: {
       running: timer?.running ?? false,
-      elapsed_minutes: elapsedMin,
-      remaining_minutes: remainingMin,
     },
     athlete_profile: profile,
   });
@@ -372,34 +364,6 @@ const TOOLS = [
           note: { type: "string" },
         },
         required: ["exercise_id", "note"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "extend_workout",
-      description:
-        "Add minutes to today's workout when the user wants more time.",
-      parameters: {
-        type: "object",
-        properties: { minutes: { type: "number" } },
-        required: ["minutes"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "shorten_workout",
-      description:
-        "Reduce today's workout when the user is short on time (e.g. 'I only have twenty minutes left').",
-      parameters: {
-        type: "object",
-        properties: {
-          minutes: { type: "number", description: "Minutes to remove" },
-        },
-        required: ["minutes"],
       },
     },
   },
@@ -598,25 +562,6 @@ async function executeTool(
       return { result: "Note saved.", dbChanged: true };
     }
 
-    case "extend_workout":
-    case "shorten_workout": {
-      const minutes = Math.abs(Number(args.minutes ?? 0));
-      if (!minutes) {
-        return { result: "Error: minutes required", dbChanged: false };
-      }
-      const current = ctx.day.estimated_minutes ?? 45;
-      const updated = name === "extend_workout"
-        ? current + minutes
-        : Math.max(5, current - minutes);
-      const { error } = await supabase
-        .from("workout_days")
-        .update({ estimated_minutes: updated })
-        .eq("id", dayId)
-        .eq("user_id", userId);
-      if (error) return { result: `Error: ${error.message}`, dbChanged: false };
-      return { result: `Workout is now ${updated} minutes.`, dbChanged: true };
-    }
-
     case "start_timer":
       return {
         result: "Timer started.",
@@ -656,7 +601,7 @@ Rules:
 - When they finish or want to skip a drill, call complete_drill or skip_drill and tell them what's next.
 - When they want to redo a drill or say they marked one complete by mistake, call uncomplete_drill.
 - Use start_timer/pause_timer/resume_timer when they mention the timer or starting/pausing the workout.
-- Use extend_workout/shorten_workout when they want more or less time, and rebalance your guidance accordingly.
+- You do not know the workout's total duration, time remaining, or elapsed workout time. Discuss time only for a specific drill or active drill timer.
 - Reference their actual numbers when encouraging: improvement, streaks, percentages.
 - If they're tired, ease off: suggest a breather, a lighter drill, or shortening the session.
 - Numbers in speech should be natural ("seventy percent", "eight of ten" is fine as "8 of 10").`;

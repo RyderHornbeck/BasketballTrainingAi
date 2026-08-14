@@ -222,6 +222,11 @@ test("parses timer starts, controls, and status", () => {
     ["how long is remaining on the countdown", { action: "status" }],
     ["time remaining", { action: "status" }],
     ["what's time left on the timer", { action: "status" }],
+    ["what's the time", { action: "status" }],
+    ["what time is it", { action: "status" }],
+    ["what's the timer at", { action: "status" }],
+    ["how much time do I have", { action: "status" }],
+    ["what's on the clock", { action: "status" }],
     ["timer status", { action: "status" }],
   ];
   for (const [phrase, args] of cases) expectIntent(phrase, { kind: "timer", args });
@@ -416,7 +421,7 @@ test("parses targets, totals, and remaining-work queries", () => {
   for (const [phrase, args] of cases) expectIntent(phrase, { kind: "progress", args });
 });
 
-test("parses repeat, prefixed notes, exact removal, and explicit workout changes", () => {
+test("parses repeat, prefixed notes, and exact drill removal", () => {
   expectIntent("say that again", { kind: "repeat", args: {} });
   expectIntent("save note: my elbow is flaring out", {
     kind: "save_note",
@@ -437,14 +442,6 @@ test("parses repeat, prefixed notes, exact removal, and explicit workout changes
   expectIntent("delete exercise attack retreat threes", {
     kind: "remove_drill",
     args: { name: "attack retreat threes", match: "exact" },
-  });
-  expectIntent("extend the workout by five minutes", {
-    kind: "adjust_workout",
-    args: { action: "extend", durationSeconds: 300 },
-  });
-  expectIntent("shorten my workout by 90 seconds", {
-    kind: "adjust_workout",
-    args: { action: "shorten", durationSeconds: 90 },
   });
 });
 

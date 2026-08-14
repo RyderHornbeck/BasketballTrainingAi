@@ -21,6 +21,12 @@ export interface CoachTurnRequest {
   transcript: string;
   stateVersion: number;
   conversationSummary?: string;
+  timer?: {
+    running: boolean;
+    elapsed_seconds: number;
+    duration_seconds?: number | null;
+    remaining_seconds?: number | null;
+  };
   mode: "standard" | "speculative_read_only";
 }
 
@@ -47,6 +53,51 @@ export function validateCoachTurnRequest(input: unknown): CoachTurnValidation {
   const conversationSummary = typeof body.conversation_summary === "string"
     ? body.conversation_summary.trim()
     : undefined;
+  const rawTimer = body.timer;
+  let timer: CoachTurnRequest["timer"];
+  if (rawTimer != null) {
+    if (typeof rawTimer !== "object" || Array.isArray(rawTimer)) {
+      return { ok: false, error: "Invalid timer." };
+    }
+    const timerInput = rawTimer as Record<string, unknown>;
+    const elapsedSeconds = timerInput.elapsed_seconds;
+    const durationSeconds = timerInput.duration_seconds;
+    const remainingSeconds = timerInput.remaining_seconds;
+    if (
+      typeof timerInput.running !== "boolean" ||
+      typeof elapsedSeconds !== "number" ||
+      !Number.isFinite(elapsedSeconds) ||
+      elapsedSeconds < 0 ||
+      (
+        remainingSeconds != null &&
+        (
+          typeof remainingSeconds !== "number" ||
+          !Number.isFinite(remainingSeconds) ||
+          remainingSeconds < 0
+        )
+      ) ||
+      (
+        durationSeconds != null &&
+        (
+          typeof durationSeconds !== "number" ||
+          !Number.isFinite(durationSeconds) ||
+          durationSeconds <= 0
+        )
+      )
+    ) {
+      return { ok: false, error: "Invalid timer." };
+    }
+    timer = {
+      running: timerInput.running,
+      elapsed_seconds: Math.floor(elapsedSeconds),
+      duration_seconds: typeof durationSeconds === "number"
+        ? Math.floor(durationSeconds)
+        : null,
+      remaining_seconds: typeof remainingSeconds === "number"
+        ? Math.floor(remainingSeconds)
+        : null,
+    };
+  }
   const mode = body.mode === undefined || body.mode === "standard"
     ? "standard"
     : body.mode === "speculative_read_only"
@@ -85,6 +136,7 @@ export function validateCoachTurnRequest(input: unknown): CoachTurnValidation {
       transcript,
       stateVersion,
       conversationSummary,
+      timer,
       mode,
     },
   };
@@ -234,6 +286,18 @@ export function coachToolPreamble(
   toolName: string,
   args: Record<string, unknown>,
 ): string | null {
+  if (toolName === "set_timed_set_duration") {
+    const seconds = Number(args.duration_seconds);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      const rounded = Math.round(seconds);
+      const label = rounded < 60
+        ? `${rounded} second${rounded === 1 ? "" : "s"}`
+        : `${Number((rounded / 60).toFixed(2))} minute${
+          rounded === 60 ? "" : "s"
+        }`;
+      return `Changing it to ${label}.`;
+    }
+  }
   if (toolName === "search_exercise_catalog") {
     const raw = typeof args.query === "string" ? args.query : "";
     const subject = raw
@@ -256,7 +320,7 @@ export function coachToolPreamble(
   const preambles: Record<string, string> = {
     set_current_drill: "I'm moving you there.",
     skip_drill: "I'm moving you to the next drill.",
-    set_set_completion: "I'm making that change.",
+    set_set_completion: "I'm marking that set complete.",
     complete_drill: "I'm marking that drill complete.",
     uncomplete_drill: "I'm reopening that drill.",
     start_timer: "I'm starting the timer.",
@@ -270,6 +334,34 @@ export function coachToolPreamble(
     save_note: "I'm saving that note.",
   };
   return preambles[toolName] ?? null;
+}
+
+/** Mutations that can use a single optimistic pre-tool narration. */
+export function usesOptimisticToolPreamble(toolName: string): boolean {
+  return new Set([
+    "set_current_drill",
+    "set_current_position",
+    "skip_drill",
+    "set_set_completion",
+    "complete_drill",
+    "uncomplete_drill",
+    "start_timer",
+    "pause_timer",
+    "resume_timer",
+    "stop_timer",
+    "set_timed_set_duration",
+    "set_shooting_set_targets",
+    "add_workout_exercise",
+    "remove_workout_exercise",
+    "save_note",
+  ]).has(toolName);
+}
+
+/** Brief client-facing fallback when an optimistic tool request fails. */
+export function coachToolFailureSpeech(toolName: string): string {
+  if (toolName === "set_timed_set_duration") return "Couldn't change it. Try again.";
+  if (toolName === "start_timer") return "Couldn't start the timer. Try again.";
+  return "Couldn't complete that. Try again.";
 }
 
 /** Return a safe exact confirmation for an already-applied tool action. */
