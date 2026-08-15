@@ -437,13 +437,7 @@ export default function PaywallScreen() {
           },
         ]
       : [];
-  const cta = mode === "default" && selectedPlan?.hasEligibleFreeTrial
-    ? "Try Now For $0.00"
-    : selectedPlan?.hasEligibleFreeTrial && selectedPlan.trialLabel
-      ? `Start ${selectedPlan.trialLabel}`
-    : selectedPlan
-      ? `Continue with ${selectedPlan.duration === "annual" ? "Annual" : "Monthly"}`
-      : "Continue";
+  const cta = "Continue";
   const trialNotice = selectedPlan?.hasEligibleFreeTrial && selectedPlan.trialLabel
     ? `✓ ${selectedPlan.trialLabel} ・ No Payment Due Now`
     : null;
