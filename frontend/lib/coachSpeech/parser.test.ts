@@ -144,6 +144,14 @@ test("removes conversational padding before every command family", () => {
     kind: "repeat",
     args: {},
   });
+  expectIntent("Um coach, so I just airballed", {
+    kind: "shot",
+    args: { mode: "increment", makes: 0, attempts: 1, source: "count" },
+  });
+  expectIntent("Um coach, so I just made it", {
+    kind: "shot",
+    args: { mode: "increment", makes: 1, attempts: 1, source: "count" },
+  });
 });
 
 test("distinguishes incremental and absolute shot ratios", () => {
@@ -208,13 +216,16 @@ test("parses timer starts, controls, and status", () => {
     ["pause timer", { action: "pause" }],
     ["hold the timer", { action: "pause" }],
     ["freeze the countdown", { action: "pause" }],
+    ["stop the timer", { action: "pause" }],
+    ["take a break timer", { action: "pause" }],
     ["resume timer", { action: "resume" }],
     ["continue the timer", { action: "resume" }],
     ["unpause the stopwatch", { action: "resume" }],
-    ["stop timer", { action: "stop" }],
-    ["end the timer", { action: "stop" }],
-    ["cancel timer", { action: "stop" }],
-    ["clear the countdown", { action: "stop" }],
+    ["start it back up again", { action: "resume" }],
+    ["stop timer", { action: "pause" }],
+    ["end the timer", { action: "pause" }],
+    ["cancel timer", { action: "pause" }],
+    ["clear the countdown", { action: "pause" }],
     ["reset timer", { action: "reset" }],
     ["restart the timer", { action: "restart" }],
     ["start the timer over", { action: "restart" }],
@@ -262,6 +273,10 @@ test("keeps navigation queries separate from movement", () => {
     kind: "navigation",
     args: { mode: "query", unit: "drill", target: { type: "current" } },
   });
+  expectIntent("where are we", {
+    kind: "navigation",
+    args: { mode: "query", unit: "drill", target: { type: "current" } },
+  });
   expectIntent("Yo coach, can you tell me what exercise am I on?", {
     kind: "navigation",
     args: { mode: "query", unit: "drill", target: { type: "current" } },
@@ -272,21 +287,29 @@ test("keeps navigation queries separate from movement", () => {
   });
   expectIntent("what comes after this", {
     kind: "navigation",
-    args: { mode: "query", unit: "drill", target: { type: "next" } },
+    args: { mode: "query", unit: "set", target: { type: "next" } },
   });
   expectIntent("next drill", {
     kind: "navigation",
     args: { mode: "action", unit: "drill", target: { type: "next" }, skip: false },
   });
-  for (const phrase of ["let's move on", "lets move on", "move on", "let's go", "okay lets continue"]) {
+  for (
+    const phrase of [
+      "let's move on",
+      "lets move on",
+      "move on",
+      "let's go",
+      "okay lets continue",
+      "lets now continue",
+      "let's now continue",
+    ]
+  ) {
     expectIntent(phrase, {
       kind: "navigation",
       args: {
-        mode: "action",
+        mode: "query",
         unit: "set",
         target: { type: "next" },
-        skip: false,
-        resumeCurrentIfIncomplete: true,
       },
     });
   }

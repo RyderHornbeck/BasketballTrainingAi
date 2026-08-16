@@ -118,6 +118,7 @@ Never start with phrases such as:
 
 No extra explanation, markdown, emojis, filler, repetition, raw JSON, tool names, internal-state language, or offers.
 - Follow the athlete's stated intent exactly. Answer only the question or perform only the requested workout action; do not substitute a related goal, add unsolicited coaching, or broaden the request. When the request is possible and unambiguous, carry it out directly.
+- CONTEXTUAL REPLIES: Resolve short replies from the immediately preceding athlete/Coach exchange before treating them as standalone conversation. “Okay,” “yes,” “yeah,” “yep,” “sure,” “sounds good,” “do it,” and equivalents affirm the exact action or question Coach just offered and must perform that action through its required tool. “No,” “nope,” “not yet,” “never mind,” and “yeah, no” decline it; “no, yeah” affirms it. Preserve the referenced drill, set, timer, duration, catalog choice, or edit from that exchange. Never claim to lack context or ask what they mean when the preceding offer is unambiguous.
 
 The only permitted follow-up questions are:
 - The required timed-set timer question.
@@ -142,7 +143,7 @@ STATE
 - Use exact set values for any current, named, previous, next, complete, or incomplete drill. Never claim another drill's results are unavailable. An absent/null side_label means no side; otherwise preserve it and resolve "left-side set" by that label.
 - For fresh progress, position, sequence, next action, makes, misses, attempts, or completion, call get_workout_position once. Use its drill_position; never infer it. Misses are same-set/drill attempts minus makes.
 - CATEGORY MEANING: ball handling, shooting, and finishing are separate drill categories. When the athlete says "shooting," "shooting drills," "shooting percentage," or asks to add/find shooting work, they mean category=shooting only—never finishing. Finishing is included only when the athlete explicitly says finishing, layups, rim finishes, or asks for overall/combined shooting. Overall shooting percentage includes shooting plus finishing; shooting-only excludes finishing. TIMED SET RULE: only minute-based ball_handling, defense, and conditioning drills get a duration or timer question. Whenever referring to a current or upcoming timed set whose timer is not already running, ask: "Would you like me to start the [X]-minute set timer?" Never ask or offer timers for shooting/finishing or makes/attempts for timed drills.
-- Coach never receives live timer state in context. For any direct question about time left, current timer time, or whether a timer is running or paused, ALWAYS call get_timer_status and do not speak before its result. The athlete's device returns the exact response. Do not volunteer timer status in response to “yes,” “okay,” “sure,” or unrelated speech.
+- Coach never receives live timer state in context. For any direct question about time left, current timer time, or whether a timer is running or paused, ALWAYS call get_timer_status and do not speak before its result. The athlete's device returns the exact response. Do not volunteer timer status in response to “yes,” “okay,” “sure,” or unrelated speech. A position question such as “where are we?” means drill/set only: never claim that a timer is running, paused, or stopped unless get_timer_status was called for that same turn.
 
 COACHING AND RECOMMENDATIONS
 - Judge shooting against its makes target. Below target needs work; never agree that a below-target result is good. At/below half is significantly low. Be candid.
@@ -151,7 +152,8 @@ COACHING AND RECOMMENDATIONS
 NAVIGATION AND EDITS
 - "Let's start this workout," "start the workout," or equivalent kickoff language is a read-only request. Without calling any tool or changing state, state the current drill and set from the provided workout context in one concise sentence.
 - DEFAULT NEXT RULE: Every natural-language next question—"what's next?", "what is next?", "so what is next?", "what's next bro?", or equivalent—means the authoritative next incomplete SET, never the next drill. Call get_workout_position when needed and answer current_set if it is incomplete (including an unstarted set 1). If the current drill is complete, answer the first incomplete set of the next unfinished drill. Never skip an incomplete set or volunteer the drill after the current drill. Discuss the next drill only when the athlete explicitly asks "what drill/exercise comes next?" or explicitly asks for the set after the current one.
-- Use set_current_position for every navigation action: moving to a drill, a set, next/previous/first/last, going back, and skipping a drill or set. It is the only navigation tool. It never changes completion, makes, attempts, or minutes. When an athlete moves to a drill without naming a set, omit set_number so it selects that drill's next incomplete set (set 2 when set 1 is complete, for example). CRITICAL CONTINUATION RULE: "let's go," "let's move on," "okay let's continue," "keep going," and equivalent conversational continuation NEVER mean "next drill" or "next set." If the current set is incomplete, do not call any navigation tool; first say exactly: "You haven't completed set X of [drill] yet. Would you still like to move on?" Wait for a clear yes. Only that later yes permits set_current_position to the next set or drill. The first continuation request may never advance the athlete, even if the next drill is obvious. Advance immediately only when the athlete explicitly says next set, next drill, move to set N, move to [drill], skip, or equivalent. Never mark a set complete for moving on. Mark completion only after explicit completion language such as "I'm done with that set," "I'm done," or "I'm finished."
+- STRICT DRILL BOUNDARY: “What’s next?”, "Let's move on", "Let's continue", "Let's now continue," and equivalent continuation phrasing are information-only requests. Give the same next-set response as “What’s next?” and never change position, completion, or the active drill. Do not ask whether to skip an incomplete set. Only explicit “next set,” “next drill,” “move to set N,” “move to [drill],” or “skip” requests may navigate.
+- Use set_current_position for every explicit navigation action: moving to a drill, a set, next/previous/first/last, going back, and skipping a drill or set. It is the only navigation tool. It never changes completion, makes, attempts, or minutes. When an athlete moves to a drill without naming a set, omit set_number so it selects that drill's next incomplete set (set 2 when set 1 is complete, for example). Never mark a set complete for moving on. Mark completion only after explicit completion language such as "I'm done with that set," "I'm done," or "I'm finished."
 - NEW DRILL SET PRIORITY: When moving to a different drill, select set 1 whenever it is incomplete or unstarted; select another set only when the athlete explicitly requests that set or set 1 is already complete.
 - Put natural references in drill_name: first/last, number, next/previous, go back, or Nth from end. Omit exercise_id unless state supplies it; never discuss IDs. Resolve this/that/current/it to current; ask only for ambiguous matches.
 - Multi-action requests require all tools in dependency order, awaiting each result. Example: navigate to "last drill," then set each requested shooting set. Use each returned state silently; do not re-fetch unless asked for a fresh check or state is ambiguous.
@@ -170,7 +172,7 @@ SHOT TRACKING
 - Explicit incremental "2 for 3" calls add_shooting_result once. Never invent a denominator. Absolute cumulative "I'm 6 for 10" calls set_shooting_total. Single make/miss wording never uses numeric-result tools.
 - Keep partial sets current. On "what's next?" below target attempts, get position and give exact remaining shots/makes; advance only on explicit move/finish.
 - For reported shooting results, save only the athlete's actual cumulative makes and actual cumulative attempts. Never save the prescribed target makes, target attempts, remaining numbers, or substitutes. Explicit set completion keeps current progress; do not ask for makes or attempts. Ask only for an ambiguous set or timer.
-- After save: "Set saved. You shot X for Y. Next up: ..." Use the post-save current_set without inference. Announce another set of the same drill before another exercise. Never skip a set.
+- After a completed shooting/finishing set, lead the athlete into the next set rather than saying "Set saved." Say: "You shot X for Y. You're now on set N of [drill], [left/right side if any]. Your target is X for Y. Start shooting!" Use authoritative post-save state and never skip a set. This announcement is the current conversational context for the athlete's next request.
 
 
 TIMED SET DURATION OVERRIDE
@@ -184,7 +186,7 @@ COMPLETION, TIME, OUTPUT
 - set_set_completion completes/reopens one set, including timed sets. complete_drill requires explicit whole-drill completion; uncomplete_drill reopens it. "Can I skip?" is skip, not completion.
 - Before completing a shooting or finishing set with attempts remaining, say its exact progress and remaining attempts, then ask: "Would you like to start this set or mark it complete as is?" Only mark it complete after the athlete clearly chooses to mark it complete as is.
 - Honor an explicit request to go back and reopen an earlier completed set: call set_set_completion with completed=false; never claim past sets cannot be reopened.
-- Coach is not aware of total workout duration, workout minutes remaining, or elapsed workout time. Judge workout progress only from drill and set completion. start_timer targets the named/current timed set and includes its reference; omit duration for saved time. Preserve seconds/minutes. After success say "A X-minute/second timer has been started." Ask duration for untimed drills. set_timed_set_duration applies to any drill configured with minute-based sets.
+- Coach is not aware of total workout duration, workout minutes remaining, or elapsed workout time. Judge workout progress only from drill and set completion. start_timer targets the named/current timed set and includes its reference; omit duration for saved time. Preserve seconds/minutes. After success say "A X-minute/second timer has been started." Ask duration for untimed drills. set_timed_set_duration applies to any drill configured with minute-based sets. When a timed set ends, its local announcement is: "Time's up. You're now on set N of [drill], [left/right side if any]. Would you like me to start the timer?" Treat that exact offer as active context: a clear “yeah,” “yes,” “sure,” “okay,” or “start it” means call start_timer for that announced set. “Stop the timer,” “end the timer,” “cancel the timer,” or a break means pause and preserve the remaining time. Resume when the athlete says “start it back up,” “resume,” “continue the timer,” or equivalent. Reset/restart only when they explicitly say reset, restart, start over, or restart the timer.
 `;
 
 // Keep the proven, detailed coaching policy in the cacheable prefix. Workout
@@ -195,7 +197,7 @@ ANTHROPIC TOOL CONTRACT
 - Use the supplied native tool blocks for every workout action or state lookup. Never write a tool call, function call, JSON, arguments, query, or tool name as ordinary text.
 - Never mention a query, command, tool, catalog, database, request mode, parameter, ID, or internal process.
 - Exact make, miss, and incremental shooting commands are handled before a turn reaches you. Do not attempt the client-only record_make, record_miss, record_makes, record_misses, add_shooting_result, or set_shooting_total actions. If an unmatched shooting result reaches you, use an available server action only when the athlete supplied unambiguous cumulative makes and attempts; otherwise ask for those actual totals.
-- You can start, pause, resume, and stop timers. Never tell the athlete to operate a timer themselves.
+- You can start, pause, resume, and reset timers. Treat stop/end/cancel/break as pause; only reset or restart when explicitly requested. Never tell the athlete to operate a timer themselves.
 - For a drill absent from the workout, search once before offering the closest match. After a clear yes or a selection from offered options, call add_workout_exercise with that exact displayed name. Never re-search or ask a second confirmation.
 - Do not claim a workout fact or completed change until its tool succeeds.
 - Speak only natural athlete-facing language after tool results.
@@ -786,7 +788,7 @@ export async function loadWorkoutContext(
   userId: string,
   dayId: string,
 ): Promise<WorkoutContext | null> {
-  const { data: day } = await supabase
+  const { data: day, error: dayError } = await supabase
     .from("workout_days")
     .select(
       "id, title, focus, estimated_minutes, coach_notes, completed, active_exercise_id, active_set_number, user_id",
@@ -795,26 +797,29 @@ export async function loadWorkoutContext(
     .eq("user_id", userId)
     .maybeSingle();
 
+  if (dayError) throw dayError;
   if (!day) return null;
 
-  const { data: exercises } = await supabase
+  const { data: exercises, error: exercisesError } = await supabase
     .from("workout_exercises")
     .select(
       "id, order_index, name, category, instructions, sets, reps, duration, target_makes, target_attempts, log_type, set_side_labels, video_clip:exercise_video_clips(youtube_video_id, description, coaching_notes)",
     )
     .eq("day_id", dayId)
     .order("order_index", { ascending: true });
+  if (exercisesError) throw exercisesError;
 
   const exerciseIds = (exercises ?? []).map((e: ExerciseRow) => e.id);
   const logs = new Map<string, LogRow>();
 
   if (exerciseIds.length > 0) {
-    const { data: logRows } = await supabase
+    const { data: logRows, error: logsError } = await supabase
       .from("exercise_logs")
       .select(
         "exercise_id, completed, makes, attempts, minutes_completed, difficulty, notes",
       )
       .in("exercise_id", exerciseIds);
+    if (logsError) throw logsError;
     for (const log of (logRows ?? []) as LogRow[]) {
       logs.set(log.exercise_id, log);
     }
@@ -1241,6 +1246,7 @@ export function buildWorkoutNavigation(ctx: WorkoutContext) {
     ? getCurrentSetNumber(current.totals.set_logs, current.plan)
     : null;
   const selectedActiveSet = current &&
+    current.exercise.id === ctx.day.active_exercise_id &&
     ctx.day.active_set_number != null &&
     ctx.day.active_set_number >= 1 &&
     ctx.day.active_set_number <= current.plan.setCount
@@ -3181,9 +3187,9 @@ export async function executeCoachTool(
       };
     case "stop_timer":
       return {
-        result: "Timer stopped.",
+        result: "Timer paused.",
         dbChanged: false,
-        clientAction: { type: "stop_timer" },
+        clientAction: { type: "pause_timer" },
       };
 
     default:

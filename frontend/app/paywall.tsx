@@ -381,8 +381,15 @@ export default function PaywallScreen() {
     requestLockRef.current = true;
     actionHaptic();
     try {
+      // The auth-state Redirect below owns navigation after the session clears.
+      // Calling router.replace at the same time tears down this native-heavy
+      // paywall twice and can crash during a RevenueCat/StoreKit transition.
+      hasContinuedRef.current = true;
+      if (navigationTimeoutRef.current) {
+        clearTimeout(navigationTimeoutRef.current);
+        navigationTimeoutRef.current = null;
+      }
       await signOut();
-      router.replace("/welcome");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to sign out.");
       setStatus("error");

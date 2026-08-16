@@ -5,6 +5,7 @@ import { ThemeMode, ThemeProvider, useThemeContext } from "@/components/ThemePro
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { SubscriptionProvider } from "@/hooks/useSubscription";
 import { buildNavigationTheme } from "@/lib/navigationTheme";
+import { flushPendingTimedSetCompletions } from "@/lib/timedSetCompletion";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -18,6 +19,7 @@ import * as SplashScreen from "expo-splash-screen";
 import * as SystemUI from "expo-system-ui";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import NetInfo from "@react-native-community/netinfo";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
@@ -40,6 +42,18 @@ function RootNavigator() {
       setMode(profile.theme as ThemeMode);
     }
   }, [profile, setMode]);
+
+  useEffect(() => {
+    if (!profile) return;
+    // The timer expiry outbox survives app termination. Flush it as soon as an
+    // authenticated app instance starts and whenever connectivity returns.
+    void flushPendingTimedSetCompletions();
+    return NetInfo.addEventListener((network) => {
+      if (network.isConnected && network.isInternetReachable !== false) {
+        void flushPendingTimedSetCompletions();
+      }
+    });
+  }, [profile]);
 
   return (
     <NavigationThemeProvider value={navTheme}>

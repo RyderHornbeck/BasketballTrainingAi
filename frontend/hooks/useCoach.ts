@@ -17,8 +17,13 @@ import {
 } from "@/lib/realtimeCoach";
 import { type CoachVoiceProvider } from "@/lib/coachVoiceProvider";
 import { useTimerAudioCues } from "@/hooks/useTimerAudioCues";
-import { completeTimedExerciseSet } from "@/lib/timedSetCompletion";
+import {
+  completeTimedExerciseSet,
+  flushPendingTimedSetCompletions,
+  prepareTimedExerciseSetCompletion,
+} from "@/lib/timedSetCompletion";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import NetInfo from "@react-native-community/netinfo";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 
@@ -58,6 +63,16 @@ export function useCoach(dayId: string | null): UseCoachResult {
     setNumber: null as number | null,
   });
   const timerRunIdRef = useRef(0);
+  const timerEncouragementRef = useRef<{
+    runId: number;
+    fired: Set<"seventy_five" | "twenty_five">;
+  }>({ runId: 0, fired: new Set() });
+  const timedSetPrefetchRef = useRef<{
+    dayId: string;
+    exerciseId: string;
+    setNumber: number;
+    promise: ReturnType<typeof prepareTimedExerciseSetCompletion>;
+  } | null>(null);
   const conversationSummaryRef = useRef("");
   const conversationDayIdRef = useRef<string | null>(null);
   const connectingRef = useRef(false);
@@ -121,6 +136,17 @@ export function useCoach(dayId: string | null): UseCoachResult {
     };
   }, []);
 
+  useEffect(() => {
+    // Timed-set expiry is an outbox operation. Retry any durable completion
+    // when this Coach screen mounts or the device regains connectivity.
+    void flushPendingTimedSetCompletions();
+    return NetInfo.addEventListener((network) => {
+      if (network.isConnected && network.isInternetReachable !== false) {
+        void flushPendingTimedSetCompletions();
+      }
+    });
+  }, []);
+
   const currentElapsed = useCallback(() => {
     const t = timerRef.current;
     return Math.round(t.accumulated + (t.running ? (Date.now() - t.startedAt) / 1000 : 0));
@@ -144,32 +170,116 @@ export function useCoach(dayId: string | null): UseCoachResult {
     const interval = setInterval(() => {
       const t = timerRef.current;
       const elapsed = currentElapsed();
-      const remaining = t.durationSeconds == null ? null : Math.max(0, t.durationSeconds - elapsed);
+      const durationSeconds = t.durationSeconds;
+      const remaining =
+        durationSeconds == null ? null : Math.max(0, durationSeconds - elapsed);
 
-      if (remaining != null) {
+      if (remaining != null && durationSeconds != null) {
         timerAudio.sync(
           timerRunIdRef.current,
-          t.durationSeconds,
+          durationSeconds,
           remaining,
           t.running
         );
+        const encouragementState = timerEncouragementRef.current;
+        if (encouragementState.runId !== timerRunIdRef.current) {
+          encouragementState.runId = timerRunIdRef.current;
+          encouragementState.fired = new Set();
+        }
+        const remainingRatio =
+          durationSeconds > 0 ? remaining / durationSeconds : 1;
+        const marker =
+          remaining > 0 &&
+          remainingRatio <= 0.25 &&
+          !encouragementState.fired.has("twenty_five")
+            ? "twenty_five"
+            : remaining > 0 &&
+                remainingRatio <= 0.75 &&
+                !encouragementState.fired.has("seventy_five")
+              ? "seventy_five"
+              : null;
+        if (marker && sessionRef.current?.announceTimerEncouragement()) {
+          encouragementState.fired.add(marker);
+        }
+      }
+      if (
+        remaining != null &&
+        remaining > 0 &&
+        remaining <= 5 &&
+        dayId &&
+        t.exerciseId &&
+        t.setNumber &&
+        (
+          !timedSetPrefetchRef.current ||
+          timedSetPrefetchRef.current.dayId !== dayId ||
+          timedSetPrefetchRef.current.exerciseId !== t.exerciseId ||
+          timedSetPrefetchRef.current.setNumber !== t.setNumber
+        )
+      ) {
+        timedSetPrefetchRef.current = {
+          dayId,
+          exerciseId: t.exerciseId,
+          setNumber: t.setNumber,
+          promise: prepareTimedExerciseSetCompletion(dayId, t.exerciseId),
+        };
       }
       if (remaining === 0 && t.running) {
+        const completedExerciseId = t.exerciseId;
+        const completedSetNumber = t.setNumber;
+        const completedDurationSeconds = t.durationSeconds;
+        const prefetched =
+          timedSetPrefetchRef.current?.dayId === dayId &&
+          timedSetPrefetchRef.current.exerciseId === completedExerciseId &&
+          timedSetPrefetchRef.current.setNumber === completedSetNumber
+            ? timedSetPrefetchRef.current.promise
+            : undefined;
+        timedSetPrefetchRef.current = null;
         t.running = false;
-        t.accumulated = t.durationSeconds ?? elapsed;
+        // Expiry is completion, not a paused timer. Clearing the local timer
+        // before its next snapshot prevents unrelated questions such as
+        // "what's next?" from being answered as "paused with 0 seconds left."
+        t.accumulated = 0;
+        t.startedAt = 0;
+        t.durationSeconds = null;
+        t.exerciseId = null;
+        t.setNumber = null;
         setTimerRunning(false);
-        if (dayId && t.exerciseId && t.setNumber && t.durationSeconds) {
+        setTimerDurationSeconds(null);
+        if (
+          dayId &&
+          completedExerciseId &&
+          completedSetNumber &&
+          completedDurationSeconds
+        ) {
           const completion = completeTimedExerciseSet(
             dayId,
-            t.exerciseId,
-            t.setNumber,
-            t.durationSeconds
+            completedExerciseId,
+            completedSetNumber,
+            completedDurationSeconds,
+            prefetched,
           );
           const synchronized = sessionRef.current
             ? sessionRef.current.syncExternalWorkoutMutation(completion)
             : completion;
-          void synchronized.catch((error) => {
-              console.error("Failed to complete timed set:", error);
+          void synchronized
+            .then(() =>
+              sessionRef.current?.announceTimedSetCompletion(
+                completedExerciseId,
+                completedSetNumber,
+              ),
+            )
+            .catch((error) => {
+              // The set-end narration must not be lost merely because the
+              // post-completion context refresh failed. The session will use
+              // next-set guidance only from an authoritative refreshed state;
+              // otherwise it safely confirms the completed set.
+              console.error("Timed set context synchronization failed:", error);
+              return sessionRef.current?.announceTimedSetCompletion(
+                completedExerciseId,
+                completedSetNumber,
+              ).catch((announcementError) => {
+                console.error("Failed to announce timed set completion:", announcementError);
+              });
             });
         }
       }
@@ -200,10 +310,20 @@ export function useCoach(dayId: string | null): UseCoachResult {
       t.durationSeconds = null;
       t.exerciseId = null;
       t.setNumber = null;
+      timedSetPrefetchRef.current = null;
       timerRunIdRef.current += 1;
+      timerEncouragementRef.current = {
+        runId: timerRunIdRef.current,
+        fired: new Set(),
+      };
       timerAudio.stopAll();
     } else if (action.type === "start_timer") {
       timerRunIdRef.current += 1;
+      timerEncouragementRef.current = {
+        runId: timerRunIdRef.current,
+        fired: new Set(),
+      };
+      timedSetPrefetchRef.current = null;
       t.accumulated = 0;
       t.startedAt = Date.now();
       t.running = true;
@@ -495,14 +615,27 @@ export function useCoach(dayId: string | null): UseCoachResult {
 
   useEffect(() => {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-    const unsubscribe = onWorkoutUpdated((source) => {
-      // The coach tool response already contains the canonical post-mutation
-      // state. Refreshing again here causes a competing session.update.
-      if (source === "coach" || source === "coach_progress") return;
+    const unsubscribe = onWorkoutUpdated((source, details) => {
+      // Coach tool responses already contain the canonical post-mutation
+      // state. Timers do not: they may complete from either timer screen, so
+      // pull the new cursor immediately and let the session's refresh barrier
+      // block any transcript until it is applied.
+      if (source === "coach") return;
+      if (source === "coach_progress") {
+        if (details?.stateVersion != null) {
+          sessionRef.current?.noteExternalWorkoutMutationVersion(details.stateVersion);
+        }
+        void sessionRef.current?.refreshWorkoutContext().catch((error) => {
+          console.warn("Failed to refresh Coach after workout progress:", error);
+        });
+        return;
+      }
       if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
-        void sessionRef.current?.refreshWorkoutContext();
+        void sessionRef.current?.refreshWorkoutContext().catch((error) => {
+          console.warn("Failed to refresh Coach after workout update:", error);
+        });
       }, 300);
     });
     return () => {
@@ -523,6 +656,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
         return;
       }
       if (next === "active" && dayId && overlayOpenRef.current && !limitBlockedRef.current) {
+        void flushPendingTimedSetCompletions();
         void startSessionRef.current();
       }
     };

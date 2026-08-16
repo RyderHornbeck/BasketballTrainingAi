@@ -62,16 +62,17 @@ function guardTimerControl(
   toolName: string,
   timer: { running: boolean; elapsed_seconds: number; duration_seconds?: number | null } | undefined,
 ) {
-  if ((toolName !== "pause_timer" && toolName !== "resume_timer") || !timer) {
+  const pausesTimer = toolName === "pause_timer" || toolName === "stop_timer";
+  if ((!pausesTimer && toolName !== "resume_timer") || !timer) {
     return null;
   }
   const hasTimer = timer.running || timer.elapsed_seconds > 0 ||
     timer.duration_seconds != null;
   const result = !hasTimer
-    ? toolName === "pause_timer"
+    ? pausesTimer
       ? "You can't pause the timer because no timer is running."
       : "You can't resume the timer because no timer is running."
-    : toolName === "pause_timer" && !timer.running
+    : pausesTimer && !timer.running
     ? "The timer is already paused."
     : toolName === "resume_timer" && timer.running
     ? "The timer is already running."

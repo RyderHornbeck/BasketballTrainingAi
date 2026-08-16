@@ -2,7 +2,10 @@
 // screens like Days/Analytics to refetch after it writes workout updates.
 
 export type WorkoutUpdateSource = "manual" | "external" | "coach" | "coach_progress";
-type Listener = (source: WorkoutUpdateSource) => void;
+export interface WorkoutUpdateDetails {
+  stateVersion?: number;
+}
+type Listener = (source: WorkoutUpdateSource, details?: WorkoutUpdateDetails) => void;
 
 const listeners = new Set<Listener>();
 let workoutUpdateRevision = 0;
@@ -14,11 +17,14 @@ export function onWorkoutUpdated(listener: Listener): () => void {
   };
 }
 
-export function emitWorkoutUpdated(source: WorkoutUpdateSource = "external"): void {
+export function emitWorkoutUpdated(
+  source: WorkoutUpdateSource = "external",
+  details?: WorkoutUpdateDetails,
+): void {
   workoutUpdateRevision += 1;
   for (const listener of listeners) {
     try {
-      listener(source);
+      listener(source, details);
     } catch {
       // A broken listener shouldn't take down the others.
     }

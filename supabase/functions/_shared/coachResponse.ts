@@ -316,6 +316,16 @@ export function coachToolPreamble(
     const speech = assessCoachSpeech(`I'm searching for ${safeSubject}.`);
     return speech.ok ? speech.text : "I'm searching for that drill.";
   }
+  if (toolName === "add_workout_exercise") {
+    const exerciseName = typeof args.exercise_name === "string"
+      ? args.exercise_name.replace(/\s+/g, " ").trim()
+      : "";
+    if (exerciseName && exerciseName.length <= 100) {
+      const speech = assessCoachSpeech(`I'm adding ${exerciseName}.`);
+      return speech.ok ? speech.text : "I'm adding that drill.";
+    }
+    return "I'm adding that drill.";
+  }
 
   const preambles: Record<string, string> = {
     set_current_drill: "I'm moving you there.",
@@ -329,7 +339,6 @@ export function coachToolPreamble(
     stop_timer: "I'm stopping the timer.",
     set_timed_set_duration: "I'm changing that set time.",
     set_shooting_set_targets: "I'm changing those targets.",
-    add_workout_exercise: "I'm adding that drill.",
     remove_workout_exercise: "I'm removing that drill.",
     save_note: "I'm saving that note.",
   };

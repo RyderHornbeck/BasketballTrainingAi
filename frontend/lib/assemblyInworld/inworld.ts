@@ -1,17 +1,14 @@
-import {
-  createClient,
-  type InworldTTSClient,
-} from "@inworld/tts";
-
-// The HTTP streaming API has no shared prosody context across calls. Sending
-// token-sized deltas makes each one a new utterance, which is audible as
-// robotic pauses. These thresholds normally keep a full concise Coach reply
-// together while still beginning long answers before generation is complete.
+// Persistent Inworld bidirectional TTS WebSocket adapter. Local buffering
+// avoids turning model token deltas into separate audible utterances.
 const MINIMUM_UTTERANCE_CHARACTERS = 240;
 const MAXIMUM_UTTERANCE_WAIT_MS = 450;
 export const INITIAL_FIRST_AUDIO_TIMEOUT_MS = 2_000;
-export const RETRY_FIRST_AUDIO_TIMEOUT_MS = 3_000;
+// Kept as a named export for the recovery call site; both generations use the
+// same two-second deadline required for a persistent socket.
+export const RETRY_FIRST_AUDIO_TIMEOUT_MS = INITIAL_FIRST_AUDIO_TIMEOUT_MS;
 export const AUDIO_PROGRESS_TIMEOUT_MS = 4_000;
+const INWORLD_TTS_WEBSOCKET_URL =
+  "wss://api.inworld.ai/tts/v1/voice:streamBidirectional";
 
 export interface InworldRequestIdentity {
   clientId: number;
@@ -50,7 +47,9 @@ export type InworldLifecycleStage =
   | "request_completed"
   | "request_cancelled"
   | "request_error"
-  | "request_stalled";
+  | "request_stalled"
+  | "socket_opened"
+  | "socket_closed";
 
 export interface InworldTtsOptions {
   accessToken: string;
@@ -71,62 +70,148 @@ export interface InworldTtsOptions {
   ) => void;
 }
 
+interface InworldContext {
+  identity: InworldRequestIdentity;
+  firstAudioTimer: ReturnType<typeof setTimeout> | null;
+  progressTimer: ReturnType<typeof setTimeout> | null;
+  hasAudio: boolean;
+  final: boolean;
+  sentText: boolean;
+  lastFlushCompleted: boolean;
+}
+
+interface InworldSocketMessage {
+  result?: {
+    contextId?: string;
+    audioChunk?: {
+      audioContent?: string;
+      status?: { code?: number; message?: string };
+    };
+    flushCompleted?: Record<string, never>;
+    contextClosed?: Record<string, never>;
+    status?: { code?: number; message?: string };
+  };
+  error?: { code?: number; message?: string };
+}
+
+type ReactNativeWebSocket = WebSocket & {
+  close: (code?: number, reason?: string) => void;
+};
+
 export class InworldTtsClient {
-  private client: InworldTTSClient | null = null;
+  private socket: ReactNativeWebSocket | null = null;
+  private connectPromise: Promise<void> | null = null;
   private readonly pendingText = new Map<string, string>();
   private readonly flushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly cancelledContexts = new Set<string>();
-  private readonly contextQueues = new Map<string, Promise<void>>();
-  private requestsWithAudio = new Set<string>();
+  private readonly contexts = new Map<string, InworldContext>();
   private lifetime = 0;
   private requestSequence = 0;
-  private readonly firstAudioTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly progressTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly requestContexts = new Map<string, string>();
   private readonly clientId = ++clientSequence;
 
   constructor(private readonly options: InworldTtsOptions) {}
 
   get isOpen(): boolean {
-    return this.client !== null;
+    return this.socket?.readyState === WebSocket.OPEN;
   }
 
   connect(): Promise<void> {
     this.close();
     this.lifetime += 1;
-    this.client = createClient({
-      token: this.options.accessToken,
-      onTokenExpiring: this.options.refreshAccessToken,
-      timeout: 10_000,
-      // Retry transient TLS/network failures before reporting a failed turn.
-      // A mobile radio can briefly be between states while the first HTTP
-      // stream is opened.
-      maxRetries: 2,
+    const lifetime = this.lifetime;
+    this.connectPromise = new Promise<void>((resolve, reject) => {
+      // React Native accepts handshake headers as a third constructor argument.
+      const Socket = WebSocket as unknown as new (
+        url: string,
+        protocols?: string | string[],
+        options?: { headers?: Record<string, string> },
+      ) => ReactNativeWebSocket;
+      const socket = new Socket(INWORLD_TTS_WEBSOCKET_URL, undefined, {
+        headers: { Authorization: `Bearer ${this.options.accessToken}` },
+      });
+      this.socket = socket;
+      let connected = false;
+      socket.onopen = () => {
+        if (this.lifetime !== lifetime || this.socket !== socket) {
+          socket.close();
+          return;
+        }
+        connected = true;
+        this.options.onLifecycle?.("socket_opened", this.socketIdentity(), {
+          transport: "websocket",
+        });
+        resolve();
+      };
+      socket.onerror = () => {
+        if (!connected && this.lifetime === lifetime && this.socket === socket) {
+          this.socket = null;
+          reject(new Error("Inworld TTS WebSocket connection failed."));
+        }
+      };
+      socket.onclose = (event) => {
+        if (this.lifetime !== lifetime || this.socket !== socket) return;
+        this.socket = null;
+        this.options.onLifecycle?.("socket_closed", this.socketIdentity(), {
+          code: event.code,
+          reason: event.reason,
+        });
+        if (!connected) {
+          reject(new Error(`Inworld TTS WebSocket closed: ${event.reason || event.code}`));
+          return;
+        }
+        for (const context of [...this.contexts.values()]) {
+          this.failContext(context, `Inworld TTS WebSocket closed: ${event.reason || event.code}`);
+        }
+        this.options.onClose();
+      };
+      socket.onmessage = (event) => this.handleMessage(event.data, socket, lifetime);
     });
-    return Promise.resolve();
+    return this.connectPromise;
   }
 
   createContext(contextId: string): void {
     this.cancelledContexts.delete(contextId);
     this.pendingText.set(contextId, "");
-    this.contextQueues.set(contextId, Promise.resolve());
+    const context: InworldContext = {
+      identity: {
+        clientId: this.clientId,
+        requestId: `${this.lifetime}:${++this.requestSequence}`,
+        contextId,
+      },
+      firstAudioTimer: null,
+      progressTimer: null,
+      hasAudio: false,
+      final: false,
+      sentText: false,
+      lastFlushCompleted: false,
+    };
+    this.contexts.set(contextId, context);
+    this.send({
+      create: {
+        voiceId: this.options.voiceId,
+        modelId: "inworld-tts-2",
+        audioConfig: {
+          audioEncoding: "PCM",
+          sampleRateHertz: 16000,
+          speakingRate: 1.08,
+        },
+        language: "en-US",
+        deliveryMode: "BALANCED",
+        maxBufferDelayMs: 0,
+        bufferCharThreshold: 1000,
+      },
+      contextId,
+    });
   }
 
   pushText(contextId: string, text: string, finish = false): void {
     if (!text.trim() || this.cancelledContexts.has(contextId)) return;
     this.pendingText.set(contextId, `${this.pendingText.get(contextId) ?? ""}${text}`);
-    if (
-      !finish &&
-      (this.pendingText.get(contextId)?.length ?? 0) <
-        MINIMUM_UTTERANCE_CHARACTERS
-    ) {
+    if (!finish && (this.pendingText.get(contextId)?.length ?? 0) < MINIMUM_UTTERANCE_CHARACTERS) {
       if (!this.flushTimers.has(contextId)) {
         this.flushTimers.set(
           contextId,
-          setTimeout(
-            () => this.flush(contextId, false),
-            MAXIMUM_UTTERANCE_WAIT_MS,
-          ),
+          setTimeout(() => this.flush(contextId, false), MAXIMUM_UTTERANCE_WAIT_MS),
         );
       }
       return;
@@ -134,30 +219,8 @@ export class InworldTtsClient {
     this.flush(contextId, finish);
   }
 
-  private flush(contextId: string, final: boolean): void {
-    const timer = this.flushTimers.get(contextId);
-    if (timer) clearTimeout(timer);
-    this.flushTimers.delete(contextId);
-    const text = this.pendingText.get(contextId)?.trim() ?? "";
-    this.pendingText.set(contextId, "");
-    if (!text) return;
-    const previous = this.contextQueues.get(contextId) ?? Promise.resolve();
-    const queued = previous
-      .then(() => this.streamContext(contextId, text, final))
-      .catch(() => undefined);
-    this.contextQueues.set(contextId, queued);
-  }
-
   finish(contextId: string): void {
-    if (this.cancelledContexts.has(contextId)) return;
-    this.flush(contextId, true);
-    const previous = this.contextQueues.get(contextId) ?? Promise.resolve();
-    this.contextQueues.set(
-      contextId,
-      previous.then(() => {
-        this.options.onDone(contextId);
-      }),
-    );
+    if (!this.cancelledContexts.has(contextId)) this.flush(contextId, true);
   }
 
   cancel(contextId: string): void {
@@ -166,177 +229,196 @@ export class InworldTtsClient {
     if (timer) clearTimeout(timer);
     this.flushTimers.delete(contextId);
     this.pendingText.delete(contextId);
-    this.contextQueues.delete(contextId);
-    for (const [requestId, requestContextId] of this.requestContexts) {
-      if (requestContextId !== contextId) continue;
-      const timer = this.firstAudioTimers.get(requestId);
-      if (timer) clearTimeout(timer);
-      this.firstAudioTimers.delete(requestId);
-      const progressTimer = this.progressTimers.get(requestId);
-      if (progressTimer) clearTimeout(progressTimer);
-      this.progressTimers.delete(requestId);
-      this.requestsWithAudio.delete(requestId);
-      this.requestContexts.delete(requestId);
+    const context = this.contexts.get(contextId);
+    if (context) {
+      this.clearContextTimers(context);
+      this.contexts.delete(contextId);
+      this.options.onLifecycle?.("request_cancelled", context.identity);
     }
+    if (this.isOpen) this.send({ close_context: {}, contextId });
   }
 
   close(): void {
     this.lifetime += 1;
-    this.client = null;
+    const socket = this.socket;
+    this.socket = null;
+    this.connectPromise = null;
+    socket?.close(1000, "Coach session closed");
     for (const timer of this.flushTimers.values()) clearTimeout(timer);
     this.flushTimers.clear();
     this.pendingText.clear();
-    this.contextQueues.clear();
     this.cancelledContexts.clear();
-    this.requestsWithAudio.clear();
-    for (const timer of this.firstAudioTimers.values()) clearTimeout(timer);
-    this.firstAudioTimers.clear();
-    for (const timer of this.progressTimers.values()) clearTimeout(timer);
-    this.progressTimers.clear();
-    this.requestContexts.clear();
+    for (const context of this.contexts.values()) this.clearContextTimers(context);
+    this.contexts.clear();
   }
 
-  private async streamContext(
-    contextId: string,
-    text: string,
-    final: boolean,
-  ): Promise<void> {
-    const client = this.client;
-    if (!client) return;
-    const lifetime = this.lifetime;
-    const requestId = `${lifetime}:${++this.requestSequence}`;
-    const identity: InworldRequestIdentity = {
-      clientId: this.clientId,
-      requestId,
-      contextId,
-    };
-    const clearFirstAudioTimeout = () => {
-      const timer = this.firstAudioTimers.get(requestId);
-      if (timer) clearTimeout(timer);
-      this.firstAudioTimers.delete(requestId);
-      this.requestContexts.delete(requestId);
-    };
-    const clearProgressTimeout = () => {
-      const timer = this.progressTimers.get(requestId);
-      if (timer) clearTimeout(timer);
-      this.progressTimers.delete(requestId);
-    };
-    const scheduleProgressTimeout = () => {
-      clearProgressTimeout();
-      this.progressTimers.set(
-        requestId,
-        setTimeout(() => {
-          if (
-            this.lifetime === lifetime &&
-            this.client === client &&
-            !this.cancelledContexts.has(contextId) &&
-            this.requestsWithAudio.has(requestId)
-          ) {
-            this.options.onLifecycle?.("request_stalled", identity, {
-              timeout_ms: this.options.audioProgressTimeoutMs ?? AUDIO_PROGRESS_TIMEOUT_MS,
-            });
-            this.cancel(contextId);
-            this.options.onError(
-              new InworldAudioProgressTimeoutError(
-                contextId,
-                requestId,
-                this.options.audioProgressTimeoutMs ?? AUDIO_PROGRESS_TIMEOUT_MS,
-              ),
-              identity,
-            );
-          }
-        }, this.options.audioProgressTimeoutMs ?? AUDIO_PROGRESS_TIMEOUT_MS),
-      );
-    };
-    this.requestContexts.set(requestId, contextId);
-    this.firstAudioTimers.set(
-      requestId,
-      setTimeout(() => {
-        if (
-          this.lifetime === lifetime &&
-          this.client === client &&
-          !this.cancelledContexts.has(contextId) &&
-          !this.requestsWithAudio.has(requestId)
-        ) {
-          this.cancel(contextId);
-          this.options.onError(
-            new InworldFirstAudioTimeoutError(
-              contextId,
-              requestId,
-              this.options.firstAudioTimeoutMs ?? INITIAL_FIRST_AUDIO_TIMEOUT_MS,
-            ),
-            identity,
-          );
-        }
-      }, this.options.firstAudioTimeoutMs ?? INITIAL_FIRST_AUDIO_TIMEOUT_MS),
-    );
-    try {
-      const requestText =
-        `[warm supportive basketball coach with natural conversational pacing and brief pauses between thoughts] ${text}`;
+  private flush(contextId: string, final: boolean): void {
+    const flushTimer = this.flushTimers.get(contextId);
+    if (flushTimer) clearTimeout(flushTimer);
+    this.flushTimers.delete(contextId);
+    const context = this.contexts.get(contextId);
+    const text = this.pendingText.get(contextId)?.trim() ?? "";
+    this.pendingText.set(contextId, "");
+    if (!context || (!text && !final)) return;
+    context.final ||= final;
+    if (!context.sentText && text) {
+      context.sentText = true;
+      const requestText = this.withSteering(text);
       this.options.onBilledCharacters(requestText.length);
-      this.options.onLifecycle?.("request_started", identity, {
+      this.options.onLifecycle?.("request_started", context.identity, {
         characters: requestText.length,
         final,
+        transport: "websocket",
       });
-      for await (const audio of client.stream({
-        // TTS-2 interprets this steering tag instead of voicing it. Keeping the
-        // direction transport-side makes every streamed phrase consistent
-        // without requiring Haiku to emit provider-specific markup.
-        text: requestText,
-        voice: this.options.voiceId,
-        model: "inworld-tts-2",
-        encoding: "PCM",
-        sampleRate: 16000,
-        language: "en-US",
-        speakingRate: 1.08,
-        deliveryMode: "BALANCED",
-      })) {
-        if (
-          this.lifetime !== lifetime ||
-          this.client !== client ||
-          this.cancelledContexts.has(contextId)
-        ) return;
-        if (!this.requestsWithAudio.has(requestId)) {
-          clearFirstAudioTimeout();
-          this.requestsWithAudio.add(requestId);
-          this.options.onFirstAudio(identity);
-          this.options.onLifecycle?.("first_audio", identity, {
-            bytes: audio.byteLength,
-          });
-        }
-        scheduleProgressTimeout();
-        this.options.onLifecycle?.("audio_chunk", identity, {
-          bytes: audio.byteLength,
-        });
-        this.options.onAudio(bytesToBase64(audio), identity);
-      }
-      clearFirstAudioTimeout();
-      clearProgressTimeout();
-      this.options.onLifecycle?.("request_completed", identity);
-      this.requestsWithAudio.delete(requestId);
-      if (final && !this.cancelledContexts.has(contextId)) this.finish(contextId);
-    } catch (error) {
-      clearFirstAudioTimeout();
-      clearProgressTimeout();
-      this.requestsWithAudio.delete(requestId);
-      if (this.lifetime === lifetime && !this.cancelledContexts.has(contextId)) {
-        this.options.onLifecycle?.("request_error", identity, {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        this.options.onError(
-          error instanceof Error ? error : new Error("Inworld TTS request failed."),
-          identity,
-        );
-      }
+      this.scheduleFirstAudioTimeout(context);
     }
+    if (!text) {
+      // Do not emit an empty second flush. Inworld can synthesize the prior
+      // buffered phrase again, which made optimistic pre-tool lines play
+      // twice. If its previous flush already finished, the context can end
+      // immediately; otherwise the incoming flushCompleted event will do it.
+      if (final && context.sentText && context.lastFlushCompleted) {
+        this.completeContext(context);
+      }
+      return;
+    }
+    context.lastFlushCompleted = false;
+    this.send({
+      send_text: {
+        text: this.withSteering(text),
+        // The local 240-character / 450 ms gate is the latency/prosody
+        // boundary. Flush every one of those chunks so Inworld does not hold
+        // early Coach speech until its own 1,000-character threshold.
+        flush_context: {},
+      },
+      contextId,
+    });
+  }
+
+  private handleMessage(data: unknown, socket: ReactNativeWebSocket, lifetime: number): void {
+    if (this.lifetime !== lifetime || this.socket !== socket || typeof data !== "string") return;
+    let message: InworldSocketMessage;
+    try {
+      message = JSON.parse(data) as InworldSocketMessage;
+    } catch {
+      return;
+    }
+    const result = message.result;
+    const contextId = result?.contextId;
+    const context = contextId ? this.contexts.get(contextId) : undefined;
+    if (!context) return;
+    const status = message.error ?? result?.status ?? result?.audioChunk?.status;
+    if (status && status.code && status.code !== 0) {
+      this.failContext(context, status.message || `Inworld error ${status.code}`);
+      return;
+    }
+    const audio = result?.audioChunk?.audioContent;
+    if (audio) {
+      if (!context.hasAudio) {
+        context.hasAudio = true;
+        this.clearFirstAudioTimeout(context);
+        this.options.onFirstAudio(context.identity);
+        this.options.onLifecycle?.("first_audio", context.identity, {
+          bytes: base64ByteLength(audio),
+        });
+      }
+      this.scheduleProgressTimeout(context);
+      this.options.onLifecycle?.("audio_chunk", context.identity, {
+        bytes: base64ByteLength(audio),
+      });
+      this.options.onAudio(audio, context.identity);
+    }
+    if (result?.flushCompleted) {
+      // A WebSocket context can serve multiple independently flushed phrases:
+      // e.g. "I'm searching for..." followed by the catalog options. A
+      // completed non-final flush is healthy, not an audio stall.
+      if (context.progressTimer) clearTimeout(context.progressTimer);
+      context.progressTimer = null;
+      context.lastFlushCompleted = true;
+      if (context.final) this.completeContext(context);
+    } else if (result?.contextClosed) {
+      this.completeContext(context);
+    }
+  }
+
+  private scheduleFirstAudioTimeout(context: InworldContext): void {
+    this.clearFirstAudioTimeout(context);
+    const timeoutMs = this.options.firstAudioTimeoutMs ?? INITIAL_FIRST_AUDIO_TIMEOUT_MS;
+    context.firstAudioTimer = setTimeout(() => {
+      if (this.contexts.get(context.identity.contextId) !== context || context.hasAudio) return;
+      this.options.onLifecycle?.("request_error", context.identity, {
+        error: "first_audio_timeout",
+        timeout_ms: timeoutMs,
+      });
+      this.options.onError(
+        new InworldFirstAudioTimeoutError(
+          context.identity.contextId,
+          context.identity.requestId,
+          timeoutMs,
+        ),
+        context.identity,
+      );
+    }, timeoutMs);
+  }
+
+  private scheduleProgressTimeout(context: InworldContext): void {
+    if (context.progressTimer) clearTimeout(context.progressTimer);
+    const timeoutMs = this.options.audioProgressTimeoutMs ?? AUDIO_PROGRESS_TIMEOUT_MS;
+    context.progressTimer = setTimeout(() => {
+      if (this.contexts.get(context.identity.contextId) !== context) return;
+      this.options.onLifecycle?.("request_stalled", context.identity, { timeout_ms: timeoutMs });
+      this.options.onError(
+        new InworldAudioProgressTimeoutError(
+          context.identity.contextId,
+          context.identity.requestId,
+          timeoutMs,
+        ),
+        context.identity,
+      );
+    }, timeoutMs);
+  }
+
+  private failContext(context: InworldContext, message: string): void {
+    this.clearContextTimers(context);
+    this.options.onLifecycle?.("request_error", context.identity, { error: message });
+    this.options.onError(new Error(message), context.identity);
+  }
+
+  private completeContext(context: InworldContext): void {
+    this.clearContextTimers(context);
+    this.contexts.delete(context.identity.contextId);
+    this.options.onLifecycle?.("request_completed", context.identity);
+    if (context.final && !this.cancelledContexts.has(context.identity.contextId)) {
+      this.options.onDone(context.identity.contextId);
+    }
+  }
+
+  private clearFirstAudioTimeout(context: InworldContext): void {
+    if (context.firstAudioTimer) clearTimeout(context.firstAudioTimer);
+    context.firstAudioTimer = null;
+  }
+
+  private clearContextTimers(context: InworldContext): void {
+    this.clearFirstAudioTimeout(context);
+    if (context.progressTimer) clearTimeout(context.progressTimer);
+    context.progressTimer = null;
+  }
+
+  private send(message: Record<string, unknown>): void {
+    if (!this.isOpen) throw new Error("Inworld TTS WebSocket is not connected.");
+    this.socket?.send(JSON.stringify(message));
+  }
+
+  private socketIdentity(): InworldRequestIdentity {
+    return { clientId: this.clientId, requestId: `socket:${this.lifetime}`, contextId: "" };
+  }
+
+  private withSteering(text: string): string {
+    return `[warm supportive basketball coach with natural conversational pacing and brief pauses between thoughts] ${text}`;
   }
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const block = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += block) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + block));
-  }
-  return globalThis.btoa(binary);
+function base64ByteLength(value: string): number {
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
 }

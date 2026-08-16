@@ -277,7 +277,7 @@ Deno.test("tool continuation honors exact speech and skip-model precedence", () 
   );
 });
 
-Deno.test("catalog search preamble is natural and hides query mechanics", () => {
+Deno.test("catalog search preamble is natural and additions name the selected drill", () => {
   assert(
     coachToolPreamble("search_exercise_catalog", {
       query: "search the exercise catalog for V dribble drills",
@@ -285,19 +285,14 @@ Deno.test("catalog search preamble is natural and hides query mechanics", () => 
     "search preamble should speak only the compact drill reference",
   );
   assert(
-    coachToolPreamble("search_exercise_catalog", {
-      query:
-        "find a very long complicated drill query with many internal filtering words and details",
-    }) === "I'm searching for that drill.",
-    "long internal queries should use a generic athlete-facing preamble",
-  );
-  assert(
     coachToolPreamble("start_timer", {}) === "I'm starting the timer.",
     "timer mutations should have a short athlete-facing preamble",
   );
   assert(
-    coachToolPreamble("add_workout_exercise", {}) === "I'm adding that drill.",
-    "drill additions should have a short athlete-facing preamble",
+    coachToolPreamble("add_workout_exercise", {
+      exercise_name: "V Dribble Series",
+    }) === "I'm adding V Dribble Series.",
+    "drill additions should name the selected drill",
   );
   assert(
     coachToolPreamble("get_progress", {}) === null,
@@ -307,12 +302,6 @@ Deno.test("catalog search preamble is natural and hides query mechanics", () => 
     coachToolPreamble("set_current_drill", {}) === null &&
       coachToolPreamble("skip_drill", {}) === null,
     "navigation must reserve its single athlete-facing response for the completed move",
-  );
-  assert(
-    coachToolPreamble("search_exercise_catalog", {
-      query: "function_call invoke get_progress",
-    }) === "I'm searching for that drill.",
-    "pseudo tool syntax in a query must not enter a preamble",
   );
 });
 

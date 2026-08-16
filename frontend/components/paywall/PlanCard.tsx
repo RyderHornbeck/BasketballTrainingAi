@@ -67,7 +67,7 @@ const styles = StyleSheet.create({
   },
   price: {
     marginTop: 1,
-    fontSize: 17,
+    fontSize: 14,
     fontWeight: "800",
   },
 });

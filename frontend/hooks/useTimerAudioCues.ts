@@ -1,7 +1,7 @@
 import { useAudioPlayer } from "expo-audio";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
-type TimerCue = "halfway" | "tenSeconds" | "complete";
+type TimerCue = "halfway" | "tenSeconds";
 const TIMER_PLAYER_OPTIONS = { keepAudioSessionActive: true } as const;
 
 interface TimerCueState {
@@ -24,10 +24,6 @@ export function useTimerAudioCues() {
     require("../assets/sounds/10SecondsLeft.mp3"),
     TIMER_PLAYER_OPTIONS
   );
-  const completePlayer = useAudioPlayer(
-    require("../assets/sounds/TimesUp.mp3"),
-    TIMER_PLAYER_OPTIONS
-  );
   const stateRef = useRef<TimerCueState>({
     runId: null,
     previousRemaining: null,
@@ -37,8 +33,8 @@ export function useTimerAudioCues() {
   const disposedRef = useRef(false);
 
   const players = useMemo(
-    () => [halfwayPlayer, tenSecondsPlayer, completePlayer],
-    [completePlayer, halfwayPlayer, tenSecondsPlayer]
+    () => [halfwayPlayer, tenSecondsPlayer],
+    [halfwayPlayer, tenSecondsPlayer]
   );
 
   const stopAll = useCallback(() => {
@@ -76,7 +72,7 @@ export function useTimerAudioCues() {
   const play = useCallback(
     (cue: TimerCue) => {
       const player =
-        cue === "halfway" ? halfwayPlayer : cue === "tenSeconds" ? tenSecondsPlayer : completePlayer;
+        cue === "halfway" ? halfwayPlayer : tenSecondsPlayer;
       const playbackVersion = stateRef.current.playbackVersion;
       try {
         player.pause();
@@ -92,7 +88,7 @@ export function useTimerAudioCues() {
         // Ignore a cue request after the player has been released.
       }
     },
-    [completePlayer, halfwayPlayer, tenSecondsPlayer]
+    [halfwayPlayer, tenSecondsPlayer]
   );
 
   const sync = useCallback(
@@ -113,7 +109,6 @@ export function useTimerAudioCues() {
       const cues: [TimerCue, number][] = [
         ["halfway", durationSeconds / 2],
         ["tenSeconds", 10],
-        ["complete", 0],
       ];
 
       for (const [cue, threshold] of cues) {

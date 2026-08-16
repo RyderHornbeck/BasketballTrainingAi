@@ -26,6 +26,10 @@ export interface ContinuationConfirmationArgs {
   accepted: boolean;
 }
 
+export interface StartupConfirmationArgs {
+  accepted: boolean;
+}
+
 export interface SpeechControlIntentArgs {
   action: "stop_speaking";
 }
@@ -89,6 +93,7 @@ export type CoachSpeechIntent =
   | IntentBase<"timer_duration_confirmation", TimerDurationConfirmationArgs>
   | IntentBase<"set_completion_confirmation", SetCompletionConfirmationArgs>
   | IntentBase<"continuation_confirmation", ContinuationConfirmationArgs>
+  | IntentBase<"startup_confirmation", StartupConfirmationArgs>
   | IntentBase<"speech_control", SpeechControlIntentArgs>
   | IntentBase<"navigation", NavigationIntentArgs>
   | IntentBase<"completion", CompletionIntentArgs>
@@ -262,6 +267,7 @@ export function normalizeCoachSpeech(transcript: string | null | undefined): str
     .replace(/^please\s+/, "")
     .replace(/^(?:please\s+)?tell\s+me\s+/, "")
     .replace(/^please\s+/, "")
+    .replace(/^(?:so\s+)+/, "")
     .replace(/^(?:fire\s+up)\s+/, "start ")
     .replace(/^(start|set)\s+me\s+(?:a\s+)?/, "$1 a ")
     .replace(/\s+(?:court\s+)?coach(?:es|s)?$/, "")
@@ -381,7 +387,7 @@ export const parseShotIntent: Parser = (text) => {
   }
 
   if (
-    /^(?:(?:i\s+)?(?:just\s+)?)?(?:make|made|hit(?: it)?|swish(?:ed)?|bucket|another make)(?:\s+(?:one|another)(?:\s+shot)?|\s+again)?$/.test(
+    /^(?:(?:i\s+)?(?:just\s+)?)?(?:make|made(?: it)?|hit(?: it)?|swish(?:ed)?|bucket|another make)(?:\s+(?:one|another)(?:\s+shot)?|\s+again)?$/.test(
       text
     )
   ) {
@@ -465,14 +471,14 @@ export const parseTimerIntent: Parser = (text) => {
       "Pause timer heard",
     ],
     [
-      /^(?:resume|continue|unpause)(?:\s+the)?\s+(?:timer|countdown|stopwatch)$/,
+      /^(?:resume|continue|unpause)(?:\s+the)?\s+(?:timer|countdown|stopwatch)$|^(?:start|turn)(?:\s+it)?\s+back(?:\s+up)?(?:\s+again)?$/,
       "resume",
       "Resume timer heard",
     ],
     [
-      /^(?:stop|end|cancel|clear)(?:\s+the)?\s+(?:timer|countdown|stopwatch)$/,
-      "stop",
-      "Stop timer heard",
+      /^(?:stop|end|cancel|clear|break|take a break)(?:\s+(?:the))?\s+(?:timer|countdown|stopwatch)$/,
+      "pause",
+      "Pause timer heard",
     ],
     [
       /^(?:reset)(?:\s+the)?\s+(?:timer|countdown|stopwatch)$/,
@@ -517,7 +523,12 @@ export const parseNavigationIntent: Parser = (text) => {
     /^(?:whats|what is) (?:the )?(next|current) (set|drill|exercise|thing)|^(?:what|which) (set|drill|exercise|thing) am i on$|^what comes after this$/
   );
   if (match) {
-    const unit = navigationUnit(match[2] ?? match[3]);
+    // “What comes after this?” is a next-set question, not permission to
+    // select another drill. Only explicit "next drill/exercise" wording uses
+    // drill navigation.
+    const unit = text === "what comes after this"
+      ? "set"
+      : navigationUnit(match[2] ?? match[3]);
     const target = match[1] === "next" || text === "what comes after this" ? "next" : "current";
     return intent(
       "navigation",
@@ -532,17 +543,15 @@ export const parseNavigationIntent: Parser = (text) => {
       "What's next heard"
     );
   }
-  if (/^(?:(?:let'?s\s+)?(?:move on|keep going|continue)|let'?s go)$/.test(text)) {
+  if (/^(?:(?:let'?s\s+)?(?:move on|keep going|continue)|let'?s(?:\s+now)?\s+continue|let'?s go)$/.test(text)) {
     return intent(
       "navigation",
       {
-        mode: "action",
+        mode: "query",
         unit: "set",
         target: { type: "next" },
-        skip: false,
-        resumeCurrentIfIncomplete: true,
       },
-      "Continue current set heard"
+      "What's next heard"
     );
   }
   if (/^(?:whats|what is|what do i have) (?:up )?next(?: for me)?$/.test(text)) {
@@ -553,7 +562,7 @@ export const parseNavigationIntent: Parser = (text) => {
     );
   }
   match = text.match(
-    /^(?:where am i|(?:whats|what is) (?:the )?current (set|drill|exercise|thing)|(?:what|which) (set|drill|exercise|thing) (?:am i|are we) (?:on|doing))$/
+    /^(?:where (?:am i|are we|we at)|(?:whats|what is) (?:the )?current (set|drill|exercise|thing)|(?:what|which) (set|drill|exercise|thing) (?:am i|are we) (?:on|doing))$/
   );
   if (match) {
     const unit = navigationUnit(match[1] ?? match[2]);
