@@ -413,10 +413,6 @@ export function useCoach(dayId: string | null): UseCoachResult {
           onStatus: (next) => {
             if (!mountedRef.current || limitBlockedRef.current) return;
             setStatus(next);
-            if (next === "listening" || next === "thinking" || next === "speaking") {
-              reconnectAttemptsRef.current = 0;
-              setError(null);
-            }
           },
           onError: (msg) => {
             if (!mountedRef.current) return;
@@ -542,6 +538,15 @@ export function useCoach(dayId: string | null): UseCoachResult {
           },
           onProviderConnected: (provider) => {
             if (mountedRef.current) setConnectedProvider(provider);
+          },
+          onConnectionEstablished: () => {
+            if (!mountedRef.current) return;
+            // Socket readiness can precede the first TTS audio on a weak
+            // network. Reset retries only after greeting playback proves the
+            // whole voice path is usable; otherwise every failed startup
+            // would reset the counter and reconnect forever.
+            reconnectAttemptsRef.current = 0;
+            setError(null);
           },
           onProviderFallback: (reason) => {
             if (mountedRef.current) setProviderFallbackReason(reason);

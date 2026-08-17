@@ -213,6 +213,7 @@ export interface RealtimeCoachCallbacks {
   onBudgetUpdate?: (spentUsd: number, budgetUsd: number) => void;
   onSessionEnded?: (reason: string) => void;
   onProviderConnected?: (provider: CoachVoiceProvider) => void;
+  onConnectionEstablished?: () => void;
   onProviderFallback?: (reason: string) => void;
 }
 
@@ -818,6 +819,7 @@ export class RealtimeCoachSession {
   private preferredName: string | null = null;
   private startupGreetingActive = false;
   private startupGreetingPlaybackStarted = false;
+  private startupConnectionEstablished = false;
   private startupGreetingResolver: (() => void) | null = null;
   private startupGreetingTimeout: ReturnType<typeof setTimeout> | null = null;
   private timerEncouragementSequence = 0;
@@ -919,6 +921,7 @@ export class RealtimeCoachSession {
     this.preferredName = null;
     this.startupGreetingActive = true;
     this.startupGreetingPlaybackStarted = false;
+    this.startupConnectionEstablished = false;
     this.startupGreetingResolver = null;
     if (this.startupGreetingTimeout) clearTimeout(this.startupGreetingTimeout);
     this.startupGreetingTimeout = null;
@@ -1443,6 +1446,7 @@ export class RealtimeCoachSession {
         this.playbackActive = event.state === "playing";
         if (event.state === "playing" && this.startupGreetingActive) {
           this.startupGreetingPlaybackStarted = true;
+          this.markStartupConnectionEstablished();
         }
         if (event.state === "playing" && this.inworldPlaybackStartWatchdog) {
           clearTimeout(this.inworldPlaybackStartWatchdog);
@@ -1737,6 +1741,7 @@ export class RealtimeCoachSession {
         this.playbackActive = event.state === "playing";
         if (event.state === "playing" && this.startupGreetingActive) {
           this.startupGreetingPlaybackStarted = true;
+          this.markStartupConnectionEstablished();
         }
         // Inworld has delivered PCM once this native event fires. Leaving the
         // first-playback watchdog armed would clear healthy audio 2.5 seconds
@@ -4778,6 +4783,15 @@ export class RealtimeCoachSession {
       this.startupGreetingResolver = null;
       resolve();
     }
+  }
+
+  private markStartupConnectionEstablished(): void {
+    if (this.startupConnectionEstablished) return;
+    this.startupConnectionEstablished = true;
+    // A transport is not healthy merely because sockets connected: on weak
+    // networks the greeting transcript can arrive before its first audio.
+    // Count a session as established only when native playback really starts.
+    this.callbacks?.onConnectionEstablished?.();
   }
 
   private async playStartupGreeting(generation: number): Promise<void> {
