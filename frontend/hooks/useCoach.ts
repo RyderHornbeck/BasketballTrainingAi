@@ -89,6 +89,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const coachTranscriptTargetRef = useRef("");
   const coachTranscriptShownWordCountRef = useRef(0);
   const userTranscriptRef = useRef("");
+  const transcriptGenerationRef = useRef(0);
 
   const [status, setStatus] = useState<CoachStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -258,28 +259,27 @@ export function useCoach(dayId: string | null): UseCoachResult {
             completedDurationSeconds,
             prefetched,
           );
+          // Advance and narrate locally first. The completion remains durable
+          // through the outbox, but the athlete should never wait on a network
+          // round trip to hear which set comes next.
+          sessionRef.current?.transitionTimedSetLocally(
+            completedExerciseId,
+            completedSetNumber,
+          );
+          void sessionRef.current?.announceTimedSetCompletion(
+            completedExerciseId,
+            completedSetNumber,
+          ).catch((announcementError) => {
+            console.error("Failed to announce timed set completion:", announcementError);
+          });
           const synchronized = sessionRef.current
-            ? sessionRef.current.syncExternalWorkoutMutation(completion)
+            ? sessionRef.current.syncExternalWorkoutMutation(completion, {
+                preserveCurrentSpeech: true,
+              })
             : completion;
           void synchronized
-            .then(() =>
-              sessionRef.current?.announceTimedSetCompletion(
-                completedExerciseId,
-                completedSetNumber,
-              ),
-            )
             .catch((error) => {
-              // The set-end narration must not be lost merely because the
-              // post-completion context refresh failed. The session will use
-              // next-set guidance only from an authoritative refreshed state;
-              // otherwise it safely confirms the completed set.
               console.error("Timed set context synchronization failed:", error);
-              return sessionRef.current?.announceTimedSetCompletion(
-                completedExerciseId,
-                completedSetNumber,
-              ).catch((announcementError) => {
-                console.error("Failed to announce timed set completion:", announcementError);
-              });
             });
         }
       }
@@ -431,6 +431,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
           getTimerState,
           onUserTranscript: (text) => {
             if (!mountedRef.current) return;
+            transcriptGenerationRef.current += 1;
             const isContinuation =
               userTranscriptRef.current.length > 0 &&
               text.startsWith(userTranscriptRef.current);
@@ -448,6 +449,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
           },
           onCoachTranscript: (text) => {
             if (!mountedRef.current) return;
+            transcriptGenerationRef.current += 1;
             if (coachTranscriptTimerRef.current) clearTimeout(coachTranscriptTimerRef.current);
             setCoachTranscriptFadeVersion(0);
             coachTranscriptTargetRef.current = text;
@@ -468,12 +470,19 @@ export function useCoach(dayId: string | null): UseCoachResult {
           },
           onCoachPlaybackFinished: () => {
             if (!mountedRef.current) return;
+            const playbackGeneration = transcriptGenerationRef.current;
             if (coachTranscriptTimerRef.current) clearTimeout(coachTranscriptTimerRef.current);
             coachTranscriptTimerRef.current = setTimeout(() => {
-              if (!mountedRef.current) return;
+              if (
+                !mountedRef.current ||
+                playbackGeneration !== transcriptGenerationRef.current
+              ) return;
               setCoachTranscriptFadeVersion((version) => version + 1);
               coachTranscriptTimerRef.current = setTimeout(() => {
-                if (!mountedRef.current) return;
+                if (
+                  !mountedRef.current ||
+                  playbackGeneration !== transcriptGenerationRef.current
+                ) return;
                 userTranscriptRef.current = "";
                 setUserTranscript("");
                 setCoachTranscript("");
@@ -629,6 +638,9 @@ export function useCoach(dayId: string | null): UseCoachResult {
           console.warn("Failed to refresh Coach after workout progress:", error);
         });
         return;
+      }
+      if (source === "manual" && details?.stateVersion != null) {
+        sessionRef.current?.noteExternalWorkoutMutationVersion(details.stateVersion);
       }
       if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {

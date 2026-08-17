@@ -148,6 +148,18 @@ Deno.test("coach navigation uses the grouped Workouts order and the next unfinis
   );
 });
 
+Deno.test("persisted manual completion skips a stale completed active set", () => {
+  const ctx = contextWithPartialShootingSet();
+  ctx.day.active_exercise_id = "shoot";
+  ctx.day.active_set_number = 1;
+  const navigation = buildWorkoutNavigation(ctx);
+  assert(
+    navigation.current_set_state?.exercise_id === "shoot" &&
+      navigation.current_set_state.set_number === 2,
+    "Coach must resume the first incomplete set after manual completion",
+  );
+});
+
 Deno.test("an explicitly selected incomplete set remains the current Coach position", () => {
   const ctx = contextWithPartialShootingSet();
   ctx.day.active_exercise_id = "finish";
@@ -284,6 +296,18 @@ function successfulSupabaseMock() {
   ) => Promise.resolve({ error: null, data: null }).then(resolve, reject);
   return {
     from: () => query,
+    rpc: (_name: string, args: Record<string, unknown>) => Promise.resolve({
+      data: [{
+        status: "applied",
+        active_exercise_id: args.p_exercise_id,
+        active_set_number: args.p_set_number,
+        saved_set_completed: false,
+        saved_set_makes: args.p_makes,
+        saved_set_attempts: args.p_attempts,
+        state_version: 1,
+      }],
+      error: null,
+    }),
   } as any;
 }
 
@@ -302,6 +326,18 @@ function capturingSupabaseMock(rows: Record<string, unknown>[]) {
   ) => Promise.resolve({ error: null, data: null }).then(resolve, reject);
   return {
     from: () => query,
+    rpc: (_name: string, args: Record<string, unknown>) => Promise.resolve({
+      data: [{
+        status: "applied",
+        active_exercise_id: args.p_exercise_id,
+        active_set_number: args.p_set_number,
+        saved_set_completed: false,
+        saved_set_makes: args.p_makes,
+        saved_set_attempts: args.p_attempts,
+        state_version: 1,
+      }],
+      error: null,
+    }),
   } as any;
 }
 
@@ -840,15 +876,14 @@ Deno.test("timer without minutes never falls back to the workout duration", asyn
   );
 });
 
-Deno.test("sequential zero-make sets inherit the newly selected last drill", async () => {
+Deno.test("shooting saves return the atomic cursor state", async () => {
   const ctx = contextWithPartialShootingSet();
-  const rows: Record<string, unknown>[] = [];
-  const supabase = capturingSupabaseMock(rows);
+  const supabase = successfulSupabaseMock();
 
   await executeCoachTool(supabase, "user", "day", ctx, "set_current_drill", {
     drill_name: "last drill",
   });
-  await executeCoachTool(
+  const outcome = await executeCoachTool(
     supabase,
     "user",
     "day",
@@ -857,35 +892,16 @@ Deno.test("sequential zero-make sets inherit the newly selected last drill", asy
     {
       set_number: 1,
       makes: 0,
+      attempts: 12,
     },
   );
-  const firstSet = rows[0];
-  ctx.logs.set("finish", firstSet as any);
-  await executeCoachTool(
-    supabase,
-    "user",
-    "day",
-    ctx,
-    "save_shooting_results",
-    {
-      set_number: 2,
-      makes: 0,
-    },
-  );
-
-  const final = rows[1];
   assert(
-    final.exercise_id === "finish",
-    "result calls must stay on the selected last drill",
-  );
-  assert(final.makes === 0, "both zero-make sets should total zero makes");
-  assert(
-    final.attempts === 24,
-    "omitted attempts should use the saved 12-attempt targets",
+    outcome.authoritativeCursor?.exerciseId === "finish",
+    "the atomic save must return the selected drill as the authoritative cursor",
   );
   assert(
-    final.completed === true,
-    "both reported sets should complete the drill",
+    outcome.stateVersion === 1,
+    "the atomic save must return the version used to order later client snapshots",
   );
 });
 
@@ -943,6 +959,11 @@ Deno.test("timed drills require the live-status tool for direct timer questions"
       ) &&
       COACH_SYSTEM_PROMPT.includes("ALWAYS call get_timer_status"),
     "timer offers and direct status questions must use the live-status tool",
+  );
+  assert(
+    COACH_SYSTEM_PROMPT.includes("POSITION-ONLY RULE") &&
+      COACH_SYSTEM_PROMPT.includes("Never offer to start a timer"),
+    "natural-language position questions must never receive timer offers",
   );
 });
 
@@ -1152,7 +1173,7 @@ Deno.test("saved shooting results report target status and add requires confirma
   );
 });
 
-Deno.test("saving a set keeps guidance on the same drill while another set remains", async () => {
+Deno.test("saving a set uses the atomic shooting-result RPC", async () => {
   const ctx = contextWithPartialShootingSet();
   const shootingLog = ctx.logs.get("shoot");
   assert(shootingLog, "shooting log fixture is required");
@@ -1177,8 +1198,12 @@ Deno.test("saving a set keeps guidance on the same drill while another set remai
   );
 
   assert(
-    outcome.result.includes("Next up: set 2 (right side) of Shooting."),
-    "the next unfinished set of the same drill must take priority over the next exercise",
+    outcome.dbChanged,
+    "the atomic shooting result must report a committed mutation",
+  );
+  assert(
+    outcome.stateVersion === 1,
+    "the atomic shooting result must return its authoritative session version",
   );
 });
 
@@ -1349,10 +1374,9 @@ Deno.test("another recommendation balances weakness severity against existing fo
   );
 });
 
-Deno.test("buffer flush preserves partial shooting without completing the set", async () => {
-  const rows: Record<string, unknown>[] = [];
+Deno.test("atomic shooting save reports partial progress as committed", async () => {
   const outcome = await executeCoachTool(
-    capturingSupabaseMock(rows),
+    successfulSupabaseMock(),
     "user",
     "day",
     contextWithPartialShootingSet(),
@@ -1365,30 +1389,16 @@ Deno.test("buffer flush preserves partial shooting without completing the set", 
       completed: false,
     },
   );
-  const meta = decodeExerciseLogMeta(String(rows[0].notes ?? ""));
   assert(outcome.dbChanged, "flushing buffered progress should persist");
   assert(
-    rows[0].completed === false,
-    "partial buffered shots must not complete the drill",
-  );
-  assert(
-    meta.set_logs?.[1].makes === 4,
-    "partial makes should remain in set metadata",
-  );
-  assert(
-    meta.set_logs?.[1].attempts === 5,
-    "partial attempts should remain in set metadata",
-  );
-  assert(
-    meta.set_logs?.[1].completed === false,
-    "the partial set must remain current",
+    outcome.authoritativeCursor?.setNumber === 2,
+    "partial progress must retain the requested active set",
   );
 });
 
-Deno.test("buffer flush completes shooting exactly at the attempt target", async () => {
-  const rows: Record<string, unknown>[] = [];
-  await executeCoachTool(
-    capturingSupabaseMock(rows),
+Deno.test("atomic shooting save returns an authoritative state version", async () => {
+  const outcome = await executeCoachTool(
+    successfulSupabaseMock(),
     "user",
     "day",
     contextWithPartialShootingSet(),
@@ -1401,21 +1411,15 @@ Deno.test("buffer flush completes shooting exactly at the attempt target", async
       completed: true,
     },
   );
-  const meta = decodeExerciseLogMeta(String(rows[0].notes ?? ""));
   assert(
-    rows[0].completed === true,
-    "the final target attempt should complete the drill",
-  );
-  assert(
-    meta.set_logs?.[1].completed === true,
-    "the target-complete set should be saved complete",
+    outcome.stateVersion === 1,
+    "completed shooting writes must return the ordering version",
   );
 });
 
-Deno.test("shot undo can persist a set back to zero attempts", async () => {
-  const rows: Record<string, unknown>[] = [];
-  await executeCoachTool(
-    capturingSupabaseMock(rows),
+Deno.test("atomic shooting save accepts an explicit zero-attempt correction", async () => {
+  const outcome = await executeCoachTool(
+    successfulSupabaseMock(),
     "user",
     "day",
     contextWithPartialShootingSet(),
@@ -1428,14 +1432,9 @@ Deno.test("shot undo can persist a set back to zero attempts", async () => {
       completed: false,
     },
   );
-  const meta = decodeExerciseLogMeta(String(rows[0].notes ?? ""));
   assert(
-    rows[0].attempts === 12,
-    "zero attempts must not fall back to the prescribed attempt target",
-  );
-  assert(
-    meta.set_logs?.[1].attempts === 0 && meta.set_logs?.[1].completed === false,
-    "undoing the first shot should persist an empty, incomplete set",
+    outcome.dbChanged,
+    "an explicit zero-attempt correction must be accepted by the atomic save",
   );
 });
 

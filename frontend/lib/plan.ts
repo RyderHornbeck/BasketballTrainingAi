@@ -395,22 +395,34 @@ export async function saveExerciseLog(
   const userId = userData.user?.id;
   if (!userId) throw new Error("Not authenticated");
 
-  const { data, error } = await supabase.from("exercise_logs").upsert(
+  const { data: cursorRows, error: saveError } = await supabase.rpc(
+    "save_my_exercise_log_v2",
     {
-      exercise_id: log.exercise_id,
-      day_id: dayId,
-      user_id: userId,
-      completed: log.completed,
-      makes: log.makes ?? null,
-      attempts: log.attempts ?? null,
-      minutes_completed: log.minutes_completed ?? null,
-      difficulty: log.difficulty ?? null,
-      notes: log.notes ?? null,
+      p_day_id: dayId,
+      p_exercise_id: log.exercise_id,
+      p_completed: log.completed,
+      p_makes: log.makes ?? null,
+      p_attempts: log.attempts ?? null,
+      p_minutes_completed: log.minutes_completed ?? null,
+      p_difficulty: log.difficulty ?? null,
+      p_notes: log.notes ?? null,
     },
-    { onConflict: "exercise_id" }
-  ).select().single();
-  if (error) throw new Error(`Failed to save log: ${error.message}`);
-  emitWorkoutUpdated("manual");
+  );
+  if (saveError) throw new Error(`Failed to save log: ${saveError.message}`);
+  const cursor = Array.isArray(cursorRows) ? cursorRows[0] : cursorRows;
+  const { data, error } = await supabase
+    .from("exercise_logs")
+    .select("*")
+    .eq("exercise_id", log.exercise_id)
+    .eq("user_id", userId)
+    .single();
+  if (error) throw new Error(`Failed to load saved log: ${error.message}`);
+  emitWorkoutUpdated("manual", {
+    stateVersion:
+      cursor && typeof cursor.state_version === "number"
+        ? cursor.state_version
+        : undefined,
+  });
   return data as ExerciseLog;
 }
 

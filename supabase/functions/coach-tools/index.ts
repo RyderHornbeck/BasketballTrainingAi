@@ -244,8 +244,8 @@ Deno.serve(async (req: Request) => {
       throw toolError;
     }
 
-    let stateVersion = Number(activeSession.state_version ?? 0);
-    if (outcome.dbChanged) {
+    let stateVersion = outcome.stateVersion ?? Number(activeSession.state_version ?? 0);
+    if (outcome.dbChanged && outcome.stateVersion == null) {
       const { data: advancedVersion, error: stateError } = await supabase.rpc(
         "advance_coach_session_state",
         {
@@ -279,14 +279,17 @@ Deno.serve(async (req: Request) => {
       p_user_id: userId,
     });
 
-    const refreshedContext = outcome.dbChanged
+    // The atomic shooting RPC already returns the cursor and state version.
+    // Avoid reloading and serializing the complete workout for every rep.
+    const isAtomicShootingSave = body.tool_name === "save_shooting_results";
+    const refreshedContext = outcome.dbChanged && !isAtomicShootingSave
       ? await loadWorkoutContext(supabase, userId, body.day_id)
       : ctx;
     const toolKind = COACH_READ_ONLY_TOOLS.has(body.tool_name) ? "read_only" : "mutation";
     const speakExact = !outcome.skipModelResponse &&
       EXACT_CONFIRMATION_TOOLS.has(body.tool_name) &&
       !outcome.result.startsWith("Error:");
-    const contextJson = refreshedContext
+    const contextJson = refreshedContext && !isAtomicShootingSave
       ? buildCompactContextSummary(refreshedContext, answers ?? null, undefined)
       : null;
 
@@ -304,7 +307,7 @@ Deno.serve(async (req: Request) => {
       db_changed: outcome.dbChanged,
       local_confirmation: outcome.localConfirmation ?? null,
       skip_model_response: outcome.skipModelResponse ?? false,
-      updated_context: refreshedContext
+      updated_context: refreshedContext && !isAtomicShootingSave
         ? buildRealtimeNavigationUpdate(
             refreshedContext,
             outcome.dbChanged ? ctx : undefined
@@ -315,12 +318,14 @@ Deno.serve(async (req: Request) => {
         ? (JSON.parse(contextJson) as { snapshot_id?: string }).snapshot_id ?? null
         : null,
       updated_instructions: refreshedContext
+        && !isAtomicShootingSave
         && (outcome.dbChanged || body.refresh_context)
         ? buildRealtimeInstructions(refreshedContext, answers ?? null, undefined, undefined, coachName)
         : null,
       tool_kind: toolKind,
       requires_spoken_confirmation: toolKind === "mutation" && !outcome.skipModelResponse,
       state_version: stateVersion,
+      authoritative_cursor: outcome.authoritativeCursor ?? null,
     });
   } catch (err) {
     console.error("coach-tools error:", err);

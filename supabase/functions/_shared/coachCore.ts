@@ -38,6 +38,12 @@ export interface ClientAction {
 export interface ToolOutcome {
   result: string;
   dbChanged: boolean;
+  stateVersion?: number;
+  authoritativeCursor?: {
+    exerciseId: string | null;
+    setNumber: number | null;
+    status: "applied" | "stale";
+  };
   clientAction?: ClientAction;
   localConfirmation?: string;
   skipModelResponse?: boolean;
@@ -142,8 +148,9 @@ STATE
 - Read authoritative state, including client-handled omitted turns. drills has order, status, results, totals, targets, sides, and explanation; current_set has progress, target, and remaining. Never recalculate or swap them; "X for Y" uses progress. A delta update replaces only listed drills and removed IDs; retain all others.
 - Use exact set values for any current, named, previous, next, complete, or incomplete drill. Never claim another drill's results are unavailable. An absent/null side_label means no side; otherwise preserve it and resolve "left-side set" by that label.
 - For fresh progress, position, sequence, next action, makes, misses, attempts, or completion, call get_workout_position once. Use its drill_position; never infer it. Misses are same-set/drill attempts minus makes.
-- CATEGORY MEANING: ball handling, shooting, and finishing are separate drill categories. When the athlete says "shooting," "shooting drills," "shooting percentage," or asks to add/find shooting work, they mean category=shooting only—never finishing. Finishing is included only when the athlete explicitly says finishing, layups, rim finishes, or asks for overall/combined shooting. Overall shooting percentage includes shooting plus finishing; shooting-only excludes finishing. TIMED SET RULE: only minute-based ball_handling, defense, and conditioning drills get a duration or timer question. Whenever referring to a current or upcoming timed set whose timer is not already running, ask: "Would you like me to start the [X]-minute set timer?" Never ask or offer timers for shooting/finishing or makes/attempts for timed drills.
-- Coach never receives live timer state in context. For any direct question about time left, current timer time, or whether a timer is running or paused, ALWAYS call get_timer_status and do not speak before its result. The athlete's device returns the exact response. Do not volunteer timer status in response to “yes,” “okay,” “sure,” or unrelated speech. A position question such as “where are we?” means drill/set only: never claim that a timer is running, paused, or stopped unless get_timer_status was called for that same turn.
+- CATEGORY MEANING: ball handling, shooting, and finishing are separate drill categories. When the athlete says "shooting," "shooting drills," "shooting percentage," or asks to add/find shooting work, they mean category=shooting only—never finishing. Finishing is included only when the athlete explicitly says finishing, layups, rim finishes, or asks for overall/combined shooting. Overall shooting percentage includes shooting plus finishing; shooting-only excludes finishing. TIMED SET RULE: only minute-based ball_handling, defense, and conditioning drills get a duration or timer question. Ask "Would you like me to start the [X]-minute set timer?" only when the authoritative current/upcoming set is one of those timed categories. Never ask or offer timers for shooting/finishing; after transitioning into those drills, state the next set and its make/attempt target instead.
+- Coach never receives live timer state in context. For any direct question about time left, current timer time, or whether a timer is running or paused, ALWAYS call get_timer_status and do not speak before its result. The athlete's device returns the exact response. Do not volunteer timer status in response to “yes,” “okay,” “sure,” or unrelated speech.
+- POSITION-ONLY RULE: Treat every natural-language request for current work—“what drill am I on?”, “what are we doing?”, “where are we?”, “remind me what I’m on”, “what set is this?”, “what’s going on?”, or equivalent—as drill/set only. Call get_workout_position if its position is not already authoritative, then state only the drill and set. Never offer to start a timer, never imply whether a timer is running, and never mention timer state in a position-only reply. Mention timer state only when the athlete directly asks about the timer and get_timer_status was called in that same turn.
 
 COACHING AND RECOMMENDATIONS
 - Judge shooting against its makes target. Below target needs work; never agree that a below-target result is good. At/below half is significantly low. Be candid.
@@ -2085,6 +2092,58 @@ export async function executeCoachTool(
         };
       }
 
+      // The latency-critical shot path is a single database transaction. It
+      // locks the day cursor and log, applies the result, advances the next
+      // set when appropriate, and advances Coach state before returning.
+      const { data: mutationRows, error: mutationError } = await supabase.rpc(
+        "apply_coach_shooting_set_result_v2",
+        {
+          p_user_id: userId,
+          p_day_id: dayId,
+          p_exercise_id: exerciseId,
+          p_set_number: Number(args.set_number),
+          p_makes: Number(args.makes ?? 0),
+          p_attempts: Number(args.attempts ?? 0),
+          p_expected_exercise_id: typeof args.expected_exercise_id === "string"
+            ? args.expected_exercise_id
+            : exerciseId,
+          p_expected_set_number: Number.isInteger(args.expected_set_number)
+            ? args.expected_set_number
+            : Number(args.set_number),
+        },
+      );
+      if (mutationError) {
+        return { result: `Error saving: ${mutationError.message}`, dbChanged: false };
+      }
+      const mutation = Array.isArray(mutationRows) ? mutationRows[0] : mutationRows;
+      if (!mutation) return { result: "Error saving: empty shooting result", dbChanged: false };
+      const cursor = {
+        exerciseId: mutation.active_exercise_id ?? null,
+        setNumber: mutation.active_set_number ?? null,
+        status: mutation.status === "stale" ? "stale" as const : "applied" as const,
+      };
+      if (cursor.status === "stale") {
+        return {
+          result: "Stale shooting position.",
+          dbChanged: false,
+          stateVersion: Number(mutation.state_version ?? 0),
+          authoritativeCursor: cursor,
+        };
+      }
+      ctx.day.active_exercise_id = cursor.exerciseId;
+      ctx.day.active_set_number = cursor.setNumber;
+      return {
+        result: `Saved set ${Number(args.set_number)}: ${
+          Number(mutation.saved_set_makes ?? args.makes ?? 0)
+        } for ${
+          Number(mutation.saved_set_attempts ?? args.attempts ?? 0)
+        }.`,
+        dbChanged: true,
+        stateVersion: Number(mutation.state_version ?? 0),
+        authoritativeCursor: cursor,
+      };
+
+      /*
       const plan = effectivePlanForExercise(ex, existing);
       const meta = decodeExerciseLogMeta(existing?.notes ?? null);
       let setLogs = hydrateSetLogs(
@@ -2098,6 +2157,25 @@ export async function executeCoachTool(
           ? Math.min(args.set_number, plan.setCount)
           : currentSet ?? 1;
       const selectedSet = setLogs.find((set) => set.set_number === setNumber);
+      // Bare local make/miss commands are only valid for the active,
+      // incomplete set. This rejects an out-of-order client retry before it
+      // can overwrite the completed prior set's cumulative totals.
+      if (
+        args.enforce_current_position === true &&
+        (
+          ctx.day.active_exercise_id !== exerciseId ||
+          ctx.day.active_set_number !== setNumber ||
+          selectedSet?.completed === true
+        )
+      ) {
+        const current = buildWorkoutNavigation(ctx).current_set_state;
+        return {
+          result: `Stale shooting position. Current set is ${
+            current?.set_number ?? "unavailable"
+          } of ${current?.drill_name ?? "the workout"}.`,
+          dbChanged: false,
+        };
+      }
       const requestedAttempts = Number(args.attempts);
       const attempts =
         Number.isFinite(requestedAttempts) && requestedAttempts >= 0
@@ -2140,6 +2218,40 @@ export async function executeCoachTool(
       if (error) {
         return { result: `Error saving: ${error.message}`, dbChanged: false };
       }
+      // Keep the persisted Coach cursor in lockstep with a completed shooting
+      // set. Without this, the next bare "make" can resolve against the just
+      // finished set while the completion narration already describes the next
+      // one.
+      if (setCompleted) {
+        ctx.logs.set(exerciseId, {
+          exercise_id: exerciseId,
+          completed: drillCompleted,
+          makes: totals.makes,
+          attempts: totals.attempts,
+          minutes_completed: existing?.minutes_completed ?? null,
+          difficulty: existing?.difficulty ?? null,
+          notes: encodeExerciseLogMeta({
+            set_logs: totals.set_logs,
+            user_notes: meta.user_notes ?? null,
+            per_set_attempts_override: meta.per_set_attempts_override ?? null,
+            per_set_minutes_override: meta.per_set_minutes_override ?? null,
+          }),
+        });
+        const nextWork = buildWorkoutNavigation(ctx).next_work_item;
+        const { error: cursorError } = await supabase
+          .from("workout_days")
+          .update({
+            active_exercise_id: nextWork?.exercise_id ?? null,
+            active_set_number: nextWork?.set_number ?? null,
+          })
+          .eq("id", dayId)
+          .eq("user_id", userId);
+        if (cursorError) {
+          return { result: `Error updating workout position: ${cursorError.message}`, dbChanged: false };
+        }
+        ctx.day.active_exercise_id = nextWork?.exercise_id ?? null;
+        ctx.day.active_set_number = nextWork?.set_number ?? null;
+      }
       const selectedTargetMakes = selectedSet
         ? targetMakesForSet(selectedSet, plan)
         : plan.perSetMakes;
@@ -2171,6 +2283,7 @@ export async function executeCoachTool(
         }: ${makes} for ${attempts}.${targetResult}${nextSetResult}`,
         dbChanged: true,
       };
+      */
     }
 
     case "set_set_completion": {

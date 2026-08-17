@@ -22,6 +22,17 @@ export function mergeShotProgress(
   return { makes, attempts: Math.max(makes, attempts) };
 }
 
+export function capShotProgressToTarget(
+  progress: { makes: number; attempts: number },
+  targetAttempts: number | null | undefined,
+): { makes: number; attempts: number } {
+  const attempts =
+    targetAttempts != null && targetAttempts > 0
+      ? Math.min(progress.attempts, targetAttempts)
+      : progress.attempts;
+  return { makes: Math.min(progress.makes, attempts), attempts };
+}
+
 export function parseShotSpeechCommand(transcript: string | null): ShotSpeechCommand | null {
   const parsed = parseCoachSpeechIntent(transcript);
   return parsed?.kind === "shot" ? parsed.args : null;

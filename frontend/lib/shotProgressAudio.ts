@@ -16,6 +16,47 @@ export interface ShotProgressReply {
   shotsLeft: number;
 }
 
+const assetUriPromises = new Map<number, Promise<string>>();
+
+function resolveAssetUri(moduleId: number): Promise<string> {
+  const cached = assetUriPromises.get(moduleId);
+  if (cached) return cached;
+  const pending = Asset.fromModule(moduleId)
+    .downloadAsync()
+    .then((asset) => asset.localUri ?? asset.uri)
+    .catch((error) => {
+      assetUriPromises.delete(moduleId);
+      throw error;
+    });
+  assetUriPromises.set(moduleId, pending);
+  return pending;
+}
+
+/**
+ * A single make or miss is by far the next most likely command. Warm both
+ * possible score prefixes while the current local reply plays. Multi-shot
+ * commands still use their normal dynamic path; this cache never selects or
+ * forces a response.
+ */
+export function preloadLikelyNextShotProgressAudio(
+  persona: string,
+  reply: ShotProgressReply,
+): void {
+  if (!(persona in SHOT_PROGRESS_AUDIO) || reply.shotsLeft < 1) return;
+  const clips = SHOT_PROGRESS_AUDIO[persona as ShotProgressPersona];
+  const nextAttempts = reply.attempts + 1;
+  const nextRemaining = reply.shotsLeft - 1;
+  const nextPrefixIds = [
+    clips.prefixes[`${reply.makes}-${nextAttempts}`],
+    clips.prefixes[`${reply.makes + 1}-${nextAttempts}`],
+  ].filter((id): id is number => id != null);
+  const remainingId = clips.remaining[nextRemaining];
+  void Promise.all([
+    ...nextPrefixIds.map(resolveAssetUri),
+    ...(remainingId != null ? [resolveAssetUri(remainingId)] : []),
+  ]).catch(() => undefined);
+}
+
 export function parseShotProgressReply(text: string): ShotProgressReply | null {
   const match = text.trim().match(
     /^You're\s+(\d+)\s+for\s+(\d+),\s+(\d+)\s+shots?\s+left\.?$/i,
@@ -66,10 +107,9 @@ export function playShotProgressAudio(
   subscription = addLocalPlaybackFinishedListener((event) => {
     if (event.playbackId === playbackId) finish();
   });
-  void Promise.all([Asset.fromModule(prefix).downloadAsync(), Asset.fromModule(remaining).downloadAsync()])
-    .then(async (assets) => {
+  void Promise.all([resolveAssetUri(prefix), resolveAssetUri(remaining)])
+    .then(async (uris) => {
       if (stopped) return;
-      const uris = assets.map((asset) => asset.localUri ?? asset.uri);
       playbackId = await playLocalFilesAsync(uris);
       if (stopped) await clearPlaybackAsync();
     })

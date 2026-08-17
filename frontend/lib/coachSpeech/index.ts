@@ -520,7 +520,7 @@ function navigationUnit(value: string | undefined): CoachSpeechUnit {
 
 export const parseNavigationIntent: Parser = (text) => {
   let match = text.match(
-    /^(?:whats|what is) (?:the )?(next|current) (set|drill|exercise|thing)|^(?:what|which) (set|drill|exercise|thing) am i on$|^what comes after this$/
+    /^(?:whats|what is) (?:the )?(next|current) (set|drill|exercise|thing)|^(?:what|which) (set|drill|exercise|thing) am i(?:\s+on)?(?:\s+\d+\s+(?:for|out of)\s+\d+)?$|^what comes after this$/
   );
   if (match) {
     // “What comes after this?” is a next-set question, not permission to

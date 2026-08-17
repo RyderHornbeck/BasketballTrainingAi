@@ -447,7 +447,7 @@ export const EXERCISE_CATALOG_METADATA: Record<
     coaching_notes: "Jump off the correct foot, release over the rim, use soft touch on the glass.",
     requires_both_sides: true,
   },
-  "Petimeter Footwork Into Jumpers Jab": {
+  "Perimeter Footwork Into Jumpers Jab": {
     description:
       "Start on the right wing in triple-threat position with the ball in both hands. Step 1: Jab step hard with your left foot toward the baseline. Step 2: Pivot back on your inside foot to square up to the basket. Step 3: Rise into a pull-up jumper. Do 5 reps from the right wing, then 5 from the left wing with the opposite jab.",
     coaching_notes: "Jab to create space, pivot on your inside foot, rise into a balanced jumper.",

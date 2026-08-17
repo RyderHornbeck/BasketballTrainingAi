@@ -4,10 +4,12 @@ import {
   type CoachSpeechIntent,
 } from "./index";
 import {
+  capShotProgressToTarget,
   mergeShotProgress,
   parseShotSpeechCommand,
   parseSpokenShotCount,
 } from "../shotSpeech";
+import { bindShotToCursor, cursorMatches } from "../shotCursor";
 
 function fail(message: string): never {
   throw new Error(message);
@@ -87,6 +89,44 @@ test("parses make and miss vocabulary", () => {
     ["I made 2 and missed 3", { mode: "increment", makes: 2, attempts: 5, source: "count" }],
   ];
   for (const [phrase, args] of cases) expectIntent(phrase, { kind: "shot", args });
+});
+
+test("caps final-shot progress and supports absolute target totals", () => {
+  assert.deepEqual(
+    capShotProgressToTarget({ makes: 10, attempts: 11 }, 10),
+    { makes: 10, attempts: 10 },
+    "a duplicate final make cannot create an eleventh attempt on a ten-shot set",
+  );
+  assert.deepEqual(
+    capShotProgressToTarget({ makes: 8, attempts: 13 }, 12),
+    { makes: 8, attempts: 12 },
+    "a multi-shot update crossing the target stops at the final allowed attempt",
+  );
+  assert.deepEqual(
+    capShotProgressToTarget({ makes: 9, attempts: 20 }, 20),
+    { makes: 9, attempts: 20 },
+    "an absolute total at the target remains an exact final-set result",
+  );
+});
+
+test("binds ordinary shots to the live cursor after a set transition", () => {
+  const bound = bindShotToCursor(
+    { exercise_id: "old-drill", drill_name: "Old drill", set_number: 1, makes: 0, attempts: 1 },
+    { exerciseId: "live-drill", drillName: "Live drill", setNumber: 2 },
+  );
+  assert.deepEqual(
+    bound,
+    { exercise_id: "live-drill", drill_name: "Live drill", set_number: 2, makes: 0, attempts: 1 },
+    "a late model call cannot carry an old drill or set into a plain miss",
+  );
+  assert.ok(
+    !cursorMatches(
+      { exerciseId: "live-drill", drillName: null, setNumber: 2 },
+      "old-drill",
+      1,
+    ),
+    "a stale snapshot cursor must not replace the protected transition cursor",
+  );
 });
 
 test("parses natural requests to undo the latest shot", () => {
@@ -268,6 +308,10 @@ test("keeps navigation queries separate from movement", () => {
   expectIntent("what's the next set", {
     kind: "navigation",
     args: { mode: "query", unit: "set", target: { type: "next" } },
+  });
+  expectIntent("which set am i 0 for 1", {
+    kind: "navigation",
+    args: { mode: "query", unit: "set", target: { type: "current" } },
   });
   expectIntent("what drill am I on", {
     kind: "navigation",

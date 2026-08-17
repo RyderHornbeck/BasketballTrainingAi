@@ -150,6 +150,8 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
         attempts: { type: "integer", minimum: 0, maximum: 500 },
         completed: { type: "boolean" },
         client_request_id: { type: "string", minLength: 8, maxLength: 200 },
+        expected_exercise_id: { type: "string" },
+        expected_set_number: { type: "integer", minimum: 1, maximum: 100 },
       },
       ["makes", "attempts", "set_number"]
     ),
