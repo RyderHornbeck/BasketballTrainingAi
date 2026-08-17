@@ -591,6 +591,8 @@ Deno.serve(async (req: Request) => {
             db_changed: Boolean(toolResult.db_changed),
             client_action: toolResult.client_action ?? null,
             workout_context: toolResult.client_workout_context ?? null,
+            incomplete_completion_confirmation:
+              toolResult.incomplete_completion_confirmation ?? null,
           });
           if (typeof toolResult.client_workout_context === "string") {
             lastToolWorkoutContext = toolResult.client_workout_context;

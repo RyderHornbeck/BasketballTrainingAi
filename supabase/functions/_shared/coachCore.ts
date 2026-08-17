@@ -14,7 +14,6 @@ import {
   markAllSetsComplete,
   resolveAttemptsOverride,
   resolveMinutesOverride,
-  scaleTargetMakes,
   targetAttemptsForSet,
   targetMakesForSet,
   updateSetLog,
@@ -47,6 +46,11 @@ export interface ToolOutcome {
   clientAction?: ClientAction;
   localConfirmation?: string;
   skipModelResponse?: boolean;
+  incompleteCompletionConfirmation?: {
+    exerciseId: string;
+    drillName: string | null;
+    setNumber: number;
+  };
 }
 
 interface ClipInfo {
@@ -169,6 +173,8 @@ NAVIGATION AND EDITS
 
 SHOT TRACKING
 - set_shooting_set_targets changes one set's shot targets, never results. An explicit request to change how many shots a set has—"I actually want to shoot 50 shots," "can we shoot 50," or "make this 50 shots"—is a clear mutation request: call set_shooting_set_targets with target_attempts=50 immediately. Preserve target_makes when the athlete did not name a new makes target. Never answer with an updated progress sentence, say it is done, or leave the old attempt target unchanged instead of calling this tool.
+- For more work on a completed shooting drill, offer: add another [drill], or extend a completed set. Ask for set and new total attempts if missing. To extend, call set_shooting_set_targets once; a higher target reopens and activates that set without changing its score.
+- Going back to extend a completed shooting/finishing set is normal and allowed. When an athlete asks to keep shooting a completed drill without naming a set and new total, first say its planned sets are complete and ask whether they would like to extend a completed set and go back to it. Only after a clear yes, or an explicit set and new total, call set_shooting_set_targets.
 - Shot tools update current progress immediately and persist at target attempts, explicit finish/move, drill change, or coach close. Describe it only as progress—never unsaved, buffered, local, temporary, or session-only.
 - After an ordinary partial make, miss, or shooting total, respond with exactly: "You're X for Y, N shots left." Say nothing before or after it—no acknowledgment, praise, reaction, advice, drill/set label, makes remaining, or filler.
 - Always say "X for Y." Never say "X slash Y," "X over Y," "X comma Y," or omit "for."
@@ -191,7 +197,8 @@ TIMED SET DURATION OVERRIDE
 
 COMPLETION, TIME, OUTPUT
 - set_set_completion completes/reopens one set, including timed sets. complete_drill requires explicit whole-drill completion; uncomplete_drill reopens it. "Can I skip?" is skip, not completion.
-- Before completing a shooting or finishing set with attempts remaining, say its exact progress and remaining attempts, then ask: "Would you like to start this set or mark it complete as is?" Only mark it complete after the athlete clearly chooses to mark it complete as is.
+- Before completing a shooting/finishing set with attempts remaining, state progress and ask whether to start or mark it complete as is.
+- After that question, treat any contextual clear finish wording as confirmation: call set_set_completion for that set with completed=true and confirmed_incomplete=true. Do not repeat. Only a clear refusal/keep-shooting intent leaves it incomplete.
 - Honor an explicit request to go back and reopen an earlier completed set: call set_set_completion with completed=false; never claim past sets cannot be reopened.
 - Coach is not aware of total workout duration, workout minutes remaining, or elapsed workout time. Judge workout progress only from drill and set completion. start_timer targets the named/current timed set and includes its reference; omit duration for saved time. Preserve seconds/minutes. After success say "A X-minute/second timer has been started." Ask duration for untimed drills. set_timed_set_duration applies to any drill configured with minute-based sets. When a timed set ends, its local announcement is: "Time's up. You're now on set N of [drill], [left/right side if any]. Would you like me to start the timer?" Treat that exact offer as active context: a clear “yeah,” “yes,” “sure,” “okay,” or “start it” means call start_timer for that announced set. “Stop the timer,” “end the timer,” “cancel the timer,” or a break means pause and preserve the remaining time. Resume when the athlete says “start it back up,” “resume,” “continue the timer,” or equivalent. Reset/restart only when they explicitly say reset, restart, start over, or restart the timer.
 `;
@@ -540,7 +547,7 @@ const REALTIME_TOOL_DEFS = [
   {
     name: "set_shooting_set_targets",
     description:
-      "Change one shooting/finishing set's prescribed makes or attempts.",
+      "Change one shooting/finishing set's prescribed makes or attempts without changing its results. Increasing attempts beyond a completed set's recorded attempts reopens and activates that set.",
     parameters: {
       type: "object",
       properties: {
@@ -2343,6 +2350,11 @@ export async function executeCoachTool(
             targetAttempts - attempts
           } shots left. Would you like to start this set or mark it complete as is?`,
           dbChanged: false,
+          incompleteCompletionConfirmation: {
+            exerciseId,
+            drillName: ex.name,
+            setNumber: requestedSet,
+          },
         };
       }
 
@@ -3029,8 +3041,6 @@ export async function executeCoachTool(
       const nextAttempts = hasAttempts ? requestedAttempts : currentAttempts;
       const nextMakes = hasMakes
         ? requestedMakes
-        : hasAttempts
-        ? scaleTargetMakes(currentMakes, currentAttempts, requestedAttempts)
         : currentMakes;
       if (
         nextAttempts == null ||
@@ -3046,6 +3056,9 @@ export async function executeCoachTool(
           dbChanged: false,
         };
       }
+      const recordedAttempts = currentSet.attempts ?? 0;
+      const reopensCompletedSet =
+        currentSet.completed && nextAttempts > recordedAttempts;
 
       setLogs = updateSetLog(setLogs, plan, setNumber, {
         target_makes_override: nextMakes,
@@ -3053,8 +3066,9 @@ export async function executeCoachTool(
         attempts: currentSet.makes == null && !currentSet.completed
           ? null
           : currentSet.attempts,
-        completed: currentSet.completed &&
+        completed: !reopensCompletedSet && currentSet.completed &&
           (currentSet.attempts ?? 0) >= nextAttempts,
+        force_incomplete: reopensCompletedSet ? false : currentSet.force_incomplete,
       });
       const totals = aggregateSetLogs(setLogs, plan);
       const persistedSetLogs = totals.set_logs.map((set) =>
@@ -3085,10 +3099,30 @@ export async function executeCoachTool(
       );
       if (error) return { result: `Error: ${error.message}`, dbChanged: false };
       ctx.logs.set(exerciseId, updatedLog);
+      if (reopensCompletedSet) {
+        const { error: cursorError } = await supabase
+          .from("workout_days")
+          .update({
+            active_exercise_id: exerciseId,
+            active_set_number: setNumber,
+          })
+          .eq("id", dayId)
+          .eq("user_id", userId);
+        if (cursorError) {
+          return {
+            result: `Error: ${cursorError.message}`,
+            dbChanged: false,
+          };
+        }
+        ctx.day.active_exercise_id = exerciseId;
+        ctx.day.active_set_number = setNumber;
+      }
       return {
-        result: `Set ${setNumber} of ${
-          ex.name ?? "this drill"
-        } now targets ${nextMakes} makes in ${nextAttempts} attempts.`,
+        result: reopensCompletedSet
+          ? `Set ${setNumber} of ${ex.name ?? "this drill"} has been reopened. Its target changed from ${currentAttempts} to ${nextAttempts} attempts, and your ${currentSet.makes ?? 0} for ${recordedAttempts} score is unchanged.`
+          : `Set ${setNumber} of ${
+            ex.name ?? "this drill"
+          } now targets ${nextMakes} makes in ${nextAttempts} attempts.`,
         dbChanged: true,
       };
     }

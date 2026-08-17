@@ -32,6 +32,7 @@ import {
   parseSpokenShotCount,
 } from "@/lib/shotSpeech";
 import { bindShotToCursor, cursorMatches } from "@/lib/shotCursor";
+import { parseSafePlaybackShotIntent } from "@/lib/playbackShotIntent";
 import {
   parseShotProgressReply,
   playShotProgressAudio,
@@ -393,6 +394,7 @@ interface PendingShotSet {
   targetAttempts: number | null;
   completed: boolean;
   requestId?: string;
+  persisted?: boolean;
 }
 
 interface NextSetGuidance {
@@ -482,6 +484,11 @@ interface CoachToolResponse {
     exerciseId: string | null;
     setNumber: number | null;
     status: "applied" | "stale";
+  } | null;
+  incomplete_completion_confirmation?: {
+    exercise_id: string;
+    drill_name: string | null;
+    set_number: number;
   } | null;
   error?: string;
 }
@@ -715,8 +722,14 @@ export class RealtimeCoachSession {
     timer: ReturnType<typeof setTimeout>;
     transcript: string;
     generation: number;
+    turnOrder: number;
   } | null = null;
-  private lastAssemblyFallbackTranscript: { text: string; at: number } | null = null;
+  private lastAssemblyFallbackTranscript: {
+    text: string;
+    at: number;
+    generation: number;
+    turnOrder: number;
+  } | null = null;
   private speechEpoch = 0;
   private inkTurnSequence = 0;
   private latestUserTranscript: string | null = null;
@@ -750,13 +763,16 @@ export class RealtimeCoachSession {
   private pendingShootingCursorTransition: {
     exerciseId: string | null;
     setNumber: number | null;
+    minimumStateVersion: number | null;
   } | null = null;
   private completedShotReconciliationPending = false;
   private shotFlushPromise: Promise<void> | null = null;
   private shotPersistenceQueue: Promise<void> = Promise.resolve();
   private exactBufferedShotReply: string | null = null;
   private exactCompletedShotReply: string | null = null;
-  private stopLocalShotPlayback: (() => void) | null = null;
+  private exactIncompleteCompletionPrompt: string | null = null;
+  private stopLocalShotPlayback: (() => Promise<void>) | null = null;
+  private playbackClearPromise: Promise<void> = Promise.resolve();
   private lastDeterministicReply: string | null = null;
   private cartesiaActive = false;
   private voiceProvider: CoachVoiceProvider = "cartesia";
@@ -898,6 +914,7 @@ export class RealtimeCoachSession {
     this.mustRefreshPositionBeforeLocalNavigation = false;
     this.exactBufferedShotReply = null;
     this.exactCompletedShotReply = null;
+    this.exactIncompleteCompletionPrompt = null;
     this.stopLocalShotPlayback?.();
     this.stopLocalShotPlayback = null;
     this.stateVersion = 0;
@@ -1272,14 +1289,11 @@ export class RealtimeCoachSession {
         event.requestId,
       );
       if (isDeferredBargeIn) {
-        const control = this.parsePlaybackStopCommand(event.transcript);
-        if (
-          control &&
-          !isLikelyPlaybackEcho(
-            event.transcript,
-            this.replayableSonicSpeech?.text,
-          )
-        ) {
+        const control = this.parsePlaybackStopCommand(
+          event.transcript,
+          this.replayableSonicSpeech?.text,
+        );
+        if (control) {
           this.handleCartesiaSpeechStart(generation);
         }
         if (
@@ -1443,6 +1457,14 @@ export class RealtimeCoachSession {
       }),
       duplexAudio.addPlaybackStateListener((event) => {
         if (generation !== this.connectionGeneration) return;
+        if (event.state === "idle" && this.stopLocalShotPlayback) {
+          // The native queue can deliver the cancelled clip's idle event after
+          // a replacement local score clip has already begun. The local clip's
+          // playback ID has its own completion callback, so do not let this
+          // unscoped native event mark the replacement finished or release
+          // queued speech that could interrupt it.
+          return;
+        }
         this.playbackActive = event.state === "playing";
         if (event.state === "playing" && this.startupGreetingActive) {
           this.startupGreetingPlaybackStarted = true;
@@ -1562,11 +1584,41 @@ export class RealtimeCoachSession {
         }
         this.handleAssemblySpeechStart(generation);
       },
-      onPartial: (transcript) => {
+      onPartial: (turn) => {
+        const transcript = turn.transcript;
         // While Coach is speaking, partial ASR is never an interruption. It
-        // may be room noise or speaker bleed; exact stop commands are only
-        // accepted from a final transcript below.
-        if (this.playbackActive || this.generationActive || this.inworldContextId) return;
+        // may be room noise or speaker bleed. A make/miss is the exception:
+        // short utterances at the tail of transition audio do not always
+        // receive an Assembly final turn, so retain that deterministic command
+        // briefly and let a real final supersede it if one arrives.
+        if (this.playbackActive || this.generationActive || this.inworldContextId) {
+          const interruption = this.parsePlaybackStopCommand(transcript);
+          if (
+            interruption?.kind === "shot"
+          ) {
+            // Use the original, stable interruption model for a deterministic
+            // shot: stop the old reply as soon as the partial is unambiguous,
+            // then wait for Assembly's final turn before starting the score
+            // response. Starting a new clip from a mutable partial lets the
+            // remaining final turn race in and cancel its replacement.
+            this.assemblySpeechStartDeferred = false;
+            this.handleAssemblySpeechStart(generation);
+            this.scheduleAssemblyPartialFallback(
+              transcript,
+              generation,
+              turn.turnOrder,
+              900,
+            );
+          } else if (
+            this.assemblyPartialFallback?.generation === generation &&
+            this.assemblyPartialFallback.turnOrder === turn.turnOrder
+          ) {
+            // A partial can grow from "make" into a non-shot request. Do not
+            // execute the earlier prefix once Assembly has supplied more text.
+            this.clearAssemblyPartialFallback();
+          }
+          return;
+        }
         const playbackClassification =
           this.playbackActive || Date.now() < this.assemblyEchoGuardUntil
             ? classifyPlaybackTranscript(transcript, this.lastAssemblyCoachSpeech)
@@ -1587,15 +1639,18 @@ export class RealtimeCoachSession {
         this.callbacks?.onUserTranscript?.(transcript);
         // Assembly normally follows this with a final turn. If that event is
         // lost, do not leave a visible athlete request stranded forever.
-        this.scheduleAssemblyPartialFallback(transcript, generation);
+        this.scheduleAssemblyPartialFallback(
+          transcript,
+          generation,
+          turn.turnOrder,
+        );
       },
       onTurn: (turn) => {
         this.clearAssemblyPartialFallback();
         if (this.playbackActive || this.generationActive || this.inworldContextId) {
           const interruption = this.parsePlaybackStopCommand(turn.transcript);
           if (
-            !interruption ||
-            isLikelyPlaybackEcho(turn.transcript, this.lastAssemblyCoachSpeech)
+            !interruption
           ) {
             if (
               !interruption &&
@@ -1612,15 +1667,23 @@ export class RealtimeCoachSession {
           }
           // A final local make/miss command is safe to act on immediately.
           // Stop Coach first, then fall through and route that same command.
+          this.assemblySpeechStartDeferred = false;
           this.handleAssemblySpeechStart(generation);
         }
         const fallback = this.lastAssemblyFallbackTranscript;
         const normalize = (value: string) =>
           value.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
-        if (
+        const fallbackMatchesFinal =
           fallback &&
-          Date.now() - fallback.at < 5_000 &&
-          normalize(fallback.text) === normalize(turn.transcript)
+          fallback.generation === generation &&
+          ((fallback.turnOrder > 0 &&
+            turn.turnOrder > 0 &&
+            fallback.turnOrder === turn.turnOrder) ||
+            ((fallback.turnOrder <= 0 || turn.turnOrder <= 0) &&
+              Date.now() - fallback.at < 1_200 &&
+              normalize(fallback.text) === normalize(turn.transcript)));
+        if (
+          fallbackMatchesFinal
         ) {
           this.lastAssemblyFallbackTranscript = null;
           return;
@@ -2557,10 +2620,23 @@ export class RealtimeCoachSession {
         ) {
           return;
         }
+        if (
+          protectedCursor?.minimumStateVersion != null &&
+          (snapshotVersion == null ||
+            snapshotVersion < protectedCursor.minimumStateVersion)
+        ) {
+          return;
+        }
         this.workoutState = parsed;
         this.reapplyPendingShotSetsToWorkoutState();
         if (typeof snapshotVersion === "number") {
           this.workoutStateVersion = snapshotVersion;
+          if (
+            protectedCursor?.minimumStateVersion != null &&
+            snapshotVersion >= protectedCursor.minimumStateVersion
+          ) {
+            this.pendingShootingCursorTransition = null;
+          }
         }
       }
     } catch {
@@ -2750,13 +2826,34 @@ export class RealtimeCoachSession {
   private pinNextIncompleteShootingPosition(after: PendingShotSet): boolean {
     const drills = this.orderedDrills();
     const start = Math.max(0, drills.findIndex((drill) => drill.exercise_id === after.exerciseId));
-    const ordered = [...drills.slice(start), ...drills.slice(0, start)];
-    for (const drill of ordered) {
+    const currentDrill = drills[start];
+    const laterSetInCurrentDrill = currentDrill?.set_results
+      .filter((set) => !set.completed && set.set_number > after.setNumber)
+      .sort((a, b) => a.set_number - b.set_number)[0];
+    if (currentDrill && laterSetInCurrentDrill) {
+      this.pinLocalShootingPosition(currentDrill, laterSetInCurrentDrill);
+      return true;
+    }
+    // An explicit jump to a later set intentionally leaves earlier sets
+    // behind. Finish every later drill before wrapping back to those skipped
+    // sets; never immediately snap back to the lowest incomplete set.
+    const otherDrills = [
+      ...drills.slice(start + 1),
+      ...drills.slice(0, start),
+    ];
+    for (const drill of otherDrills) {
       const set = drill.set_results.find((candidate) => !candidate.completed);
       if (set) {
         this.pinLocalShootingPosition(drill, set);
         return true;
       }
+    }
+    const earlierSetInCurrentDrill = currentDrill?.set_results
+      .filter((set) => !set.completed && set.set_number < after.setNumber)
+      .sort((a, b) => a.set_number - b.set_number)[0];
+    if (currentDrill && earlierSetInCurrentDrill) {
+      this.pinLocalShootingPosition(currentDrill, earlierSetInCurrentDrill);
+      return true;
     }
     if (this.workoutState?.navigation) {
       this.workoutState.navigation.current_set_state = null;
@@ -2827,7 +2924,7 @@ export class RealtimeCoachSession {
     } else if (data.db_changed) {
       this.stateVersion += 1;
     }
-    if (data.authoritative_cursor) {
+    if (data.authoritative_cursor && toolName !== "save_shooting_results") {
       const drill = this.workoutState?.sequence?.drills?.find(
         (candidate) => candidate.exercise_id === data.authoritative_cursor?.exerciseId,
       );
@@ -2872,20 +2969,44 @@ export class RealtimeCoachSession {
     const cursorStatus = data.authoritative_cursor?.status;
     if (cursorStatus === "stale") {
       // Never let a delayed cumulative result land on the set that was just
-      // completed. Install the server cursor before accepting another shot.
+      // completed. Discard only this rejected snapshot so it cannot block
+      // later pending sets from flushing, then install the server cursor.
+      if (this.pendingShotSets.get(key) === entry) {
+        this.pendingShotSets.delete(key);
+      }
       this.pendingShootingCursorTransition = null;
       await this.refreshWorkoutContext();
       throw new Error("Your workout moved to the next set. Please repeat that shot.");
     }
+    // Every applied shot save advances the authoritative session version, not
+    // only set completions. Protect that version before removing the pending
+    // entry so an older completion refresh cannot reset a newly started set
+    // from 0-for-1 back to 0-for-0.
+    if (data.state_version != null) {
+      this.workoutStateVersion = Math.max(
+        this.workoutStateVersion,
+        data.state_version,
+      );
+    }
     // Do not erase a newer shot that arrived while this save was in flight.
+    // Keep an applied incomplete snapshot as a local overlay until the next
+    // shot or an explicit flush. This also protects against a context response
+    // that captured progress before this RPC committed but completed later.
     if (this.pendingShotSets.get(key) === entry) {
-      this.pendingShotSets.delete(key);
+      if (entry.completed) {
+        this.pendingShotSets.delete(key);
+      } else {
+        entry.persisted = true;
+      }
     }
     if (entry.completed) {
       // The completion response is authoritative about the committed cursor.
       // Reconcile exactly once after a final shot; partial-shot saves stay
       // fast and never trigger a full workout refresh.
-      this.pendingShootingCursorTransition = null;
+      if (this.pendingShootingCursorTransition && data.state_version != null) {
+        this.pendingShootingCursorTransition.minimumStateVersion =
+          data.state_version;
+      }
       this.reconcileCompletedShootingSet();
     }
     return data;
@@ -2912,9 +3033,9 @@ export class RealtimeCoachSession {
         await this.persistPendingShotSet(key);
       })
       .catch((error) => {
-        console.error("Failed to persist completed shooting set:", error);
+        console.error("Failed to persist shooting progress:", error);
         this.callbacks?.onError(
-          "Your set transition is saved locally but needs a connection to finish syncing.",
+          "Your shooting progress is saved locally but needs a connection to finish syncing.",
         );
       });
   }
@@ -2923,12 +3044,28 @@ export class RealtimeCoachSession {
     if (this.shotFlushPromise) return this.shotFlushPromise;
     this.shotFlushPromise = (async () => {
       await this.shotPersistenceQueue;
-      while (this.pendingShotSets.size > 0) {
-        const keys = [...this.pendingShotSets.keys()];
+      const failedKeys = new Set<string>();
+      const errors: unknown[] = [];
+      while (true) {
+        const keys = [...this.pendingShotSets.keys()].filter(
+          (key) => !failedKeys.has(key),
+        );
+        if (keys.length === 0) break;
         for (const key of keys) {
-          await this.persistPendingShotSet(key);
+          const entry = this.pendingShotSets.get(key);
+          if (entry?.persisted) {
+            this.pendingShotSets.delete(key);
+            continue;
+          }
+          try {
+            await this.persistPendingShotSet(key);
+          } catch (error) {
+            failedKeys.add(key);
+            errors.push(error);
+          }
         }
       }
+      if (errors.length > 0) throw errors[0];
     })().finally(() => {
       this.shotFlushPromise = null;
     });
@@ -3144,6 +3281,7 @@ export class RealtimeCoachSession {
       targetMakes,
       targetAttempts,
       completed,
+      persisted: false,
       requestId:
         typeof args.client_request_id === "string"
           ? args.client_request_id
@@ -3177,6 +3315,7 @@ export class RealtimeCoachSession {
       this.pendingShootingCursorTransition = {
         exerciseId: next?.exercise_id ?? null,
         setNumber: next?.set_number ?? null,
+        minimumStateVersion: null,
       };
       this.queuePendingShotSetPersistence(key);
       // Keep an immediate local fallback as well: the next athlete shot must
@@ -3199,6 +3338,11 @@ export class RealtimeCoachSession {
       // it does not complete or advance the set.
       await this.persistPendingShotSet(key);
     }
+    // Ordinary make/miss commands stay in the cumulative in-memory entry until
+    // the set completes. Persisting each one independently can race the active
+    // cursor and reject the snapshot as stale; that rejection removes the local
+    // overlay and makes every following shot restart at 0-for-1. Completion
+    // still queues the full cumulative set atomically in the branch above.
     return {
       kind: "buffered_shot",
       output: `You're ${nextMakes} for ${nextAttempts}${
@@ -4176,7 +4320,10 @@ export class RealtimeCoachSession {
     this.assemblyPartialFallback = null;
   }
 
-  private parsePlaybackStopCommand(transcript: string): CoachSpeechIntent | null {
+  private parsePlaybackStopCommand(
+    transcript: string,
+    coachSpeech: string | null | undefined = this.lastAssemblyCoachSpeech,
+  ): CoachSpeechIntent | null {
     // During speaker playback only deterministic local commands can interrupt:
     // stop plus the make/miss grammar. Other speech may be reflected Coach
     // audio and must wait for playback to finish.
@@ -4185,8 +4332,7 @@ export class RealtimeCoachSession {
       ? parseSpeechControlIntent(normalized)
       : null;
     if (stop) return stop;
-    const parsed = parseCoachSpeechIntent(normalized);
-    return parsed?.kind === "shot" ? parsed : null;
+    return parseSafePlaybackShotIntent(normalized, coachSpeech);
   }
 
   private isTimerOfferAffirmative(transcript: string): boolean {
@@ -4195,7 +4341,12 @@ export class RealtimeCoachSession {
     );
   }
 
-  private scheduleAssemblyPartialFallback(transcript: string, generation: number): void {
+  private scheduleAssemblyPartialFallback(
+    transcript: string,
+    generation: number,
+    turnOrder: number,
+    delayMs = 2_200,
+  ): void {
     const text = transcript.trim();
     if (!text || generation !== this.connectionGeneration || !this.active) return;
     this.clearAssemblyPartialFallback();
@@ -4210,16 +4361,27 @@ export class RealtimeCoachSession {
         return;
       }
       this.assemblyPartialFallback = null;
-      this.lastAssemblyFallbackTranscript = { text: pending.transcript, at: Date.now() };
-      const itemId = `assembly-partial-fallback-${generation}-${Date.now()}`;
+      this.lastAssemblyFallbackTranscript = {
+        text: pending.transcript,
+        at: Date.now(),
+        generation: pending.generation,
+        turnOrder: pending.turnOrder,
+      };
+      const itemId =
+        `assembly-partial-fallback-${generation}-${pending.turnOrder}-${Date.now()}`;
       this.speechStoppedAtByItem.set(itemId, Date.now());
       this.transcriptRouteQueue = this.transcriptRouteQueue
         .then(() => this.routeTranscribedTurn(pending.transcript, itemId, generation))
         .catch((routeError) => {
           console.error("Failed to route AssemblyAI fallback transcript:", routeError);
         });
-    }, 2_200);
-    this.assemblyPartialFallback = { timer, transcript: text, generation };
+    }, delayMs);
+    this.assemblyPartialFallback = {
+      timer,
+      transcript: text,
+      generation,
+      turnOrder,
+    };
   }
 
   private async routeTranscribedTurn(
@@ -4265,11 +4427,14 @@ export class RealtimeCoachSession {
         return;
       }
       const interruption = this.parsePlaybackStopCommand(transcript);
-      if (
-        interruption &&
-        !isLikelyPlaybackEcho(transcript, this.lastAssemblyCoachSpeech)
-      ) {
+      if (interruption) {
         this.handleAssemblySpeechStart(generation);
+        // A partial-shot fallback creates its RoutedCoachTurn before it knows
+        // that it must interrupt playback. handleAssemblySpeechStart advances
+        // the epoch, so carry that new epoch onto this same accepted command.
+        // Otherwise the score is updated below but speakDeterministic rejects
+        // the reply as belonging to the audio that was just cancelled.
+        turn.speechEpoch = this.speechEpoch;
       } else {
         return;
       }
@@ -4288,11 +4453,13 @@ export class RealtimeCoachSession {
         .test(normalizedReply);
     const acceptedDurationChange =
       acceptedConfirmation ? true : declinedConfirmation ? false : null;
+    const incompleteCompletionAffirmation =
+      /^(?:(?:um|uh|coach|okay|ok|please|lets|let us|just)\s+)*(?:mark(?: it| this set)? complete(?: as is)?|mark(?: it| this set)? as complete(?: as is)?|complete(?: it| this set)?(?: as is)?|finish(?: it| this set)?(?: as is)?|mark(?: it| this set)? done(?: as is)?)$/.test(
+        normalizedReply,
+      );
     const incompleteShotCompletionChoice =
       (acceptedConfirmation ||
-        /^(?:mark(?: it)? complete|mark(?: it)? as complete|complete(?: it)?|finish(?: it)?|mark(?: it)? done)$/.test(
-        normalizedReply
-      ))
+        incompleteCompletionAffirmation)
         ? true
         : /^(?:no|nope|start|start it|lets start|begin)$/.test(
               normalizedReply
@@ -4363,7 +4530,8 @@ export class RealtimeCoachSession {
                   : "Stay on incomplete set",
                 safeToDelete: true,
               }
-        : parseCoachSpeechIntent(transcript);
+        : parseCoachSpeechIntent(transcript) ??
+          this.parsePlaybackStopCommand(transcript);
     if (
       this.pendingStartupOffer?.readyForConfirmation &&
       acceptedDurationChange == null
@@ -5160,7 +5328,11 @@ export class RealtimeCoachSession {
     this.latestUserTranscript = null;
     this.speechEpoch += 1;
     this.playbackGeneration += 1;
-    this.stopLocalShotPlayback?.();
+    // A local shot clip owns the same duplex playback queue as streamed TTS.
+    // Its stop function already clears that native queue. Do not also issue a
+    // second clear below: a delayed duplicate clear can reach native audio
+    // after the replacement score clip has started and cut it short.
+    const stopLocalPlayback = this.stopLocalShotPlayback?.() ?? null;
     this.stopLocalShotPlayback = null;
     this.turnAbortController?.abort();
     this.turnAbortController = null;
@@ -5173,7 +5345,15 @@ export class RealtimeCoachSession {
     this.ttsInputBuffer = "";
     this.generationActive = false;
     this.playbackActive = false;
-    void this.duplexAudio?.clearPlaybackAsync().catch(() => undefined);
+    const clearNativePlayback = stopLocalPlayback ??
+      this.duplexAudio?.clearPlaybackAsync().catch(() => undefined) ??
+      Promise.resolve();
+    // Native clear is asynchronous. Serialize the next deterministic reply
+    // behind it so an interrupt cannot clear the new score clip after it starts.
+    this.playbackClearPromise = Promise.all([
+      this.playbackClearPromise.catch(() => undefined),
+      clearNativePlayback,
+    ]).then(() => undefined);
     this.callbacks?.onStatus(this.muted ? "muted" : "listening");
   }
 
@@ -5280,6 +5460,14 @@ export class RealtimeCoachSession {
       return;
     }
     if (event.type === "tool_result") {
+      if (event.incomplete_completion_confirmation) {
+        const pending = event.incomplete_completion_confirmation;
+        this.pendingIncompleteShotCompletion = {
+          exerciseId: pending.exercise_id,
+          drillName: pending.drill_name,
+          setNumber: pending.set_number,
+        };
+      }
       const action = event.client_action as ClientTimerAction | null;
       if (action?.type === "get_timer_status") {
         const reply = this.timerStatusReply();
@@ -5963,6 +6151,7 @@ export class RealtimeCoachSession {
     _requestId: string,
     speechEpoch: number
   ): Promise<void> {
+    await this.playbackClearPromise;
     if (speechEpoch !== this.speechEpoch || !this.active) return;
     this.lastDeterministicReply = text;
     this.armOfferedTimerStart(text);
@@ -5974,8 +6163,9 @@ export class RealtimeCoachSession {
       const progress = parseShotProgressReply(text);
       const persona = this.voicePersona;
       if (progress && persona) {
-        this.stopLocalShotPlayback?.();
+        await (this.stopLocalShotPlayback?.() ?? Promise.resolve());
         this.stopLocalShotPlayback = null;
+        if (speechEpoch !== this.speechEpoch || !this.active) return;
         this.generationActive = false;
         this.playbackActive = true;
         this.lastAssemblyCoachSpeech = text;
@@ -6373,6 +6563,7 @@ export class RealtimeCoachSession {
         }
       }
       if (generation !== this.connectionGeneration) return;
+      const incompleteCompletionPrompt = this.exactIncompleteCompletionPrompt;
       this.requestResponse(
         strongestResult === "buffered_shot"
           ? this.exactBufferedShotReply
@@ -6386,13 +6577,20 @@ export class RealtimeCoachSession {
                   this.exactCompletedShotReply
                 )}`
               : "Say the set was saved and direct the athlete to the authoritative next work item."
+            : incompleteCompletionPrompt
+              ? `Say only this exact sentence verbatim. Do not call a tool: ${JSON.stringify(
+                incompleteCompletionPrompt
+              )}`
             : strongestResult === "mutation"
               ? "State only the completed result in one short sentence. No acknowledgment, praise, preamble, action narration, offer, or closing sentence. Never mention tools, internal state, context, JSON, or refreshes. Do not call another tool unless genuinely ambiguous."
               : "Continue the athlete's request from the lookup result. If an already approved action needs another tool, call it silently without another status sentence; otherwise give only the brief answer. Never mention tools, internal state, context, JSON, or refreshes.",
-        strongestResult === "buffered_shot" || strongestResult === "completed_shot"
+        strongestResult === "buffered_shot" ||
+          strongestResult === "completed_shot" ||
+          incompleteCompletionPrompt != null
       );
       this.exactBufferedShotReply = null;
       this.exactCompletedShotReply = null;
+      this.exactIncompleteCompletionPrompt = null;
       return;
     }
 
@@ -6482,6 +6680,21 @@ export class RealtimeCoachSession {
             await this.flushPendingShotSets();
           }
           const data = await this.invokeCoachTool(call.name, args);
+          if (
+            call.name === "set_set_completion" &&
+            data.incomplete_completion_confirmation
+          ) {
+            const pending = data.incomplete_completion_confirmation;
+            this.pendingIncompleteShotCompletion = {
+              exerciseId: pending.exercise_id,
+              drillName: pending.drill_name,
+              setNumber: pending.set_number,
+            };
+            // The model's first completion call was declined by the server.
+            // Speak its one confirmation question out of band so this same
+            // model turn cannot retry completion without athlete consent.
+            this.exactIncompleteCompletionPrompt = data.result;
+          }
           kind = data.tool_kind === "read_only" ? "read_only" : "mutation";
           output = data.updated_context
             ? `${data.result}\n\nAuthoritative workout state after this call: ${data.updated_context}`

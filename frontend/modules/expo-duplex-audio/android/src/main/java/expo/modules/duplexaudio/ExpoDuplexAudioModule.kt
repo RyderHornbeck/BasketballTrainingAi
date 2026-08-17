@@ -433,18 +433,25 @@ class ExpoDuplexAudioModule : Module() {
     localDecodeComplete = false
     thread(name = "ExpoDuplexAudio-LocalDecode", priority = Thread.MAX_PRIORITY) {
       try {
-        uris.forEach { decodeLocalFile(it) }
-        localDecodeComplete = true
+        uris.forEach { decodeLocalFile(it, playbackId) }
+        if (localPlaybackId == playbackId) {
+          localDecodeComplete = true
+        }
       } catch (error: Exception) {
-        localPlaybackId = null
-        localDecodeComplete = false
-        emitError("local_decode_failed", error.message ?: "Could not decode local audio.", fatal = false)
+        // A replacement clip cancels this decode by assigning a new ID. Its
+        // old worker must never clear the replacement's state or report that
+        // replacement as failed.
+        if (localPlaybackId == playbackId) {
+          localPlaybackId = null
+          localDecodeComplete = false
+          emitError("local_decode_failed", error.message ?: "Could not decode local audio.", fatal = false)
+        }
       }
     }
     return playbackId
   }
 
-  private fun decodeLocalFile(uri: String) {
+  private fun decodeLocalFile(uri: String, playbackId: String) {
     val extractor = MediaExtractor()
     extractor.setDataSource(context, Uri.parse(uri), null)
     val trackIndex = (0 until extractor.trackCount).firstOrNull {
@@ -460,7 +467,7 @@ class ExpoDuplexAudioModule : Module() {
       val info = MediaCodec.BufferInfo()
       var inputDone = false
       var outputDone = false
-      while (!outputDone && isActive && localPlaybackId != null) {
+      while (!outputDone && isActive && localPlaybackId == playbackId) {
         if (!inputDone) {
           val index = decoder.dequeueInputBuffer(10_000)
           if (index >= 0) {

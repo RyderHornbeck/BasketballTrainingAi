@@ -84,7 +84,7 @@ export function playShotProgressAudio(
   persona: string,
   reply: ShotProgressReply,
   onFinished: () => void,
-): (() => void) | null {
+): (() => Promise<void>) | null {
   if (!(persona in SHOT_PROGRESS_AUDIO)) return null;
   const clips = SHOT_PROGRESS_AUDIO[persona as ShotProgressPersona];
   const prefix = clips.prefixes[`${reply.makes}-${reply.attempts}`];
@@ -115,10 +115,10 @@ export function playShotProgressAudio(
     })
     .catch(() => finish());
 
-  return () => {
+  return async () => {
     if (stopped) return;
     stopped = true;
     subscription?.remove();
-    void clearPlaybackAsync().catch(() => undefined);
+    await clearPlaybackAsync().catch(() => undefined);
   };
 }

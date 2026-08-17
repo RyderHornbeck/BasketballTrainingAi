@@ -289,6 +289,8 @@ Deno.serve(async (req: Request) => {
     const speakExact = !outcome.skipModelResponse &&
       EXACT_CONFIRMATION_TOOLS.has(body.tool_name) &&
       !outcome.result.startsWith("Error:");
+    const speakIncompleteCompletionPrompt =
+      outcome.incompleteCompletionConfirmation != null;
     const contextJson = refreshedContext && !isAtomicShootingSave
       ? buildCompactContextSummary(refreshedContext, answers ?? null, undefined)
       : null;
@@ -300,13 +302,21 @@ Deno.serve(async (req: Request) => {
       say: outcome.localConfirmation ?? outcome.result,
       continuation: outcome.skipModelResponse
         ? "none"
-        : speakExact
+        : speakExact || speakIncompleteCompletionPrompt
         ? "speak_exact"
         : "model",
       client_action: outcome.clientAction ?? null,
       db_changed: outcome.dbChanged,
       local_confirmation: outcome.localConfirmation ?? null,
       skip_model_response: outcome.skipModelResponse ?? false,
+      incomplete_completion_confirmation:
+        outcome.incompleteCompletionConfirmation
+          ? {
+            exercise_id: outcome.incompleteCompletionConfirmation.exerciseId,
+            drill_name: outcome.incompleteCompletionConfirmation.drillName,
+            set_number: outcome.incompleteCompletionConfirmation.setNumber,
+          }
+          : null,
       updated_context: refreshedContext && !isAtomicShootingSave
         ? buildRealtimeNavigationUpdate(
             refreshedContext,

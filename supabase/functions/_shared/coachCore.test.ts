@@ -853,6 +853,53 @@ Deno.test("coach changes one shooting set target without changing results", asyn
   );
 });
 
+Deno.test("extending a completed shooting set reopens and activates it", async () => {
+  const ctx = contextWithPartialShootingSet();
+  ctx.day.active_exercise_id = "finish";
+  ctx.day.active_set_number = 1;
+  ctx.logs.set("shoot", {
+    exercise_id: "shoot",
+    completed: true,
+    makes: 15,
+    attempts: 20,
+    minutes_completed: null,
+    difficulty: null,
+    notes:
+      '__hoop_set_logs__:{"set_logs":[{"set_number":1,"makes":8,"attempts":10,"completed":true},{"set_number":2,"makes":7,"attempts":10,"completed":true}]}',
+  });
+  const rows: Record<string, unknown>[] = [];
+
+  const outcome = await executeCoachTool(
+    capturingSupabaseMock(rows),
+    "user",
+    "day",
+    ctx,
+    "set_shooting_set_targets",
+    {
+      exercise_id: "shoot",
+      set_number: 1,
+      target_attempts: 15,
+    },
+  );
+
+  const meta = decodeExerciseLogMeta(String(rows[0]?.notes ?? ""));
+  const extended = meta.set_logs?.find((set) => set.set_number === 1);
+  assert(outcome.dbChanged, "an extension should persist");
+  assert(extended?.completed === false, "the extended completed set must reopen");
+  assert(
+    extended?.makes === 8 && extended.attempts === 10,
+    "extending a set must retain its recorded score",
+  );
+  assert(
+    extended?.target_attempts_override === 15,
+    "the new total attempts must be stored on the selected set",
+  );
+  assert(
+    ctx.day.active_exercise_id === "shoot" && ctx.day.active_set_number === 1,
+    "the reopened set must become the active cursor for the next shot",
+  );
+});
+
 Deno.test("timer without minutes never falls back to the workout duration", async () => {
   const ctx = contextWithPartialShootingSet();
   ctx.day.active_exercise_id = "shoot";

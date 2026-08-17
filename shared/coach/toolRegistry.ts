@@ -326,7 +326,7 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   tool({
     name: "set_shooting_set_targets",
     description:
-      "Change one shooting or finishing set's targets, never its results. Must be called for an explicit request to shoot a different number of shots, such as 'I want to shoot 50 shots.'",
+      "Change one shooting or finishing set's targets without changing its results. If a completed set's new attempt target is higher than its recorded attempts, this one call reopens and activates that set. Must be called for an explicit request to shoot a different number of shots, such as 'I want to shoot 50 shots.'",
     capability: "edits",
     execution: "server",
     kind: "mutation",

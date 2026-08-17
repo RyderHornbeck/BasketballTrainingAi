@@ -23,6 +23,11 @@ export type CoachTurnStreamEvent =
       db_changed: boolean;
       client_action?: unknown;
       workout_context?: string | null;
+      incomplete_completion_confirmation?: {
+        exercise_id: string;
+        drill_name: string | null;
+        set_number: number;
+      } | null;
     }
   | {
       type: "turn_completed";
@@ -85,6 +90,10 @@ export function parseCoachTurnStreamEvent(value: unknown): CoachTurnStreamEvent 
       db_changed: requiredBoolean(event, "db_changed"),
       client_action: event.client_action,
       workout_context: optionalNullableString(event, "workout_context"),
+      incomplete_completion_confirmation:
+        optionalIncompleteCompletionConfirmation(
+          event.incomplete_completion_confirmation,
+        ),
     };
   }
   if (type === "turn_completed") {
@@ -98,6 +107,25 @@ export function parseCoachTurnStreamEvent(value: unknown): CoachTurnStreamEvent 
     };
   }
   throw new Error(`Unknown coach turn stream event "${type}".`);
+}
+
+function optionalIncompleteCompletionConfirmation(
+  value: unknown,
+): {
+  exercise_id: string;
+  drill_name: string | null;
+  set_number: number;
+} | null | undefined {
+  if (value == null) return value as null | undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid incomplete completion confirmation.");
+  }
+  const confirmation = value as Record<string, unknown>;
+  return {
+    exercise_id: requiredString(confirmation, "exercise_id"),
+    drill_name: optionalNullableString(confirmation, "drill_name") ?? null,
+    set_number: requiredNumber(confirmation, "set_number"),
+  };
 }
 
 function requiredString(event: Record<string, unknown>, key: string): string {

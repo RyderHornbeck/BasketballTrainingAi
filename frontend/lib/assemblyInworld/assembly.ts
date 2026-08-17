@@ -13,7 +13,7 @@ export interface AssemblyClientOptions {
   agentContext?: string;
   voiceFocus: "near-field" | "far-field";
   onSpeechStarted: () => void;
-  onPartial: (transcript: string) => void;
+  onPartial: (turn: AssemblyTurn) => void;
   onTurn: (turn: AssemblyTurn) => void;
   onServerActivity?: () => void;
   onError: (error: Error) => void;
@@ -172,7 +172,13 @@ export class AssemblyRealtimeClient {
         const transcript = (message.end_of_turn
           ? message.utterance || message.transcript
           : message.transcript) ?? "";
-        if (!message.end_of_turn && transcript.trim()) this.options.onPartial(transcript);
+        if (!message.end_of_turn && transcript.trim()) {
+          this.options.onPartial({
+            turnOrder: message.turn_order ?? 0,
+            transcript: transcript.trim(),
+            endOfTurn: false,
+          });
+        }
         if (message.end_of_turn && transcript.trim()) {
           this.options.onTurn({
             turnOrder: message.turn_order ?? 0,
