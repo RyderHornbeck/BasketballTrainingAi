@@ -9,6 +9,7 @@ import {
   consumeResponsesSse,
   createAbortTimeout,
   inferCoachResponseCapabilities,
+  isCurrentShootingCorrectionRequest,
   isCoachMutationRequest,
   isConfidentlyToolFreeCoachRequest,
   resolveCoachToolContinuation,
@@ -114,6 +115,16 @@ Deno.test("response tool routing narrows clear requests without removing ambiguo
 });
 
 Deno.test("mutation turns and contextual confirmations force a silent tool-first round", () => {
+  assert(
+    isCurrentShootingCorrectionRequest(
+      "Coach, I actually think I missed the last one",
+    ),
+    "last-shot corrections must be identified as score mutations",
+  );
+  assert(
+    shouldForceCoachTool("Coach, I actually think I missed the last one"),
+    "last-shot corrections must force a native Coach tool call",
+  );
   assert(
     shouldForceCoachTool("Add low pound dribbles"),
     "explicit mutations should force a tool",

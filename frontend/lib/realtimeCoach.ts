@@ -68,6 +68,7 @@ import {
 import {
   streamCoachTurn,
   type CoachTurnStreamEvent,
+  type LocalShotSessionContext,
 } from "@/lib/coachTurnStream";
 import {
   inferVoiceAudioProfile,
@@ -194,10 +195,18 @@ export interface TimerState {
 }
 
 export interface ClientTimerAction {
-  type: "start_timer" | "pause_timer" | "resume_timer" | "stop_timer" | "get_timer_status";
+  type:
+    | "start_timer"
+    | "pause_timer"
+    | "resume_timer"
+    | "stop_timer"
+    | "get_timer_status"
+    | "set_shooting_total";
   duration_seconds?: number | null;
   timer_exercise_id?: string | null;
   timer_set_number?: number | null;
+  makes?: number;
+  attempts?: number;
 }
 
 export interface RealtimeCoachCallbacks {
@@ -757,6 +766,15 @@ export class RealtimeCoachSession {
   private loggedUsageSessionKeys = new Set<string>();
   private workoutState: RealtimeWorkoutState | null = null;
   private pendingShotSets = new Map<string, PendingShotSet>();
+  private lastLocalShotTurn: {
+    userTranscript: string;
+    coachReply: string;
+  } | null = null;
+  private pendingCoachLastShotCorrection: {
+    turnId: string;
+    makes: number;
+    attempts: number;
+  } | null = null;
   // A completed shooting set advances locally before its atomic save returns.
   // Until that save confirms or rejects the cursor, no unrelated snapshot may
   // reinstall the just-completed set as current.
@@ -888,6 +906,8 @@ export class RealtimeCoachSession {
     this.responseEpochs.clear();
     this.routedTurns.clear();
     this.speechStoppedAtByItem.clear();
+    this.lastLocalShotTurn = null;
+    this.pendingCoachLastShotCorrection = null;
     this.deterministicTurnCount = 0;
     this.fallbackTurnCount = 0;
     this.pendingTimerDurationChange = null;
@@ -2989,9 +3009,10 @@ export class RealtimeCoachSession {
       );
     }
     // Do not erase a newer shot that arrived while this save was in flight.
-    // Keep an applied incomplete snapshot as a local overlay until the next
-    // shot or an explicit flush. This also protects against a context response
-    // that captured progress before this RPC committed but completed later.
+    // Keep an applied incomplete snapshot as the local base until a later shot
+    // replaces it or the set completes. This also protects against a context
+    // response that captured progress before this RPC committed but completed
+    // later.
     if (this.pendingShotSets.get(key) === entry) {
       if (entry.completed) {
         this.pendingShotSets.delete(key);
@@ -3048,15 +3069,18 @@ export class RealtimeCoachSession {
       const errors: unknown[] = [];
       while (true) {
         const keys = [...this.pendingShotSets.keys()].filter(
-          (key) => !failedKeys.has(key),
+          (key) =>
+            !failedKeys.has(key) &&
+            // An incomplete total that the server has acknowledged remains
+            // the client-side base for the athlete's next make or miss. A
+            // flush must not delete it: a delayed or stale context snapshot
+            // could otherwise make that next shot restart at 0-for-1.
+            !this.pendingShotSets.get(key)?.persisted,
         );
         if (keys.length === 0) break;
         for (const key of keys) {
           const entry = this.pendingShotSets.get(key);
-          if (entry?.persisted) {
-            this.pendingShotSets.delete(key);
-            continue;
-          }
+          if (!entry) continue;
           try {
             await this.persistPendingShotSet(key);
           } catch (error) {
@@ -3406,6 +3430,32 @@ export class RealtimeCoachSession {
     return result.output;
   }
 
+  private stageCoachLastShotCorrection(
+    turnId: string,
+    from: "make" | "miss",
+    to: "make" | "miss",
+  ): void {
+    const current = this.currentSetState();
+    if (!current) return;
+    const pending = this.pendingShotSets.get(
+      this.pendingShotKey(current.exercise_id, current.set_number),
+    );
+    const makes = pending?.makes ?? current.progress.makes;
+    const attempts = pending?.attempts ?? current.progress.attempts;
+    if (
+      attempts < 1 ||
+      (from === "make" && makes < 1) ||
+      (from === "miss" && makes >= attempts)
+    ) {
+      return;
+    }
+    this.pendingCoachLastShotCorrection = {
+      turnId,
+      makes: to === "make" ? makes + 1 : makes - 1,
+      attempts,
+    };
+  }
+
   private async undoLastShot(): Promise<string> {
     const previous = this.shotUndoStack.pop();
     if (!previous) return "There isn't a recent shot to undo.";
@@ -3465,6 +3515,38 @@ export class RealtimeCoachSession {
 
   private currentSetState(): RealtimeCurrentSetState | null {
     return this.workoutState?.navigation?.current_set_state ?? null;
+  }
+
+  private localShotSessionContext(): LocalShotSessionContext | null {
+    const current = this.currentSetState();
+    const drill = this.currentDrill();
+    if (
+      !current ||
+      !drill ||
+      !this.acceptsShotResults(drill)
+    ) {
+      return null;
+    }
+    const pending = this.pendingShotSets.get(
+      this.pendingShotKey(current.exercise_id, current.set_number),
+    );
+    const makes = pending?.makes ?? current.progress.makes;
+    const attempts = pending?.attempts ?? current.progress.attempts;
+    const targetMakes = pending?.targetMakes ?? current.target.makes;
+    const targetAttempts = pending?.targetAttempts ?? current.target.attempts;
+    return {
+      exerciseId: current.exercise_id,
+      drillName: current.drill_name,
+      setNumber: current.set_number,
+      makes,
+      attempts,
+      targetMakes,
+      targetAttempts,
+      remainingAttempts:
+        targetAttempts == null ? null : Math.max(0, targetAttempts - attempts),
+      lastLocalUserTranscript: this.lastLocalShotTurn?.userTranscript ?? null,
+      lastLocalCoachReply: this.lastLocalShotTurn?.coachReply ?? null,
+    };
   }
 
   private resolveNavigationTarget(target: NavigationTarget): RealtimeDrillState | null {
@@ -4477,7 +4559,7 @@ export class RealtimeCoachSession {
             )
           ? false
           : null;
-    const command: CoachSpeechIntent | null =
+    let command: CoachSpeechIntent | null =
       isLikelyTimerStatusQuestion(transcript)
         ? {
           kind: "timer",
@@ -4532,6 +4614,26 @@ export class RealtimeCoachSession {
               }
         : parseCoachSpeechIntent(transcript) ??
           this.parsePlaybackStopCommand(transcript);
+    const coachAddressed = /^(?:hey\s+)?coach\b/i.test(transcript.trim());
+    if (
+      coachAddressed &&
+      (
+        command?.kind === "correct_last_shot" ||
+        (command?.kind === "shot" && command.args.mode === "replace")
+      )
+    ) {
+      // Coach-addressed score corrections must use the current local session
+      // context and the single absolute-total tool, rather than taking a
+      // separate deterministic correction path.
+      if (command.kind === "correct_last_shot") {
+        this.stageCoachLastShotCorrection(
+          turn.requestId,
+          command.args.from,
+          command.args.to,
+        );
+      }
+      command = null;
+    }
     if (
       this.pendingStartupOffer?.readyForConfirmation &&
       acceptedDurationChange == null
@@ -4654,6 +4756,16 @@ export class RealtimeCoachSession {
         transcript,
         output,
       );
+      if (
+        command.kind === "shot" ||
+        command.kind === "correct_last_shot" ||
+        command.kind === "undo_shot"
+      ) {
+        this.lastLocalShotTurn = {
+          userTranscript: transcript,
+          coachReply: output,
+        };
+      }
       this.lastDeterministicReply = output;
       this.callbacks?.onConversationSummary?.(this.conversationSummary);
       if (turn.speechEpoch === this.speechEpoch) {
@@ -5233,6 +5345,7 @@ export class RealtimeCoachSession {
       transcript,
       stateVersion: speculation.stateVersion,
       conversationSummary: this.conversationSummary,
+      localShotSessionContext: this.localShotSessionContext(),
       speculative: true,
       signal: controller.signal,
       onEvent: (streamEvent) => {
@@ -5412,10 +5525,46 @@ export class RealtimeCoachSession {
     inworld.pushText(contextId, text, final);
   }
 
+  private async applyCoachShootingTotal(
+    action: ClientTimerAction,
+    turnId: string,
+    speechEpoch: number,
+    sourceTranscript: string,
+  ): Promise<void> {
+    if (speechEpoch !== this.speechEpoch || !this.active) return;
+    if (this.pendingCoachLastShotCorrection?.turnId === turnId) {
+      this.pendingCoachLastShotCorrection = null;
+    }
+    const result = await this.bufferShootingResult(
+      this.bindOrdinaryShotToCurrentCursor({
+        makes: action.makes,
+        attempts: action.attempts,
+        mode: "replace",
+        completed: false,
+        persist_session_progress: true,
+        client_request_id: `${turnId}:shooting-total`.slice(0, 200),
+      }),
+    );
+    if (speechEpoch !== this.speechEpoch || !this.active) return;
+    this.conversationSummary = appendConversationTurn(
+      this.conversationSummary,
+      sourceTranscript,
+      result.output,
+    );
+    this.lastLocalShotTurn = {
+      userTranscript: sourceTranscript,
+      coachReply: result.output,
+    };
+    this.callbacks?.onConversationSummary?.(this.conversationSummary);
+    this.lastDeterministicReply = result.output;
+    await this.speakDeterministic(result.output, turnId, speechEpoch);
+  }
+
   private applyAssemblyTurnEvent(
     event: CoachTurnStreamEvent,
     turnId: string,
     speechEpoch: number,
+    sourceTranscript: string,
   ): void {
     if (
       !this.active ||
@@ -5469,6 +5618,20 @@ export class RealtimeCoachSession {
         };
       }
       const action = event.client_action as ClientTimerAction | null;
+      if (action?.type === "set_shooting_total") {
+        void this.applyCoachShootingTotal(
+          action,
+          event.turn_id,
+          speechEpoch,
+          sourceTranscript,
+        )
+          .catch((error) => {
+            console.error("Failed to apply Coach shooting-total correction:", error);
+            if (speechEpoch === this.speechEpoch) {
+              this.callbacks?.onError("Could not update that shooting total.");
+            }
+          });
+      }
       if (action?.type === "get_timer_status") {
         const reply = this.timerStatusReply();
         this.lastDeterministicReply = reply;
@@ -5534,13 +5697,32 @@ export class RealtimeCoachSession {
         transcript,
         stateVersion: this.stateVersion,
         conversationSummary: this.conversationSummary,
+        localShotSessionContext: this.localShotSessionContext(),
         signal: controller.signal,
         onEvent: (event) => {
           if (event.type === "text_delta") responseText += event.delta;
-          this.applyAssemblyTurnEvent(event, turn.requestId, speechEpoch);
+          this.applyAssemblyTurnEvent(event, turn.requestId, speechEpoch, transcript);
         },
       });
       if (speechEpoch !== this.speechEpoch) return;
+      const unhandledCorrection = this.pendingCoachLastShotCorrection;
+      if (unhandledCorrection?.turnId === turn.requestId) {
+        // Haiku is instructed to call the absolute-total tool. If it instead
+        // narrates the correct answer, preserve that spoken answer while still
+        // committing the pre-turn correction so the next make/miss starts from
+        // the corrected total.
+        this.pendingCoachLastShotCorrection = null;
+        await this.bufferShootingResult(
+          this.bindOrdinaryShotToCurrentCursor({
+            makes: unhandledCorrection.makes,
+            attempts: unhandledCorrection.attempts,
+            mode: "replace",
+            completed: false,
+            persist_session_progress: true,
+            client_request_id: `${turn.requestId}:last-shot-fallback`.slice(0, 200),
+          }),
+        );
+      }
       if (responseText.trim()) {
         const gate = gateCoachSpeechText(responseText.trim(), true);
         if (gate.status === "safe") {
@@ -5804,6 +5986,19 @@ export class RealtimeCoachSession {
     if (event.type === "tool_result") {
       if (event.client_action && typeof event.client_action === "object") {
         let action = event.client_action as ClientTimerAction;
+        if (action.type === "set_shooting_total") {
+          void this.applyCoachShootingTotal(
+            action,
+            event.turn_id,
+            speechEpoch,
+            turn?.transcript ?? "",
+          ).catch((error) => {
+            console.error("Failed to apply Coach shooting-total correction:", error);
+            if (speechEpoch === this.speechEpoch) {
+              this.callbacks?.onError("Could not update that shooting total.");
+            }
+          });
+        }
         if (action.type === "get_timer_status") {
           const reply = this.timerStatusReply();
           this.lastDeterministicReply = reply;
@@ -5964,6 +6159,7 @@ export class RealtimeCoachSession {
         transcript,
         stateVersion: this.stateVersion,
         conversationSummary: this.conversationSummary,
+        localShotSessionContext: this.localShotSessionContext(),
         signal: controller.signal,
         onEvent: (event) => {
           if (event.type === "text_delta") responseText += event.delta;

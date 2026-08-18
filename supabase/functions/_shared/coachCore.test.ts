@@ -718,6 +718,31 @@ Deno.test("shooting sets cannot start timers", async () => {
   );
 });
 
+Deno.test("Coach forwards a current shooting total for deterministic local playback", async () => {
+  const ctx = contextWithPartialShootingSet();
+  ctx.day.active_exercise_id = "shoot";
+  const outcome = await executeCoachTool(
+    successfulSupabaseMock(),
+    "user",
+    "day",
+    ctx,
+    "correct_current_shooting_total",
+    { makes: 5, attempts: 5 },
+  );
+
+  assert(!outcome.dbChanged, "the device owns the immediate local correction");
+  assert(
+    outcome.clientAction?.type === "set_shooting_total" &&
+      outcome.clientAction.makes === 5 &&
+      outcome.clientAction.attempts === 5,
+    "Coach must forward the exact reported current total to local tracking",
+  );
+  assert(
+    outcome.skipModelResponse === true,
+    "Haiku must not narrate over the prerecorded progress reply",
+  );
+});
+
 Deno.test("second-based timer requests stay in seconds", async () => {
   const ctx = contextWithPartialShootingSet();
   const timedExercise = ctx.exercises.find((exercise) =>
@@ -1485,80 +1510,37 @@ Deno.test("atomic shooting save accepts an explicit zero-attempt correction", as
   );
 });
 
-Deno.test("realtime shooting tools make single shots deterministic", () => {
+Deno.test("only absolute score correction is exposed to Coach", () => {
   const tools = getRealtimeTools();
-  const makeTool = tools.find((tool) => tool.name === "record_make");
-  const missTool = tools.find((tool) => tool.name === "record_miss");
-  const makesTool = tools.find((tool) => tool.name === "record_makes");
-  const missesTool = tools.find((tool) => tool.name === "record_misses");
-  const addTool = tools.find((tool) => tool.name === "add_shooting_result");
-  const totalTool = tools.find((tool) => tool.name === "set_shooting_total");
+  const correctionTool = tools.find((tool) =>
+    tool.name === "correct_current_shooting_total"
+  );
   assert(
-    Boolean(
-      makeTool && missTool && makesTool && missesTool && addTool && totalTool,
+    correctionTool?.parameters.required?.includes("makes") &&
+      correctionTool.parameters.required?.includes("attempts"),
+    "Coach must receive the absolute-total correction tool",
+  );
+  assert(
+    !tools.some((tool) =>
+      [
+        "record_make",
+        "record_miss",
+        "record_makes",
+        "record_misses",
+        "add_shooting_result",
+        "set_shooting_total",
+      ].includes(tool.name)
     ),
-    "all deterministic shot tools must exist",
-  );
-  assert(
-    totalTool?.description.includes("attempts=makes+misses") &&
-      totalTool.description.includes("including completed") &&
-      totalTool.description.includes("no navigation") &&
-      COACH_SYSTEM_PROMPT.includes(
-        "correct any completed set directly with set_shooting_total and keep it completed",
-      ),
-    "completed-set corrections must replace the named set without navigation",
-  );
-  assert(
-    !("attempts" in
-      ((makeTool?.parameters?.properties ?? {}) as Record<string, unknown>)) &&
-      !("makes" in
-        ((missTool?.parameters?.properties ?? {}) as Record<string, unknown>)),
-    "single make/miss tools must not accept model-provided shot counts",
-  );
-  assert(
-    COACH_SYSTEM_PROMPT.includes("hard-code one attempt"),
-    "Realtime instructions should require deterministic single-shot accounting",
-  );
-  assert(
-    COACH_SYSTEM_PROMPT.includes('"Made another,"') &&
-      COACH_SYSTEM_PROMPT.includes("Never invent a denominator"),
-    "single-shot phrasing must never be converted into a guessed multi-shot result",
-  );
-  assert(
-    makesTool?.parameters?.required?.includes("count") &&
-      missesTool?.parameters?.required?.includes("count") &&
-      COACH_SYSTEM_PROMPT.includes("call record_makes once with count N") &&
-      COACH_SYSTEM_PROMPT.includes("call record_misses once with count N") &&
-      COACH_SYSTEM_PROMPT.includes("NUMBER PRECEDENCE") &&
-      makeTool?.description.includes("never use when N>1") &&
-      missTool?.description.includes("never use when N>1"),
-    "consecutive makes and misses must map to deterministic counted tools",
+    "ordinary shot accounting must remain device-local",
   );
   assert(
     COACH_SYSTEM_PROMPT.includes(
-      'respond with exactly: "You\'re X for Y, N shots left."',
+      "correct_current_shooting_total is the only tool you may use",
     ) &&
-      COACH_SYSTEM_PROMPT.includes("Say nothing before or after it") &&
       COACH_SYSTEM_PROMPT.includes(
-        "record_makes adds exactly N makes and N attempts",
-      ) &&
-      COACH_SYSTEM_PROMPT.includes(
-        "record_misses adds zero makes and exactly N attempts",
-      ) &&
-      COACH_SYSTEM_PROMPT.includes("never call a singular tool"),
-    "ordinary shot updates must contain only the exact progress sentence",
-  );
-  assert(
-    COACH_SYSTEM_PROMPT.includes(
-      "save only the athlete's actual cumulative makes and actual cumulative attempts",
-    ) && COACH_SYSTEM_PROMPT.includes("Never save the prescribed target makes"),
-    "saved shooting results must never substitute target or remaining numbers",
-  );
-  assert(
-    COACH_SYSTEM_PROMPT.includes("I actually want to shoot 50 shots") &&
-      COACH_SYSTEM_PROMPT.includes("target_attempts=50") &&
-      COACH_SYSTEM_PROMPT.includes("Never answer with an updated progress sentence"),
-    "explicit shot-count changes must call the target-edit tool instead of narrating progress",
+        "LIVE DEVICE SHOOTING STATE",
+      ),
+    "Coach must calculate corrections from the current device snapshot",
   );
 });
 

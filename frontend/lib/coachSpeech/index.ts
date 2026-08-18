@@ -985,13 +985,26 @@ export const parseUndoShotIntent: Parser = (text) => {
 
 export const parseShotCorrectionIntent: Parser = (text) => {
   const correction = text.match(
-    /^(?:you\s+)?(?:counted|marked|logged)\s+(?:a\s+)?(make|miss)(?:\s+as|\s+instead of)\s+(?:a\s+)?(make|miss)$/,
+    /^(?:(?:hey\s+)?coach\s+)?(?:you\s+)?(?:counted|marked|logged)\s+(?:a\s+)?(make|miss)(?:\s+as|\s+instead of)\s+(?:a\s+)?(make|miss)$/,
   );
-  if (!correction || correction[1] === correction[2]) return null;
+  if (correction && correction[1] !== correction[2]) {
+    return intent(
+      "correct_last_shot",
+      { from: correction[1] as "make" | "miss", to: correction[2] as "make" | "miss" },
+      `Correct ${correction[1]} to ${correction[2]} heard`,
+      0.99,
+    );
+  }
+  const lastShot = text.match(
+    /^(?:(?:hey\s+)?coach\s+)?(?:i\s+)?(?:actually\s+)?(made|missed)(?:\s+(?:that|the))?\s+last(?:\s+one|\s+shot)?$/,
+  );
+  if (!lastShot) return null;
+  const to = lastShot[1] === "made" ? "make" : "miss";
+  const from = to === "make" ? "miss" : "make";
   return intent(
     "correct_last_shot",
-    { from: correction[1] as "make" | "miss", to: correction[2] as "make" | "miss" },
-    `Correct ${correction[1]} to ${correction[2]} heard`,
+    { from, to },
+    `Correct last ${from} to ${to} heard`,
     0.99,
   );
 };

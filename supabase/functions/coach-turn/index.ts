@@ -1,6 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import {
+  buildWorkoutNavigation,
   buildCoachTurnDynamicContext,
   buildCompactContextSummary,
   COACH_TURN_STABLE_SYSTEM_PROMPT,
@@ -16,6 +17,7 @@ import {
   consumeAnthropicSse,
   createAbortTimeout,
   isConfidentlyToolFreeCoachRequest,
+  isCurrentShootingCorrectionRequest,
   resolveCoachToolContinuation,
   type ResponsesFunctionCall,
   sanitizeCoachConversationSummary,
@@ -214,7 +216,13 @@ Deno.serve(async (req: Request) => {
   // Keep tools enabled for every standard turn; only the explicitly
   // speculative request mode is tool-free.
   const toolFreeTurn = speculativeReadOnly;
-  const dynamicContext = buildCoachTurnDynamicContext(
+  const localShotContext = turn.localShotSessionContext;
+  const authoritativeCurrentSet = buildWorkoutNavigation(initialContext).current_set_state;
+  const localShotContextMatchesCurrentSet =
+    localShotContext != null &&
+    authoritativeCurrentSet?.exercise_id === localShotContext.exerciseId &&
+    authoritativeCurrentSet.set_number === localShotContext.setNumber;
+  const dynamicContext = `${buildCoachTurnDynamicContext(
     initialContext,
     { ...(answers ?? {}), preferred_name: profile?.preferred_name ?? null },
     undefined,
@@ -222,7 +230,13 @@ Deno.serve(async (req: Request) => {
     undefined,
     speculativeReadOnly,
     !confidentlyToolFree,
-  );
+  )}${
+    localShotContextMatchesCurrentSet
+      ? `\n\nLIVE DEVICE SHOOTING STATE: The athlete device has newer local progress for the current set. This overrides persisted makes and attempts only for this turn. Current set: ${JSON.stringify(
+        localShotContext,
+      )}. Use these exact totals for any correction.`
+      : ""
+  }`;
 
   const encoder = new TextEncoder();
   const stream = new TransformStream<Uint8Array, Uint8Array>();
@@ -269,6 +283,8 @@ Deno.serve(async (req: Request) => {
             turn.transcript,
             safeConversationSummary,
           );
+        const forceShootingTotalCorrection = round === 0 &&
+          isCurrentShootingCorrectionRequest(turn.transcript);
         if (!(await hasCurrentAIDataConsent(supabase, userId))) {
           throw new Error(
             "AI data processing permission was withdrawn during this turn.",
@@ -318,9 +334,14 @@ Deno.serve(async (req: Request) => {
                       ? {
                         tools: anthropicTools,
                         tool_choice: {
-                          type: formatAttempt > 0 && requestNeedsTool
+                          type: forceShootingTotalCorrection
+                            ? "tool"
+                            : formatAttempt > 0 && requestNeedsTool
                             ? "any"
                             : "auto",
+                          ...(forceShootingTotalCorrection
+                            ? { name: "correct_current_shooting_total" }
+                            : {}),
                           disable_parallel_tool_use: true,
                         },
                       }

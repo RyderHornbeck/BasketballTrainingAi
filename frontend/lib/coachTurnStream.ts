@@ -8,6 +8,19 @@ export {
   type CoachTurnStreamEvent,
 } from "./coachTurnEvents";
 
+export interface LocalShotSessionContext {
+  exerciseId: string;
+  drillName: string | null;
+  setNumber: number;
+  makes: number;
+  attempts: number;
+  targetMakes: number | null;
+  targetAttempts: number | null;
+  remainingAttempts: number | null;
+  lastLocalUserTranscript: string | null;
+  lastLocalCoachReply: string | null;
+}
+
 export async function consumeNdjsonStream(
   stream: ReadableStream<Uint8Array>,
   onEvent: (event: CoachTurnStreamEvent) => void | Promise<void>
@@ -22,6 +35,7 @@ export async function streamCoachTurn(input: {
   transcript: string;
   stateVersion: number;
   conversationSummary?: string;
+  localShotSessionContext?: LocalShotSessionContext | null;
   speculative?: boolean;
   signal: AbortSignal;
   onEvent: (event: CoachTurnStreamEvent) => void | Promise<void>;
@@ -49,6 +63,21 @@ export async function streamCoachTurn(input: {
       transcript: input.transcript,
       state_version: input.stateVersion,
       conversation_summary: input.conversationSummary,
+      local_shot_session_context: input.localShotSessionContext
+        ? {
+          exercise_id: input.localShotSessionContext.exerciseId,
+          drill_name: input.localShotSessionContext.drillName,
+          set_number: input.localShotSessionContext.setNumber,
+          makes: input.localShotSessionContext.makes,
+          attempts: input.localShotSessionContext.attempts,
+          target_makes: input.localShotSessionContext.targetMakes,
+          target_attempts: input.localShotSessionContext.targetAttempts,
+          remaining_attempts: input.localShotSessionContext.remainingAttempts,
+          last_local_user_transcript:
+            input.localShotSessionContext.lastLocalUserTranscript,
+          last_local_coach_reply: input.localShotSessionContext.lastLocalCoachReply,
+        }
+        : null,
       mode: input.speculative === true ? "speculative_read_only" : "standard",
     }),
   });

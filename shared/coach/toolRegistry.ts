@@ -20,6 +20,7 @@ export interface CoachToolSpec {
   description: string;
   capability: CoachCapability;
   execution: "client" | "server";
+  coachVisible?: boolean;
   kind: "read_only" | "mutation";
   realtime: boolean;
   flushShots?: boolean;
@@ -55,91 +56,11 @@ const tool = (
 
 export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   tool({
-    name: "record_make",
-    description: "Record exactly one made shot.",
-    capability: "shots",
-    execution: "client",
-    kind: "mutation",
-    realtime: true,
-    exactSpeech: true,
-    parameters: args(setReference),
-  }),
-  tool({
-    name: "record_miss",
-    description: "Record exactly one missed shot.",
-    capability: "shots",
-    execution: "client",
-    kind: "mutation",
-    realtime: true,
-    exactSpeech: true,
-    parameters: args(setReference),
-  }),
-  tool({
-    name: "record_makes",
-    description: "Add N makes and N attempts.",
-    capability: "shots",
-    execution: "client",
-    kind: "mutation",
-    realtime: true,
-    exactSpeech: true,
-    parameters: args(
-      { ...setReference, count: { type: "integer", minimum: 1, maximum: 500 } },
-      ["count"]
-    ),
-  }),
-  tool({
-    name: "record_misses",
-    description: "Add N misses and N attempts.",
-    capability: "shots",
-    execution: "client",
-    kind: "mutation",
-    realtime: true,
-    exactSpeech: true,
-    parameters: args(
-      { ...setReference, count: { type: "integer", minimum: 1, maximum: 500 } },
-      ["count"]
-    ),
-  }),
-  tool({
-    name: "add_shooting_result",
-    description: "Add an explicitly incremental X-for-Y result.",
-    capability: "shots",
-    execution: "client",
-    kind: "mutation",
-    realtime: true,
-    exactSpeech: true,
-    parameters: args(
-      {
-        ...setReference,
-        makes: { type: "integer", minimum: 0, maximum: 500 },
-        attempts: { type: "integer", minimum: 1, maximum: 500 },
-      },
-      ["makes", "attempts"]
-    ),
-  }),
-  tool({
-    name: "set_shooting_total",
-    description: "Replace one set's actual cumulative X-for-Y progress.",
-    capability: "shots",
-    execution: "client",
-    kind: "mutation",
-    realtime: true,
-    exactSpeech: true,
-    parameters: args(
-      {
-        ...setReference,
-        makes: { type: "integer", minimum: 0, maximum: 500 },
-        attempts: { type: "integer", minimum: 0, maximum: 500 },
-        completed: { type: "boolean" },
-      },
-      ["makes", "attempts", "set_number"]
-    ),
-  }),
-  tool({
     name: "save_shooting_results",
     description: "Persist actual cumulative shooting results.",
     capability: "shots",
     execution: "server",
+    coachVisible: false,
     kind: "mutation",
     realtime: false,
     exactSpeech: true,
@@ -154,6 +75,23 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
         expected_set_number: { type: "integer", minimum: 1, maximum: 100 },
       },
       ["makes", "attempts", "set_number"]
+    ),
+  }),
+  tool({
+    name: "correct_current_shooting_total",
+    description:
+      "Set the current shooting or finishing set's local running total to an explicitly reported cumulative X-for-Y score. Use only when the athlete corrects their current score, such as 'Coach, I'm actually 5 for 5.' The athlete device owns the result and prerecorded progress audio.",
+    capability: "shots",
+    execution: "server",
+    kind: "mutation",
+    realtime: true,
+    exactSpeech: true,
+    parameters: args(
+      {
+        makes: { type: "integer", minimum: 0, maximum: 500 },
+        attempts: { type: "integer", minimum: 0, maximum: 500 },
+      },
+      ["makes", "attempts"],
     ),
   }),
   tool({
@@ -401,26 +339,6 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
     ),
   }),
   tool({
-    name: "update_shots",
-    description:
-      "Record actual shots for one set. Use add for new shots and replace only for an explicit cumulative correction. Do not use for targets.",
-    capability: "shots",
-    execution: "client",
-    kind: "mutation",
-    realtime: true,
-    exactSpeech: true,
-    parameters: args(
-      {
-        ...setReference,
-        operation: { type: "string", enum: ["add", "replace"] },
-        makes: { type: "integer", minimum: 0, maximum: 500 },
-        attempts: { type: "integer", minimum: 1, maximum: 500 },
-        completed: { type: "boolean" },
-      },
-      ["operation", "makes", "attempts", "set_number"]
-    ),
-  }),
-  tool({
     name: "get_workout_state",
     description:
       "Read workout facts. Use position for current/next work, progress for statistics, and list for drill names. Do not guess from earlier conversation.",
@@ -570,7 +488,6 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
 ] as const;
 
 export const COACH_REALTIME_TOOL_NAMES = [
-  "update_shots",
   "get_workout_state",
   "navigate_workout",
   "update_completion",

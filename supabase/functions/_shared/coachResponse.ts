@@ -21,6 +21,18 @@ export interface CoachTurnRequest {
   transcript: string;
   stateVersion: number;
   conversationSummary?: string;
+  localShotSessionContext?: {
+    exerciseId: string;
+    drillName: string | null;
+    setNumber: number;
+    makes: number;
+    attempts: number;
+    targetMakes: number | null;
+    targetAttempts: number | null;
+    remainingAttempts: number | null;
+    lastLocalUserTranscript: string | null;
+    lastLocalCoachReply: string | null;
+  } | null;
   timer?: {
     running: boolean;
     elapsed_seconds: number;
@@ -53,6 +65,62 @@ export function validateCoachTurnRequest(input: unknown): CoachTurnValidation {
   const conversationSummary = typeof body.conversation_summary === "string"
     ? body.conversation_summary.trim()
     : undefined;
+  const rawLocalShotContext = body.local_shot_session_context;
+  let localShotSessionContext: CoachTurnRequest["localShotSessionContext"];
+  if (rawLocalShotContext != null) {
+    if (typeof rawLocalShotContext !== "object" || Array.isArray(rawLocalShotContext)) {
+      return { ok: false, error: "Invalid local shooting context." };
+    }
+    const context = rawLocalShotContext as Record<string, unknown>;
+    const integer = (value: unknown): value is number =>
+      typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+    const nullableInteger = (value: unknown) => value == null || integer(value);
+    const nullableShortText = (value: unknown) =>
+      value == null || (typeof value === "string" && value.length <= 500);
+    const makes = context.makes;
+    const attempts = context.attempts;
+    const setNumber = context.set_number;
+    const targetMakes = context.target_makes;
+    const targetAttempts = context.target_attempts;
+    const remainingAttempts = context.remaining_attempts;
+    if (
+      typeof context.exercise_id !== "string" ||
+      context.exercise_id.length < 1 ||
+      context.exercise_id.length > 128 ||
+      (context.drill_name != null && typeof context.drill_name !== "string") ||
+      !integer(setNumber) ||
+      !integer(makes) ||
+      !integer(attempts) ||
+      makes > attempts ||
+      !nullableInteger(targetMakes) ||
+      !nullableInteger(targetAttempts) ||
+      !nullableInteger(remainingAttempts) ||
+      !nullableShortText(context.last_local_user_transcript) ||
+      !nullableShortText(context.last_local_coach_reply)
+    ) {
+      return { ok: false, error: "Invalid local shooting context." };
+    }
+    localShotSessionContext = {
+      exerciseId: context.exercise_id,
+      drillName: typeof context.drill_name === "string" ? context.drill_name : null,
+      setNumber,
+      makes,
+      attempts,
+      targetMakes: typeof targetMakes === "number" ? targetMakes : null,
+      targetAttempts: typeof targetAttempts === "number"
+        ? targetAttempts
+        : null,
+      remainingAttempts: typeof remainingAttempts === "number"
+        ? remainingAttempts
+        : null,
+      lastLocalUserTranscript: typeof context.last_local_user_transcript === "string"
+        ? context.last_local_user_transcript
+        : null,
+      lastLocalCoachReply: typeof context.last_local_coach_reply === "string"
+        ? context.last_local_coach_reply
+        : null,
+    };
+  }
   const rawTimer = body.timer;
   let timer: CoachTurnRequest["timer"];
   if (rawTimer != null) {
@@ -136,6 +204,7 @@ export function validateCoachTurnRequest(input: unknown): CoachTurnValidation {
       transcript,
       stateVersion,
       conversationSummary,
+      localShotSessionContext,
       timer,
       mode,
     },
@@ -210,6 +279,7 @@ export function isCoachMutationRequest(
   conversationSummary?: string,
 ): boolean {
   const text = transcript.trim().toLowerCase();
+  if (isCurrentShootingCorrectionRequest(text)) return true;
   if (
     /\b(?:add|remove|delete|change|edit|replace|move|switch|skip|complete|finish|reopen|uncomplete|start|pause|resume|stop|reset|extend|shorten|save|record|undo)\b/
       .test(text)
@@ -227,6 +297,12 @@ export function isCoachMutationRequest(
       .test(
         latestCoachTurn,
       );
+}
+
+/** Whether Coach must correct the live total rather than merely narrate it. */
+export function isCurrentShootingCorrectionRequest(transcript: string): boolean {
+  return /(?:\b(?:i\s+)?(?:actually|think)\s+)?\b(?:made|missed)\s+(?:that\s+|the\s+)?last(?:\s+(?:one|shot))?\b|\b(?:you\s+)?(?:counted|marked|logged)\s+(?:a\s+)?(?:make|miss)(?:\s+as|\s+instead of)\s+(?:a\s+)?(?:make|miss)\b/i
+    .test(transcript);
 }
 
 /**

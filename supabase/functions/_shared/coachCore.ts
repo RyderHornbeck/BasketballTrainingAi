@@ -28,10 +28,18 @@ export interface TimerState {
 }
 
 export interface ClientAction {
-  type: "start_timer" | "pause_timer" | "resume_timer" | "stop_timer" | "get_timer_status";
+  type:
+    | "start_timer"
+    | "pause_timer"
+    | "resume_timer"
+    | "stop_timer"
+    | "get_timer_status"
+    | "set_shooting_total";
   duration_seconds?: number | null;
   timer_exercise_id?: string | null;
   timer_set_number?: number | null;
+  makes?: number;
+  attempts?: number;
 }
 
 export interface ToolOutcome {
@@ -178,11 +186,10 @@ SHOT TRACKING
 - Shot tools update current progress immediately and persist at target attempts, explicit finish/move, drill change, or coach close. Describe it only as progress—never unsaved, buffered, local, temporary, or session-only.
 - After an ordinary partial make, miss, or shooting total, respond with exactly: "You're X for Y, N shots left." Say nothing before or after it—no acknowledgment, praise, reaction, advice, drill/set label, makes remaining, or filler.
 - Always say "X for Y." Never say "X slash Y," "X over Y," "X comma Y," or omit "for."
-- record_make and record_miss hard-code one attempt. "Make," "Made another," "another make," "made one," or "one make" calls record_make once; equivalent miss wording calls record_miss once.
-- NUMBER PRECEDENCE: any explicit N greater than one in "made/missed N," "just made/missed N," "N in a row," or "N straight" MUST call record_makes once with count N or call record_misses once with count N; never call a singular tool, split calls, ask for totals, or reduce N to one.
-- record_makes adds exactly N makes and N attempts; record_misses adds zero makes and exactly N attempts, then the only spoken output is exactly "You're X for Y, N shots left."
-- Trust spoken numbers; correct any completed set directly with set_shooting_total and keep it completed.
-- Explicit incremental "2 for 3" calls add_shooting_result once. Never invent a denominator. Absolute cumulative "I'm 6 for 10" calls set_shooting_total. Single make/miss wording never uses numeric-result tools.
+- Ordinary make/miss commands are handled locally before they reach you. Never call a tool to add an incremental result.
+- correct_current_shooting_total is the only tool you may use to change session shooting totals. Use it only for an explicit correction. Calculate its absolute makes and attempts from LIVE DEVICE SHOOTING STATE and recent local conversation; never guess or use target values.
+- For "I missed the last one instead of make," change the live total by replacing the last recorded make with a miss: makes minus 1, attempts unchanged. For "you marked the last miss as a make," add 1 make, attempts unchanged. Then call correct_current_shooting_total once.
+- The athlete device applies a correction and plays the exact prerecorded progress reply. Do not speak a confirmation or progress sentence after that tool.
 - Keep partial sets current. On "what's next?" below target attempts, get position and give exact remaining shots/makes; advance only on explicit move/finish.
 - For reported shooting results, save only the athlete's actual cumulative makes and actual cumulative attempts. Never save the prescribed target makes, target attempts, remaining numbers, or substitutes. Explicit set completion keeps current progress; do not ask for makes or attempts. Ask only for an ambiguous set or timer.
 - After a completed shooting/finishing set, lead the athlete into the next set rather than saying "Set saved." Say: "You shot X for Y. You're now on set N of [drill], [left/right side if any]. Your target is X for Y. Start shooting!" Use authoritative post-save state and never skip a set. This announcement is the current conversational context for the athlete's next request.
@@ -210,7 +217,7 @@ export const COACH_TURN_STABLE_SYSTEM_PROMPT = `${COACH_SYSTEM_PROMPT}
 ANTHROPIC TOOL CONTRACT
 - Use the supplied native tool blocks for every workout action or state lookup. Never write a tool call, function call, JSON, arguments, query, or tool name as ordinary text.
 - Never mention a query, command, tool, catalog, database, request mode, parameter, ID, or internal process.
-- Exact make, miss, and incremental shooting commands are handled before a turn reaches you. Do not attempt the client-only record_make, record_miss, record_makes, record_misses, add_shooting_result, or set_shooting_total actions. If an unmatched shooting result reaches you, use an available server action only when the athlete supplied unambiguous cumulative makes and attempts; otherwise ask for those actual totals.
+- Exact make and miss commands are handled before a turn reaches you. For a clear current-score or last-shot correction, use only correct_current_shooting_total with absolute totals calculated from LIVE DEVICE SHOOTING STATE. Otherwise ask for clarification.
 - You can start, pause, resume, and reset timers. Treat stop/end/cancel/break as pause; only reset or restart when explicitly requested. Never tell the athlete to operate a timer themselves.
 - For a drill absent from the workout, search once before offering the closest match. After a clear yes or a selection from offered options, call add_workout_exercise with that exact displayed name. Never re-search or ask a second confirmation.
 - Do not claim a workout fact or completed change until its tool succeeds.
@@ -252,125 +259,6 @@ const DRILL_REFERENCE_PROPERTIES = {
 };
 
 const REALTIME_TOOL_DEFS = [
-  {
-    name: "record_make",
-    description:
-      "Record exactly one made shot in fast session-local progress. This always adds exactly 1 make and 1 attempt.",
-    parameters: {
-      type: "object",
-      properties: {
-        ...DRILL_REFERENCE_PROPERTIES,
-        set_number: {
-          type: "number",
-          description:
-            "Optional 1-based set number; defaults to the current set.",
-        },
-      },
-    },
-  },
-  {
-    name: "record_miss",
-    description:
-      "Record exactly one missed shot in fast session-local progress. This always adds exactly 0 makes and 1 attempt.",
-    parameters: {
-      type: "object",
-      properties: {
-        ...DRILL_REFERENCE_PROPERTIES,
-        set_number: {
-          type: "number",
-          description:
-            "Optional 1-based set number; defaults to the current set.",
-        },
-      },
-    },
-  },
-  {
-    name: "record_makes",
-    description:
-      "Record N consecutive made shots in fast session-local progress. This deterministically adds count makes and count attempts.",
-    parameters: {
-      type: "object",
-      properties: {
-        ...DRILL_REFERENCE_PROPERTIES,
-        count: {
-          type: "number",
-          description:
-            "The explicit positive whole-number count in 'made N in a row.'",
-        },
-        set_number: {
-          type: "number",
-          description:
-            "Optional 1-based set number; defaults to the current set.",
-        },
-      },
-      required: ["count"],
-    },
-  },
-  {
-    name: "record_misses",
-    description:
-      "Record N consecutive missed shots in fast session-local progress. This deterministically adds zero makes and count attempts.",
-    parameters: {
-      type: "object",
-      properties: {
-        ...DRILL_REFERENCE_PROPERTIES,
-        count: {
-          type: "number",
-          description:
-            "The explicit positive whole-number count in 'missed N in a row.'",
-        },
-        set_number: {
-          type: "number",
-          description:
-            "Optional 1-based set number; defaults to the current set.",
-        },
-      },
-      required: ["count"],
-    },
-  },
-  {
-    name: "add_shooting_result",
-    description:
-      "Add a multi-shot result to existing session progress, such as 'another 2 for 3' or 'I just made 2 of 3.'",
-    parameters: {
-      type: "object",
-      properties: {
-        ...DRILL_REFERENCE_PROPERTIES,
-        makes: { type: "number" },
-        attempts: { type: "number" },
-        set_number: {
-          type: "number",
-          description:
-            "1-based set number; defaults to current set. For a spoken left/right side, use the set_number whose side_label matches.",
-        },
-      },
-      required: ["makes", "attempts"],
-    },
-  },
-  {
-    name: "set_shooting_total",
-    description:
-      "Replace the current set's cumulative progress with an explicitly stated total such as 'I'm 6 for 10.' Never use for make, miss, another, or just made.",
-    parameters: {
-      type: "object",
-      properties: {
-        ...DRILL_REFERENCE_PROPERTIES,
-        makes: { type: "number" },
-        attempts: { type: "number" },
-        set_number: {
-          type: "number",
-          description:
-            "1-based set number; defaults to current set. For a spoken left/right side, use the matching set number.",
-        },
-        completed: {
-          type: "boolean",
-          description:
-            "True only when the athlete explicitly says they are done early. Target attempts complete automatically.",
-        },
-      },
-      required: ["makes", "attempts"],
-    },
-  },
   {
     name: "set_set_completion",
     description:
@@ -3311,6 +3199,34 @@ export async function executeCoachTool(
             : null,
           timer_set_number: timerSetNumber,
         },
+      };
+    }
+    case "correct_current_shooting_total": {
+      const makes = Number(args.makes);
+      const attempts = Number(args.attempts);
+      const currentExercise = findCurrentExercise(ctx);
+      if (!Number.isInteger(makes) || makes < 0 || !Number.isInteger(attempts) ||
+        attempts < 0 || makes > attempts) {
+        return {
+          result: "Makes cannot be greater than attempts.",
+          dbChanged: false,
+        };
+      }
+      if (!currentExercise || !isShootingDrill(currentExercise)) {
+        return {
+          result: `You're not on a shooting or finishing drill. You're on ${
+            currentExercise?.name ?? "the current drill"
+          }.`,
+          dbChanged: false,
+        };
+      }
+      return {
+        result: "Current shooting total sent to the athlete device.",
+        dbChanged: false,
+        clientAction: { type: "set_shooting_total", makes, attempts },
+        // The device applies the current cursor and speaks its prerecorded,
+        // target-aware progress reply. Haiku must not narrate this mutation.
+        skipModelResponse: true,
       };
     }
     case "get_timer_status":

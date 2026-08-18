@@ -155,6 +155,7 @@ export function generatedResponseTools(
   return GENERATED_COACH_TOOL_REGISTRY
     .filter((tool) =>
       tool.execution === "server"
+      && tool.coachVisible !== false
       && (!allowed || allowed.has(tool.capability))
     )
     .map((tool) => ({

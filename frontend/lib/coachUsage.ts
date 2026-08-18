@@ -259,6 +259,13 @@ export function appendConversationTurn(
     user ? `User: ${user}` : "",
     coach ? `Coach: ${coach}` : "",
   ].filter(Boolean).join("\n");
-  const merged = current ? `${current}\n${turn}` : turn;
-  return merged.length > maxLen ? merged.slice(-maxLen) : merged;
+  const turns = current
+    .split(/\n(?=User:\s)/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  turns.push(turn);
+  while (turns.length > 1 && turns.join("\n").length > maxLen) {
+    turns.shift();
+  }
+  return turns.join("\n").slice(-maxLen);
 }
