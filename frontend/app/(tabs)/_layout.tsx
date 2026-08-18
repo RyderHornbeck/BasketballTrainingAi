@@ -142,7 +142,7 @@ export default function TabsLayout() {
           name="days"
           listeners={{ tabPress: selectionHaptic }}
           options={{
-            title: "VersionUpdated",
+            title: "Workouts",
             tabBarIcon: ({ color, focused }) => (
               <CourtBasketballIcon
                 size={TAB_ICON_SIZE}

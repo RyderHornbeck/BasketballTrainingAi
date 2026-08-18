@@ -2889,6 +2889,18 @@ export class RealtimeCoachSession {
     const dayId = this.dayId;
     const sessionKey = this.sessionKey;
     if (!dayId || !sessionKey) throw new Error("Coach session is not active.");
+    const currentPositionBefore =
+      toolName === "set_current_position"
+        ? this.currentSetState()
+        : null;
+    const positionBefore = currentPositionBefore
+      ? {
+        exerciseId: currentPositionBefore.exercise_id,
+        setNumber: currentPositionBefore.set_number,
+      }
+      : null;
+    const timerWasRunning =
+      positionBefore != null && this.currentTimerSnapshot().running;
     const requestArgs = { ...args };
     if (typeof requestArgs.client_request_id !== "string") {
       requestArgs.client_request_id = createClientRequestId(toolName);
@@ -2957,6 +2969,24 @@ export class RealtimeCoachSession {
       data.client_workout_context,
       data.state_version,
     );
+    const positionAfter =
+      toolName === "set_current_position"
+        ? this.currentSetState()
+        : null;
+    if (
+      timerWasRunning &&
+      positionBefore &&
+      positionAfter &&
+      (
+        positionBefore.exerciseId !== positionAfter.exercise_id ||
+        positionBefore.setNumber !== positionAfter.set_number
+      )
+    ) {
+      // Changing workout position ends the running timer. Do this only after
+      // the authoritative cursor confirms a different drill or set so asking
+      // for the current item (or selecting it again) leaves timing untouched.
+      this.callbacks?.onTimerAction({ type: "stop_timer" });
+    }
     if (data.db_changed && toolName === "set_shooting_set_targets") {
       this.reconcileShootingTargetChange(requestArgs);
     }
@@ -3515,6 +3545,32 @@ export class RealtimeCoachSession {
 
   private currentSetState(): RealtimeCurrentSetState | null {
     return this.workoutState?.navigation?.current_set_state ?? null;
+  }
+
+  private runningTimerPosition(): {
+    exerciseId: string;
+    setNumber: number;
+  } | null {
+    const current = this.currentSetState();
+    return current && this.currentTimerSnapshot().running
+      ? { exerciseId: current.exercise_id, setNumber: current.set_number }
+      : null;
+  }
+
+  private stopTimerAfterConfirmedNavigation(
+    positionBefore: { exerciseId: string; setNumber: number } | null,
+  ): void {
+    if (!positionBefore) return;
+    const positionAfter = this.currentSetState();
+    if (
+      positionAfter &&
+      (
+        positionAfter.exercise_id !== positionBefore.exerciseId ||
+        positionAfter.set_number !== positionBefore.setNumber
+      )
+    ) {
+      this.callbacks?.onTimerAction({ type: "stop_timer" });
+    }
   }
 
   private localShotSessionContext(): LocalShotSessionContext | null {
@@ -5640,10 +5696,17 @@ export class RealtimeCoachSession {
       if (action && ["start_timer", "pause_timer", "resume_timer", "stop_timer"].includes(action.type)) {
         this.callbacks?.onTimerAction(action);
       }
+      const timerPositionBeforeNavigation =
+        ["navigate_workout", "set_current_position"].includes(event.name)
+          ? this.runningTimerPosition()
+          : null;
       this.updateWorkoutState(
         event.workout_context,
         "state_version" in event ? event.state_version : undefined,
       );
+      if (["navigate_workout", "set_current_position"].includes(event.name)) {
+        this.stopTimerAfterConfirmedNavigation(timerPositionBeforeNavigation);
+      }
       if (event.db_changed) emitWorkoutUpdated("coach");
       return;
     }
@@ -6033,10 +6096,17 @@ export class RealtimeCoachSession {
           this.callbacks?.onTimerAction(action);
         }
       }
+      const timerPositionBeforeNavigation =
+        ["navigate_workout", "set_current_position"].includes(event.name)
+          ? this.runningTimerPosition()
+          : null;
       this.updateWorkoutState(
         event.workout_context,
         "state_version" in event ? event.state_version : undefined,
       );
+      if (["navigate_workout", "set_current_position"].includes(event.name)) {
+        this.stopTimerAfterConfirmedNavigation(timerPositionBeforeNavigation);
+      }
       if (event.db_changed) emitWorkoutUpdated("coach");
       return;
     }
