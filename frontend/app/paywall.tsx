@@ -568,7 +568,14 @@ export default function PaywallScreen() {
               ))}
             </View>
             {trialNotice ? (
-              <Text style={styles.trialNotice}>{trialNotice}</Text>
+              <Text
+                style={[
+                  styles.trialNotice,
+                  { color: mode === "deal" ? palette.accent : DEFAULT_COLORS.accent },
+                ]}
+              >
+                {trialNotice}
+              </Text>
             ) : null}
             {message ? (
               <Text accessibilityRole="alert" style={styles.operationMessage}>
