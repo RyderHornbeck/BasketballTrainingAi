@@ -188,8 +188,15 @@ export default function ProfileScreen() {
         text: "Sign Out",
         style: "destructive",
         onPress: async () => {
-          await signOut();
-          router.replace("/auth/login");
+          try {
+            await signOut();
+            // Signing out synchronously updates AuthProvider, and
+            // SubscriptionRouteGuard redirects authenticated tabs to welcome.
+            // Calling router.replace here as well races that guard's native
+            // navigation transaction on iOS.
+          } catch {
+            Alert.alert("Could not sign out", "Please try again.");
+          }
         },
       },
     ]);
@@ -274,15 +281,21 @@ export default function ProfileScreen() {
     const previousVoice = coachVoice;
     setCoachVoice(nextVoice);
     setCoachSaving(true);
-    const { error } = await supabase
-      .from("profiles")
-      .update({ realtime_coach_voice: nextVoice })
-      .eq("id", user.id);
-    if (error) {
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ realtime_coach_voice: nextVoice })
+        .eq("id", user.id);
+      if (error) throw error;
+      // The overlay reads the shared Auth profile for its name and Cloud palette.
+      // Refresh it immediately so changing voices updates that UI in-place.
+      await refreshProfile();
+    } catch {
       setCoachVoice(previousVoice);
       Alert.alert("Could not change coach", "Please try again.");
+    } finally {
+      setCoachSaving(false);
     }
-    setCoachSaving(false);
   };
 
   const handleDeleteAccount = () => {

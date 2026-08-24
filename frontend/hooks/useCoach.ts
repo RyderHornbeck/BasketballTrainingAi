@@ -46,6 +46,7 @@ export interface UseCoachResult {
   dailyBudget: CoachDailyBudget | null;
   connectedProvider: CoachVoiceProvider | null;
   providerFallbackReason: string | null;
+  audioLevels: { microphone: number; tts: number };
   startSession: () => Promise<void>;
   stopSession: () => Promise<void>;
   toggleMute: () => void;
@@ -103,6 +104,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const [dailyBudget, setDailyBudget] = useState<CoachDailyBudget | null>(null);
   const [connectedProvider, setConnectedProvider] = useState<CoachVoiceProvider | null>(null);
   const [providerFallbackReason, setProviderFallbackReason] = useState<string | null>(null);
+  const [audioLevels, setAudioLevels] = useState({ microphone: 0, tts: 0 });
   const [muted, setMuted] = useState(false);
   const timerAudio = useTimerAudioCues();
 
@@ -425,6 +427,10 @@ export function useCoach(dayId: string | null): UseCoachResult {
           },
           onTimerAction: applyTimerAction,
           getTimerState,
+          onAudioLevel: (source, level) => {
+            if (!mountedRef.current) return;
+            setAudioLevels((current) => ({ ...current, [source]: level }));
+          },
           onUserTranscript: (text) => {
             if (!mountedRef.current) return;
             transcriptGenerationRef.current += 1;
@@ -695,6 +701,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
     dailyBudget,
     connectedProvider,
     providerFallbackReason,
+    audioLevels,
     startSession,
     stopSession,
     toggleMute,

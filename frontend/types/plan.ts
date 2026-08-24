@@ -26,6 +26,7 @@ export type AppState =
 
 export interface OnboardingFormData {
   overall_skill_level: string;
+  playing_level: string;
   main_goal: string;
   position: string;
   strengths: string;

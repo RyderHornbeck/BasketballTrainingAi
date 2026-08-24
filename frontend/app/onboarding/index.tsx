@@ -3,6 +3,7 @@ import { SkillSlider } from "@/components/SkillSlider";
 import { AIDataProcessingDisclosure } from "@/components/AIDataProcessingDisclosure";
 import { Button } from "@/components/Button";
 import { useAuth } from "@/hooks/useAuth";
+import { useCoachIntroAudio } from "@/hooks/useCoachIntroAudio";
 import { useTheme } from "@/hooks/useTheme";
 import { selectionHaptic } from "@/lib/haptics";
 import {
@@ -78,7 +79,9 @@ const PLAYING_LEVELS = [
   "Varsity High School",
   "College",
   "Professional",
+  "No team / just for fun",
 ];
+const PLAYING_FOR_FUN = "No team / just for fun";
 const POSITIONS = ["Guard", "Wing", "Big", "Unknown"];
 const WEAKNESS_OPTIONS = [
   "Shooting",
@@ -135,6 +138,7 @@ function validatePreferredName(value: string): string | null {
 
 const initialForm: OnboardingFormData = {
   overall_skill_level: "",
+  playing_level: "",
   main_goal: "",
   position: "",
   strengths: "",
@@ -158,6 +162,7 @@ const initialForm: OnboardingFormData = {
 export default function OnboardingScreen() {
   const { colors } = useTheme();
   const { user, profile, refreshProfile, loading: authLoading } = useAuth();
+  const { playNext: playCoachIntroduction, stop: stopCoachIntroduction } = useCoachIntroAudio();
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<OnboardingFormData>(initialForm);
   const [playingLevel, setPlayingLevel] = useState("");
@@ -170,6 +175,12 @@ export default function OnboardingScreen() {
   const [checklistRun, setChecklistRun] = useState(0);
   const totalSteps = user ? QUESTION_STEPS + 1 : PRE_SIGNUP_TOTAL_STEPS;
   const visibleStep = user && step === AI_CONSENT_STEP ? QUESTION_STEPS + 1 : step;
+  const selectedCoachVoice = coachVoice ?? DEFAULT_COACH_VOICE;
+  const selectedCoach = COACH_PROFILES.find((coach) => coach.voice === selectedCoachVoice)!;
+
+  useEffect(() => {
+    if (step !== COACH_SELECTION_STEP) stopCoachIntroduction();
+  }, [step, stopCoachIntroduction]);
 
   // Already finished onboarding — don't make them answer again.
   useEffect(() => {
@@ -186,6 +197,7 @@ export default function OnboardingScreen() {
     loadOnboardingDraft().then((draft) => {
       if (draft) {
         setForm({ ...draft, has_court_access: true, equipment: ["Basketball"] });
+        setPlayingLevel(draft.playing_level ?? "");
         setCoachVoice(draft.realtime_coach_voice ?? null);
       }
     });
@@ -456,7 +468,10 @@ export default function OnboardingScreen() {
             icon: playingLevelIcon(level),
           }))}
           selected={[playingLevel]}
-          onToggle={setPlayingLevel}
+          onToggle={(level) => {
+            setPlayingLevel(level);
+            update("playing_level", level === PLAYING_FOR_FUN ? "JV High School" : level);
+          }}
         />
       )}
 
@@ -632,8 +647,20 @@ export default function OnboardingScreen() {
 
       {step === COACH_SELECTION_STEP && !user && (
         <View style={styles.coachChoiceList}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Play ${selectedCoach.name}'s introduction`}
+            onPress={() => playCoachIntroduction(selectedCoach.id)}
+            style={[styles.selectedCoachOrb, { backgroundColor: colors.accent }]}
+          >
+            <Image
+              source={require("../../assets/images/WhiteAppLogoForButton.png")}
+              style={styles.selectedCoachOrbIcon}
+              resizeMode="contain"
+            />
+          </Pressable>
           {COACH_PROFILES.map((coach) => {
-            const selected = coach.voice === coachVoice;
+            const selected = coach.voice === selectedCoachVoice;
             return (
               <Pressable
                 key={coach.voice}
@@ -642,6 +669,7 @@ export default function OnboardingScreen() {
                 onPress={() => {
                   selectionHaptic();
                   setCoachVoice(coach.voice);
+                  playCoachIntroduction(coach.id);
                 }}
                 style={({ pressed }) => [
                   styles.coachChoice,
@@ -670,7 +698,7 @@ export default function OnboardingScreen() {
             );
           })}
           <Text style={[styles.coachChoiceFootnote, { color: colors.textMuted }]}>
-            You can change your coach anytime in Settings.
+            Tap the selected coach orb to hear an introduction. You can change your coach anytime in Settings.
           </Text>
         </View>
       )}
@@ -1129,14 +1157,28 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   coachChoice: {
-    minHeight: 74,
+    minHeight: 76,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 14,
     borderWidth: 1.5,
     borderRadius: 16,
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 12,
+  },
+  selectedCoachOrb: {
+    alignSelf: "center",
+    width: 112,
+    height: 112,
+    borderRadius: 56,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  selectedCoachOrbIcon: {
+    width: 62,
+    height: 62,
   },
   coachChoiceCopy: {
     flex: 1,

@@ -117,6 +117,7 @@ export async function submitOnboardingAnswers(
     {
       user_id: userId,
       overall_skill_level: form.overall_skill_level,
+      playing_level: form.playing_level,
       main_goal: form.main_goal,
       position: form.position,
       strengths: form.strengths,

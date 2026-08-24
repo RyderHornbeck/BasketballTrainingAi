@@ -217,6 +217,7 @@ export interface RealtimeCoachCallbacks {
   onCommandHeard?: (event: RecognizedCoachCommand) => void;
   onUserTranscript?: (text: string) => void;
   onCoachTranscript?: (text: string) => void;
+  onAudioLevel?: (source: "microphone" | "tts", level: number) => void;
   onCoachPlaybackFinished?: () => void;
   onConversationSummary?: (summary: string) => void;
   onUsage?: (totals: ReturnType<ReturnType<typeof createUsageTracker>["snapshot"]>) => void;
@@ -558,6 +559,22 @@ type PcmInputFrame = {
   sampleRate: number;
 };
 
+function pcm16LevelFromBase64(base64: string): number {
+  try {
+    const binary = globalThis.atob(base64);
+    let sum = 0;
+    const samples = Math.floor(binary.length / 2);
+    for (let index = 0; index < samples; index += 1) {
+      const value = binary.charCodeAt(index * 2) | (binary.charCodeAt(index * 2 + 1) << 8);
+      const normalized = (value & 0x8000 ? value - 0x10000 : value) / 32768;
+      sum += normalized * normalized;
+    }
+    return samples ? Math.min(1, Math.sqrt(sum / samples) * 3.2) : 0;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Keeps the microphone open locally, but sends Ink only likely speech plus
  * enough leading/trailing PCM for accurate first words and turn detection.
@@ -822,6 +839,14 @@ export class RealtimeCoachSession {
   private workoutStateVersion = -1;
   private stateFingerprint = "";
   private cartesiaVoiceId = "";
+  private lastAudioLevelEmitAt = { microphone: 0, tts: 0 };
+
+  private emitAudioLevel(source: "microphone" | "tts", pcmBase64: string) {
+    const now = Date.now();
+    if (now - this.lastAudioLevelEmitAt[source] < 65) return;
+    this.lastAudioLevelEmitAt[source] = now;
+    this.callbacks?.onAudioLevel?.(source, pcm16LevelFromBase64(pcmBase64));
+  }
   private ttsInputBuffer = "";
   private ttsSafetyBlocked = false;
   private playbackEnqueue: Promise<void> = Promise.resolve();
@@ -1462,6 +1487,7 @@ export class RealtimeCoachSession {
     this.inkAudioGate = new InkAudioGate();
     this.duplexSubscriptions = [
       duplexAudio.addAudioInputListener((event) => {
+        this.emitAudioLevel("microphone", event.data);
         if (
           generation === this.connectionGeneration &&
           this.active &&
@@ -1807,6 +1833,7 @@ export class RealtimeCoachSession {
     this.inkAudioGate = new InkAudioGate();
     this.duplexSubscriptions = [
       duplexAudio.addAudioInputListener((event) => {
+        this.emitAudioLevel("microphone", event.data);
         if (
           generation === this.connectionGeneration &&
           this.active &&
@@ -1898,6 +1925,7 @@ export class RealtimeCoachSession {
       firstAudioTimeoutMs,
       onAudio: (audio, identity) => {
         if (!ownsActiveSpeech(identity)) return;
+        this.emitAudioLevel("tts", audio);
         this.playbackEnqueue = this.playbackEnqueue
           .then(() => {
             if (!ownsActiveSpeech(identity)) return;
@@ -2165,9 +2193,14 @@ export class RealtimeCoachSession {
     this.generationActive = false;
     this.playbackActive = false;
     void this.duplexAudio?.clearPlaybackAsync().catch(() => undefined);
-    this.updateStatus();
-    this.callbacks?.onError(
-      error instanceof Error ? error.message : "Inworld TTS could not produce speech.",
+    // Do not leave Assembly and the native audio session alive after the
+    // per-utterance retry has also failed. With no Inworld socket, updateStatus
+    // would otherwise fall back to "listening" and accept more transcripts
+    // into a permanently silent session. A full connection_lost teardown makes
+    // useCoach rebuild both transports with fresh tokens and a new audio engine.
+    this.recoverAssemblyInworldTransport(
+      generation,
+      error instanceof Error ? error : new Error("Inworld TTS could not produce speech."),
     );
   }
 
@@ -5852,6 +5885,7 @@ export class RealtimeCoachSession {
           this.logVoiceMetric(turn, "first_sonic_audio");
         }
         const encoded = bytesToBase64(event.audio);
+        this.emitAudioLevel("tts", encoded);
         this.playbackEnqueue = this.playbackEnqueue
           .then(() => {
             if (!shouldAcceptPlaybackChunk(

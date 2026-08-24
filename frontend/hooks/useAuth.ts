@@ -1,5 +1,4 @@
 import { supabase } from "@/lib/supabase";
-import { logOutRevenueCatUser } from "@/lib/revenueCat";
 import { Profile } from "@/types/database";
 import * as AppleAuthentication from "expo-apple-authentication";
 import * as Crypto from "expo-crypto";
@@ -351,12 +350,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [ensureProfile]);
 
   const signOut = useCallback(async () => {
-    const [supabaseResult] = await Promise.allSettled([
-      supabase.auth.signOut(),
-      logOutRevenueCatUser(),
-    ]);
-    if (supabaseResult.status === "rejected") throw supabaseResult.reason;
-    if (supabaseResult.value.error) throw supabaseResult.value.error;
+    // A local sign-out is sufficient for a device logout and remains reliable
+    // offline. SubscriptionProvider owns the corresponding RevenueCat logout
+    // after the auth state changes, avoiding two native logout calls during the
+    // same navigation teardown.
+    const { error } = await supabase.auth.signOut({ scope: "local" });
+    if (error) throw error;
   }, []);
 
   const refreshProfile = useCallback(async () => {

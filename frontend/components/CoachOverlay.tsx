@@ -1,8 +1,10 @@
 // Full-screen realtime voice coach. Audio-only — listens continuously while open.
 
 import { Text } from "@/components/Text";
+import { useAuth } from "@/hooks/useAuth";
 import { NoConnectionBanner } from "@/components/NoConnectionBanner";
 import { useCoach } from "@/hooks/useCoach";
+import { getCoachProfile } from "@/lib/coachProfiles";
 import { useTheme } from "@/hooks/useTheme";
 import { actionHaptic } from "@/lib/haptics";
 import { Ionicons } from "@expo/vector-icons";
@@ -26,6 +28,8 @@ interface CoachOverlayProps {
   dayTitle: string | null;
 }
 
+const CLOUD_ORB_SIZE = 150;
+
 function formatTimer(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -34,11 +38,12 @@ function formatTimer(totalSeconds: number): string {
 
 export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
   const { colors } = useTheme();
+  const { profile } = useAuth();
+  const coachProfile = getCoachProfile(profile?.realtime_coach_voice);
   const insets = useSafeAreaInsets();
-  const [pulse] = useState(() => new Animated.Value(1));
-  const [thinkingStep, setThinkingStep] = useState(0);
   const [userTranscriptOpacity] = useState(() => new Animated.Value(1));
   const [coachTranscriptOpacity] = useState(() => new Animated.Value(1));
+  const [pulse] = useState(() => new Animated.Value(1));
 
   const {
     status,
@@ -54,6 +59,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     stopSession,
     toggleMute,
     toggleTimer,
+    audioLevels,
   } = useCoach(dayId);
 
   const budgetExhausted = status === "budget_exhausted";
@@ -71,33 +77,21 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
   const hasCoachTranscript = Boolean(coachTranscript);
 
   useEffect(() => {
+    const scale =
+      status === "listening" ? 1 + Math.min(1, audioLevels.microphone) * 0.3 : 1;
+    Animated.timing(pulse, {
+      toValue: scale,
+      duration: 110,
+      useNativeDriver: true,
+    }).start();
+  }, [audioLevels.microphone, pulse, status]);
+
+  useEffect(() => {
     void activateKeepAwakeAsync("coach-overlay");
     return () => {
       deactivateKeepAwake("coach-overlay");
     };
   }, []);
-
-  useEffect(() => {
-    if (status === "listening") {
-      const anim = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulse, { toValue: 1.12, duration: 900, useNativeDriver: true }),
-          Animated.timing(pulse, { toValue: 1, duration: 900, useNativeDriver: true }),
-        ])
-      );
-      anim.start();
-      return () => anim.stop();
-    }
-    pulse.setValue(1);
-  }, [status, pulse]);
-
-  useEffect(() => {
-    if (status !== "thinking") return;
-    const interval = setInterval(() => {
-      setThinkingStep((step) => (step + 1) % 6);
-    }, 170);
-    return () => clearInterval(interval);
-  }, [status]);
 
   useEffect(() => {
     if (hasUserTranscript) userTranscriptOpacity.setValue(1);
@@ -158,6 +152,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
                   ? "Tap to retry"
                   : "Starting coach…";
 
+  const isErrorState = status === "error";
   const isRedState =
     budgetExhausted || status === "muted" || status === "disconnecting" || status === "error";
   const centerColor = isRedState ? colors.danger : colors.accent;
@@ -190,7 +185,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
         <NoConnectionBanner />
         <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
           <View style={styles.headerLeft}>
-            <Text style={[styles.title, { color: colors.text }]}>Coach</Text>
+            <Text style={[styles.title, { color: colors.text }]}>{coachProfile.name}</Text>
             {dayTitle ? (
               <Text style={[styles.subtitle, { color: colors.textSecondary }]} numberOfLines={1}>
                 {dayTitle}
@@ -238,7 +233,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
             <Text style={[styles.budgetLabel, { color: colors.textSecondary }]}>
               {budgetExhausted
                 ? "Today's coach credit is used up"
-                : `${remainingBudgetPercent}% left today`}
+                : `${remainingBudgetPercent}% coach time left today`}
             </Text>
           </View>
         ) : null}
@@ -265,9 +260,10 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
               </Animated.View>
             ) : null}
           </View>
-          <Text style={[styles.statusLabel, { color: colors.text }]}>{statusLabel}</Text>
+          <View style={[styles.coachControls, !isErrorState && styles.cloudControls]}>
+            <Text style={[styles.statusLabel, { color: colors.text }]}>{statusLabel}</Text>
 
-          <Pressable
+            <Pressable
             accessibilityRole="button"
             accessibilityLabel={statusLabel}
             onPress={() => {
@@ -279,49 +275,43 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
               }
             }}
             disabled={orbDisabled}
-          >
-            <Animated.View
-              style={[
-                styles.coachOrb,
-                {
-                  backgroundColor: centerColor,
-                  shadowColor: isRedState ? colors.danger : colors.accent,
-                  transform: [{ scale: pulse }],
-                },
-              ]}
             >
-              {status === "connecting" ? (
-                <ActivityIndicator size="large" color="#FFFFFF" />
-              ) : status === "thinking" ? (
-                <View style={styles.thinkingDots} accessibilityLabel="Coach is thinking">
-                  {[0, 1, 2].map((dotIndex) => {
-                    const phase = (thinkingStep - dotIndex + 6) % 6;
-                    const translateY = [0, -6, -10, -6, 0, 3][phase];
-                    return (
-                      <View
-                        key={dotIndex}
-                        style={[styles.thinkingDot, { transform: [{ translateY }] }]}
-                      />
-                    );
-                  })}
-                </View>
-              ) : status === "speaking" ? (
-                <Image
-                  source={require("../assets/images/WhiteAppLogoForButton.png")}
-                  style={styles.coachSpeakingLogo}
-                  resizeMode="contain"
-                />
-              ) : centerIcon ? (
-                <Ionicons name={centerIcon} size={52} color="#FFFFFF" />
-              ) : null}
-            </Animated.View>
-          </Pressable>
+              <Animated.View
+                style={[
+                  styles.coachOrb,
+                  {
+                    backgroundColor: centerColor,
+                    shadowColor: isRedState ? colors.danger : colors.accent,
+                    transform: [{ scale: pulse }],
+                  },
+                ]}
+              >
+                {status === "connecting" ? (
+                  <ActivityIndicator size="large" color="#FFFFFF" />
+                ) : status === "thinking" ? (
+                  <View style={styles.thinkingDots} accessibilityLabel="Coach is thinking">
+                    {[0, 1, 2].map((dotIndex) => (
+                      <View key={dotIndex} style={styles.thinkingDot} />
+                    ))}
+                  </View>
+                ) : status === "speaking" ? (
+                  <Image
+                    source={require("../assets/images/WhiteAppLogoForButton.png")}
+                    style={styles.coachSpeakingLogo}
+                    resizeMode="contain"
+                  />
+                ) : centerIcon ? (
+                  <Ionicons name={centerIcon} size={52} color="#FFFFFF" />
+                ) : null}
+              </Animated.View>
+            </Pressable>
 
-          <View style={styles.hints}>
-            <Text style={[styles.hint, { color: colors.textSecondary }]}>{hint}</Text>
-            <Text style={[styles.hint, { color: colors.textSecondary }]}>
-              Make sure headphones are connected
-            </Text>
+            <View style={styles.hints}>
+              <Text style={[styles.hint, { color: colors.textSecondary }]}>{hint}</Text>
+              <Text style={[styles.hint, { color: colors.textSecondary }]}>
+                Make sure headphones are connected
+              </Text>
+            </View>
           </View>
         </View>
 
@@ -438,12 +428,23 @@ const styles = StyleSheet.create({
     marginBottom: 36,
     letterSpacing: -0.3,
   },
+  coachControls: {
+    alignItems: "center",
+  },
+  cloudControls: {
+    // Keeps the label just below a maximum-length user/Coach transcript while
+    // returning the normal-sized orb to the visual center of the screen.
+    transform: [{ translateY: 12 }],
+  },
   coachOrb: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
+    width: CLOUD_ORB_SIZE,
+    height: CLOUD_ORB_SIZE,
+    borderRadius: CLOUD_ORB_SIZE / 2,
+    position: "relative",
     alignItems: "center",
     justifyContent: "center",
+    overflow: "visible",
+    borderWidth: 0,
     shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.4,
     shadowRadius: 24,

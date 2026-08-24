@@ -90,6 +90,7 @@ interface OnboardingAnswers {
   id: string;
   user_id: string;
   overall_skill_level: string | null;
+  playing_level: string | null;
   main_goal: string | null;
   position: string | null;
   strengths: string | null;
