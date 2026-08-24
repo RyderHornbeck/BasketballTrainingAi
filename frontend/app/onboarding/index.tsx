@@ -1,4 +1,5 @@
 import { OnboardingStep } from "@/components/OnboardingStep";
+import { CoachOrb } from "@/components/CoachOrb";
 import { SkillSlider } from "@/components/SkillSlider";
 import { AIDataProcessingDisclosure } from "@/components/AIDataProcessingDisclosure";
 import { Button } from "@/components/Button";
@@ -651,13 +652,9 @@ export default function OnboardingScreen() {
             accessibilityRole="button"
             accessibilityLabel={`Play ${selectedCoach.name}'s introduction`}
             onPress={() => playCoachIntroduction(selectedCoach.id)}
-            style={[styles.selectedCoachOrb, { backgroundColor: colors.accent }]}
+            style={styles.selectedCoachOrb}
           >
-            <Image
-              source={require("../../assets/images/WhiteAppLogoForButton.png")}
-              style={styles.selectedCoachOrbIcon}
-              resizeMode="contain"
-            />
+            <CoachOrb size={112} state="listening" volume={0} shadowColor={colors.accent} />
           </Pressable>
           {COACH_PROFILES.map((coach) => {
             const selected = coach.voice === selectedCoachVoice;
@@ -1168,17 +1165,8 @@ const styles = StyleSheet.create({
   },
   selectedCoachOrb: {
     alignSelf: "center",
-    width: 112,
-    height: 112,
-    borderRadius: 56,
-    alignItems: "center",
-    justifyContent: "center",
     marginTop: 12,
     marginBottom: 8,
-  },
-  selectedCoachOrbIcon: {
-    width: 62,
-    height: 62,
   },
   coachChoiceCopy: {
     flex: 1,
