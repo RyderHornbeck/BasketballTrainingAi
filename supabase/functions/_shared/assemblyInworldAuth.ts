@@ -13,6 +13,11 @@ export interface AssemblyStreamingToken {
   max_session_duration_seconds: number;
 }
 
+export interface AssemblyTokenLimits {
+  expiresInSeconds?: number;
+  maxSessionDurationSeconds?: number;
+}
+
 export interface InworldAccessToken {
   token: string;
   expires_at: string;
@@ -103,13 +108,25 @@ function parseInworldBasicCredential(value: string): { key: string; secret: stri
 export async function mintAssemblyStreamingToken(
   apiKey: string,
   fetcher: typeof fetch = fetch,
+  limits: AssemblyTokenLimits = {},
 ): Promise<AssemblyStreamingToken> {
   if (!apiKey.trim()) {
     throw new VoiceProviderAuthError("ASSEMBLYAI_API_KEY is not configured.", "assemblyai", 500);
   }
+  const expiresInSeconds = Math.max(
+    10,
+    Math.min(ASSEMBLY_STREAMING_TOKEN_TTL_SECONDS, limits.expiresInSeconds ?? ASSEMBLY_STREAMING_TOKEN_TTL_SECONDS),
+  );
+  const maxSessionDurationSeconds = Math.max(
+    expiresInSeconds,
+    Math.min(
+      ASSEMBLY_MAX_SESSION_SECONDS,
+      limits.maxSessionDurationSeconds ?? ASSEMBLY_MAX_SESSION_SECONDS,
+    ),
+  );
   const url = new URL(ASSEMBLY_TOKEN_ENDPOINT);
-  url.searchParams.set("expires_in_seconds", String(ASSEMBLY_STREAMING_TOKEN_TTL_SECONDS));
-  url.searchParams.set("max_session_duration_seconds", String(ASSEMBLY_MAX_SESSION_SECONDS));
+  url.searchParams.set("expires_in_seconds", String(expiresInSeconds));
+  url.searchParams.set("max_session_duration_seconds", String(maxSessionDurationSeconds));
   const response = await fetcher(url, {
     headers: { Authorization: apiKey.trim() },
   }).catch(() => {
@@ -123,8 +140,8 @@ export async function mintAssemblyStreamingToken(
     token: payload.token,
     expires_in: typeof payload.expires_in_seconds === "number"
       ? payload.expires_in_seconds
-      : ASSEMBLY_STREAMING_TOKEN_TTL_SECONDS,
-    max_session_duration_seconds: ASSEMBLY_MAX_SESSION_SECONDS,
+      : expiresInSeconds,
+    max_session_duration_seconds: maxSessionDurationSeconds,
   };
 }
 

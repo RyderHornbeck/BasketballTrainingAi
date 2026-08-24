@@ -296,14 +296,14 @@ Deno.test("catalog search preamble is natural and additions name the selected dr
     "search preamble should speak only the compact drill reference",
   );
   assert(
-    coachToolPreamble("start_timer", {}) === "I'm starting the timer.",
-    "timer mutations should have a short athlete-facing preamble",
+    coachToolPreamble("start_timer", {}) === null,
+    "timer starts should wait for the local running confirmation",
   );
   assert(
     coachToolPreamble("add_workout_exercise", {
       exercise_name: "V Dribble Series",
-    }) === "I'm adding V Dribble Series.",
-    "drill additions should name the selected drill",
+    }) === null,
+    "drill additions should wait for the successful exact confirmation",
   );
   assert(
     coachToolPreamble("get_progress", {}) === null,

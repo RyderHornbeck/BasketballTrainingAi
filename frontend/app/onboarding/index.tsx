@@ -22,6 +22,7 @@ import {
   saveOnboardingDraft,
 } from "@/lib/onboardingDraft";
 import { requestPlanGeneration, submitOnboardingAnswers } from "@/lib/plan";
+import { markCoachTutorialPending } from "@/lib/coachTutorial";
 import { supabase } from "@/lib/supabase";
 import { OnboardingFormData } from "@/types/plan";
 import { Text } from "@/components/Text";
@@ -349,10 +350,8 @@ export default function OnboardingScreen() {
           clearPendingAIDataConsent(),
         ]);
         await refreshProfile();
-        router.replace({
-          pathname: "/paywall",
-          params: { next: "generating" },
-        });
+        await markCoachTutorialPending(user.id);
+        router.replace("/tutorial-workout");
         void requestPlanGeneration().catch((generationError) => {
           console.error("Unable to start initial plan generation:", generationError);
         });

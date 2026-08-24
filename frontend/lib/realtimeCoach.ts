@@ -3919,7 +3919,7 @@ export class RealtimeCoachSession {
       seconds >= 60 && seconds % 60 === 0
         ? `${seconds / 60}-minute`
         : `${seconds}-second`;
-    return `A ${duration} timer has been started.`;
+    return `Your ${duration} timer is now running.`;
   }
 
   private timerDurationLabel(durationSeconds: number): string {
