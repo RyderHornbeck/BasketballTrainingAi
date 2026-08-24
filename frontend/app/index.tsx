@@ -5,7 +5,6 @@ import { useTheme } from "@/hooks/useTheme";
 import { useSubscription } from "@/hooks/useSubscription";
 import { prepareAnalyticsSummary } from "@/lib/analytics";
 import { loadOnboardingDraft } from "@/lib/onboardingDraft";
-import { shouldShowCoachTutorial } from "@/lib/coachTutorial";
 import { Redirect } from "expo-router";
 import React, { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
@@ -18,7 +17,6 @@ export default function Index() {
     userId: string;
     exists: boolean;
   } | null>(null);
-  const [tutorialPending, setTutorialPending] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -36,21 +34,6 @@ export default function Index() {
       })
       .catch(() => {
         if (!cancelled) setDraftState({ userId: user.id, exists: false });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [authLoading, profile?.onboarding_completed, user?.id]);
-
-  useEffect(() => {
-    if (!user?.id || authLoading || !profile?.onboarding_completed) return;
-    let cancelled = false;
-    void shouldShowCoachTutorial(user.id)
-      .then((pending) => {
-        if (!cancelled) setTutorialPending(pending);
-      })
-      .catch(() => {
-        if (!cancelled) setTutorialPending(false);
       });
     return () => {
       cancelled = true;
@@ -83,8 +66,6 @@ export default function Index() {
   }
 
   if (!hasPremium) {
-    if (tutorialPending === null) return <IndexPending />;
-    if (tutorialPending) return <Redirect href="/tutorial-workout" />;
     return <Redirect href={{ pathname: "/paywall", params: { next: "generating" } }} />;
   }
 

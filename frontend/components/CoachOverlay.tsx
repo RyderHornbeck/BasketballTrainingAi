@@ -44,9 +44,6 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
   const [userTranscriptOpacity] = useState(() => new Animated.Value(1));
   const [coachTranscriptOpacity] = useState(() => new Animated.Value(1));
   const [pulse] = useState(() => new Animated.Value(1));
-  const [thinkingDotOffsets] = useState(() =>
-    Array.from({ length: 3 }, () => new Animated.Value(0))
-  );
 
   const {
     status,
@@ -88,27 +85,6 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
       useNativeDriver: true,
     }).start();
   }, [audioLevels.microphone, pulse, status]);
-
-  useEffect(() => {
-    if (status !== "thinking") {
-      thinkingDotOffsets.forEach((offset) => offset.setValue(0));
-      return;
-    }
-
-    const animation = Animated.loop(
-      Animated.stagger(
-        150,
-        thinkingDotOffsets.map((offset) =>
-          Animated.sequence([
-            Animated.timing(offset, { toValue: -8, duration: 180, useNativeDriver: true }),
-            Animated.timing(offset, { toValue: 0, duration: 180, useNativeDriver: true }),
-          ])
-        )
-      )
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [status, thinkingDotOffsets]);
 
   useEffect(() => {
     void activateKeepAwakeAsync("coach-overlay");
@@ -315,13 +291,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
                 ) : status === "thinking" ? (
                   <View style={styles.thinkingDots} accessibilityLabel="Coach is thinking">
                     {[0, 1, 2].map((dotIndex) => (
-                      <Animated.View
-                        key={dotIndex}
-                        style={[
-                          styles.thinkingDot,
-                          { transform: [{ translateY: thinkingDotOffsets[dotIndex] }] },
-                        ]}
-                      />
+                      <View key={dotIndex} style={styles.thinkingDot} />
                     ))}
                   </View>
                 ) : status === "speaking" ? (

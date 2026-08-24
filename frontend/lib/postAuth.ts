@@ -5,7 +5,6 @@ import {
   setAIDataConsent,
 } from "@/lib/aiDataConsent";
 import { DEFAULT_COACH_VOICE } from "@/lib/coachProfiles";
-import { markCoachTutorialPending } from "@/lib/coachTutorial";
 import { requestPlanGeneration, submitOnboardingAnswers } from "@/lib/plan";
 import { supabase } from "@/lib/supabase";
 import { router } from "expo-router";
@@ -68,8 +67,10 @@ export async function routeAfterSocialAuth(
       clearPendingAIDataConsent(),
     ]);
     await refreshProfile();
-    await markCoachTutorialPending(userId);
-    router.replace("/tutorial-workout");
+    router.replace({
+      pathname: "/paywall",
+      params: { next: "generating" },
+    });
     void requestPlanGeneration().catch((generationError) => {
       console.error("Unable to start initial plan generation:", generationError);
     });

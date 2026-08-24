@@ -1,15 +1,15 @@
-import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
+import { Button } from "@/components/Button";
 import { DaySelector } from "@/components/DaySelector";
+import { ExerciseCard } from "@/components/ExerciseCard";
+import { ProgressRing } from "@/components/ProgressRing";
 import { Skeleton } from "@/components/Skeleton";
 import { Text } from "@/components/Text";
-import { WorkoutDayDetail } from "@/components/WorkoutDayDetail";
-import { WorkoutDayOverview } from "@/components/WorkoutDayOverview";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
 import { onWorkoutUpdated } from "@/lib/coachEvents";
 import { reportNetworkFailure } from "@/lib/connectivity";
-import { calculateDayPerformance } from "@/lib/dayPerformance";
+import { calculateDayPerformance, getPerformanceColor } from "@/lib/dayPerformance";
 import {
   aggregateObservedShots,
   buildSetPlan,
@@ -17,6 +17,7 @@ import {
   hydrateSetLogs,
 } from "@/lib/exerciseSetLogs";
 import { actionHaptic, selectionHaptic } from "@/lib/haptics";
+import { sortWorkoutExercisesForDisplay } from "@/lib/workoutOrder";
 import {
   ExerciseLogInput,
   finishWorkoutDay,
@@ -33,8 +34,20 @@ import {
 import { ExerciseLog } from "@/types/database";
 import { WorkoutDayWithExercises } from "@/types/plan";
 import {
+  CaretLeftIcon,
+  ChartLineUpIcon,
+  CheckCircleIcon,
+  BasketballIcon,
   FireIcon,
+  PercentIcon,
+  MagicWandIcon,
   LockIcon,
+  PlusIcon,
+  PlayCircleIcon,
+  FloppyDiskIcon,
+  PencilSimpleIcon,
+  TargetIcon,
+  TimerIcon,
 } from "phosphor-react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import NetInfo from "@react-native-community/netinfo";
@@ -564,6 +577,8 @@ export default function DaysScreen() {
     };
   }, [dayDetail, progressVersion]);
 
+  const performanceColor = getPerformanceColor(dayPerformance.score, colors);
+
   const blockExhausted = useMemo(
     () => days.length > 0 && days.every((day) => day.completed),
     [days]
@@ -733,17 +748,50 @@ export default function DaysScreen() {
         ) : detailLoading || !dayDetail ? (
           <DayContentSkeleton viewMode={viewMode} />
         ) : viewMode === "overview" ? (
-          <WorkoutDayOverview
-            model={{
-              dayNumber: selectedDayNumber ?? 1,
-              isPastOrCompleted: isPastOrCompletedDay,
-              completed: dayDetail.completed,
-              exerciseStats,
-              performance: dayPerformance,
-              weeklyStats,
-            }}
-            actions={{
-              onViewWorkoutStats: () => {
+          <View>
+            <Text style={[styles.dayLabel, { color: colors.textSecondary }]}>
+              Day {selectedDayNumber}
+              {isPastOrCompletedDay ? " · Past workout" : ""}
+            </Text>
+            <View style={styles.statsSquareRow}>
+              <Card style={styles.statSquare}>
+                <View style={styles.statSquareContent}>
+                  <ProgressRing
+                    progress={exerciseStats.progress}
+                    completed={exerciseStats.completed}
+                    total={exerciseStats.total}
+                    size={76}
+                    strokeWidth={7}
+                  />
+                  <Text style={[styles.statSquareLabel, { color: colors.textSecondary }]}>
+                    Exercises completed
+                  </Text>
+                </View>
+              </Card>
+
+              <Card style={styles.statSquare}>
+                <View style={styles.statSquareContent}>
+                  <Text
+                    style={[
+                      styles.performanceScore,
+                      {
+                        color: dayPerformance.hasData ? performanceColor : colors.textMuted,
+                      },
+                    ]}
+                  >
+                    {dayPerformance.hasData ? `${dayPerformance.score}%` : "--"}
+                  </Text>
+                  <Text style={[styles.statSquareLabel, { color: colors.textSecondary }]}>
+                    Today&apos;s performance
+                  </Text>
+                </View>
+              </Card>
+            </View>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`View Day ${selectedDayNumber} workout stats`}
+              onPress={() => {
                 actionHaptic();
                 router.push({
                   pathname: "/workout-stats",
@@ -752,43 +800,278 @@ export default function DaysScreen() {
                     dayNumber: String(dayDetail.day_number ?? selectedDayNumber ?? 1),
                   },
                 });
-              },
-              onStartWorkout: () => {
+              }}
+              hitSlop={4}
+              pressRetentionOffset={28}
+              style={({ pressed }) => [
+                styles.startWorkoutCard,
+                styles.workoutStatsButton,
+                {
+                  backgroundColor: colors.accent,
+                  opacity: pressed ? 0.84 : 1,
+                  shadowColor: colors.shadow,
+                },
+              ]}
+            >
+              <View style={styles.startWorkoutTextBlock}>
+                <Text style={styles.startWorkoutTitle}>Workout Stats</Text>
+                <Text style={styles.startWorkoutSubtitle}>
+                  View and share this day&apos;s results
+                </Text>
+              </View>
+            </Pressable>
+
+            <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>This Week</Text>
+            <Card style={styles.weekStatsCard}>
+              <View style={styles.weekStat}>
+                <BasketballIcon size={26} color={colors.accent} weight="duotone" />
+                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Shots</Text>
+                <Text style={[styles.weekStatValue, { color: colors.text }]}>
+                  {weeklyStats.shots}
+                </Text>
+              </View>
+              <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
+              <View style={styles.weekStat}>
+                <PercentIcon size={26} color={colors.accent} weight="duotone" />
+                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Accuracy</Text>
+                <Text style={[styles.weekStatValue, { color: colors.text }]}>
+                  {weeklyStats.accuracy != null ? `${weeklyStats.accuracy}%` : "--"}
+                </Text>
+              </View>
+              <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
+              <View style={styles.weekStat}>
+                <ChartLineUpIcon size={26} color={colors.accent} weight="duotone" />
+                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>
+                  Weekly perf
+                </Text>
+                <Text style={[styles.weekStatValue, { color: colors.text }]}>
+                  {weeklyStats.averagePerformance != null
+                    ? `${weeklyStats.averagePerformance}%`
+                    : "--"}
+                </Text>
+              </View>
+            </Card>
+
+            <Pressable
+              accessibilityRole="button"
+              onPressIn={() => {
+                // This CTA sits inside a ScrollView. Run the local-only action
+                // on touch-down so a slight vertical movement cannot let the
+                // ScrollView cancel the intended tap before onPress fires.
                 actionHaptic();
                 switchViewMode("workout");
-              },
-            }}
-          />
+              }}
+              hitSlop={4}
+              pressRetentionOffset={28}
+              style={({ pressed }) => [
+                styles.startWorkoutCard,
+                {
+                  backgroundColor: colors.accent,
+                  opacity: pressed ? 0.84 : 1,
+                  shadowColor: colors.shadow,
+                },
+              ]}
+            >
+              <View style={styles.startWorkoutTextBlock}>
+                <Text style={styles.startWorkoutTitle}>
+                  {isPastOrCompletedDay ? "View workout" : "Start workout"}
+                </Text>
+                <Text style={styles.startWorkoutSubtitle}>
+                  {isPastOrCompletedDay
+                    ? "Review or edit your logged drills"
+                    : "Start your personalized workout"}
+                </Text>
+              </View>
+              <View style={styles.startWorkoutIcon}>
+                <PlayCircleIcon size={40} color="#FFFFFF" weight="fill" />
+              </View>
+            </Pressable>
+
+            {dayDetail.completed && (
+              <View style={[styles.completedBanner, { backgroundColor: colors.accentMuted }]}>
+                <CheckCircleIcon size={16} color={colors.accent} weight="fill" />
+                <Text style={[styles.completedBannerText, { color: colors.accent }]}>
+                  Workout complete
+                </Text>
+              </View>
+            )}
+          </View>
         ) : (
-          <WorkoutDayDetail
-            model={{
-              workout: dayDetail,
-              shootingStats: dayShootingStats,
-              editing: editingWorkout,
-              finishing: finishingWorkout,
-              completionAnimationTokens,
-            }}
-            actions={{
-              onBack: () => {
+          <View>
+            <Pressable
+              onPress={() => {
+                actionHaptic();
                 setEditingWorkout(false);
                 switchViewMode("overview");
-              },
-              onToggleEditing: () => setEditingWorkout((value) => !value),
-              onAddWithAI: () =>
-                router.push({
-                  pathname: "/workout-edit-ai",
-                  params: { dayId: dayDetail.id },
-                }),
-              onAddManually: () =>
-                router.push({
-                  pathname: "/workout-edit-manual",
-                  params: { dayId: dayDetail.id },
-                }),
-              onDeleteExercise: confirmDeleteExercise,
-              onLogChange: handleLogChange,
-              onFinish: confirmFinishWorkout,
-            }}
-          />
+              }}
+              style={({ pressed }) => [styles.backRow, { opacity: pressed ? 0.65 : 1 }]}
+              hitSlop={8}
+            >
+              <CaretLeftIcon size={22} color={colors.accent} weight="bold" />
+              <Text style={[styles.backText, { color: colors.accent }]}>Back to day overview</Text>
+            </Pressable>
+
+            <View style={styles.dayWorkoutTopRow}>
+              <Text style={[styles.dayWorkoutLabel, { color: colors.textMuted }]}>
+                Day {dayDetail.day_number} Workout
+              </Text>
+              <Pressable
+                onPress={() => {
+                  actionHaptic();
+                  setEditingWorkout((value) => !value);
+                }}
+                style={({ pressed }) => [
+                  styles.editWorkoutButton,
+                  {
+                    backgroundColor: editingWorkout ? colors.accent : colors.card,
+                    borderColor: colors.accent,
+                    opacity: pressed ? 0.82 : 1,
+                  },
+                ]}
+              >
+                {editingWorkout ? (
+                  <FloppyDiskIcon size={15} color="#FFFFFF" weight="bold" />
+                ) : (
+                  <PencilSimpleIcon size={15} color={colors.accent} weight="bold" />
+                )}
+                <Text
+                  style={[
+                    styles.editWorkoutButtonText,
+                    { color: editingWorkout ? "#FFFFFF" : colors.accent },
+                  ]}
+                >
+                  {editingWorkout ? "Save changes" : "Edit"}
+                </Text>
+              </Pressable>
+            </View>
+            <Card style={styles.workoutStatsCard}>
+              <View style={styles.weekStat}>
+                <BasketballIcon size={26} color={colors.accent} weight="duotone" />
+                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Shots</Text>
+                <Text style={[styles.weekStatValue, { color: colors.text }]}>
+                  {dayShootingStats.shots}
+                </Text>
+              </View>
+              <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
+              <View style={styles.weekStat}>
+                <TargetIcon size={26} color={colors.accent} weight="duotone" />
+                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Makes</Text>
+                <Text style={[styles.weekStatValue, { color: colors.text }]}>
+                  {dayShootingStats.makes}
+                </Text>
+              </View>
+              <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
+              <View style={styles.weekStat}>
+                <PercentIcon size={26} color={colors.accent} weight="duotone" />
+                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Accuracy</Text>
+                <Text style={[styles.weekStatValue, { color: colors.text }]}>
+                  {dayShootingStats.accuracy != null ? `${dayShootingStats.accuracy}%` : "--"}
+                </Text>
+              </View>
+            </Card>
+
+            {editingWorkout ? (
+              <View style={styles.addWorkoutActions}>
+                <Pressable
+                  onPress={() => {
+                    actionHaptic();
+                    router.push({
+                      pathname: "/workout-edit-ai",
+                      params: { dayId: dayDetail.id },
+                    });
+                  }}
+                  style={({ pressed }) => [
+                    styles.addWorkoutButton,
+                    styles.addWorkoutAIButton,
+                    { backgroundColor: colors.accentMuted, opacity: pressed ? 0.72 : 1 },
+                  ]}
+                >
+                  <MagicWandIcon size={18} color={colors.accent} weight="bold" />
+                  <Text style={[styles.addWorkoutButtonText, { color: colors.accent }]}>Add with AI</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    actionHaptic();
+                    router.push({
+                      pathname: "/workout-edit-manual",
+                      params: { dayId: dayDetail.id },
+                    });
+                  }}
+                  style={({ pressed }) => [
+                    styles.addWorkoutButton,
+                    {
+                      backgroundColor: colors.card,
+                      borderColor: colors.border,
+                      opacity: pressed ? 0.72 : 1,
+                    },
+                  ]}
+                >
+                  <PlusIcon size={18} color={colors.text} weight="bold" />
+                  <Text style={[styles.addWorkoutButtonText, { color: colors.text }]}>Add manually</Text>
+                </Pressable>
+              </View>
+            ) : null}
+
+            <View style={styles.workoutHeader}>
+              <Text style={[styles.workoutHeaderTitle, { color: colors.text }]}>
+                {dayDetail.exercises.length}{" "}
+                {dayDetail.exercises.length === 1 ? "exercise" : "exercises"}
+              </Text>
+              {dayDetail.estimated_minutes ? (
+                <View style={styles.workoutHeaderMetaRow}>
+                  <TimerIcon size={14} color={colors.textSecondary} weight="duotone" />
+                  <Text style={[styles.workoutHeaderMeta, { color: colors.textSecondary }]}>
+                    ~{dayDetail.estimated_minutes} min workout
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+
+            <Text style={[styles.drillsLabel, { color: colors.textMuted }]}>Drills</Text>
+
+            {sortWorkoutExercisesForDisplay(dayDetail.exercises).map((exercise) => (
+                <ExerciseCard
+                  key={exercise.id}
+                  exercise={exercise}
+                  readOnly={false}
+                  editMode={editingWorkout}
+                  completionAnimationToken={completionAnimationTokens[exercise.id]}
+                  onDelete={() => confirmDeleteExercise(exercise.id, exercise.name)}
+                  onLogChange={handleLogChange}
+                />
+              ))}
+
+            {dayDetail.completed ? (
+              <View style={[styles.completedBanner, { backgroundColor: colors.accentMuted }]}>
+                <CheckCircleIcon size={16} color={colors.accent} weight="fill" />
+                <Text style={[styles.completedBannerText, { color: colors.accent }]}>
+                  Workout complete
+                </Text>
+              </View>
+            ) : (
+              <Pressable
+                onPress={confirmFinishWorkout}
+                disabled={finishingWorkout}
+                style={({ pressed }) => [
+                  styles.finishWorkoutButton,
+                  {
+                    backgroundColor: colors.accent,
+                    opacity: finishingWorkout || pressed ? 0.86 : 1,
+                    shadowColor: colors.accent,
+                  },
+                ]}
+              >
+                {finishingWorkout ? (
+                  <Text style={styles.finishWorkoutButtonText}>Saving workout...</Text>
+                ) : (
+                  <>
+                    <CheckCircleIcon size={20} color="#FFFFFF" weight="fill" />
+                    <Text style={styles.finishWorkoutButtonText}>Finish workout</Text>
+                  </>
+                )}
+              </Pressable>
+            )}
+          </View>
         )}
         </View>
       </ScrollView>
@@ -1090,6 +1373,101 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  backRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginBottom: 16,
+    paddingHorizontal: 2,
+  },
+  backText: {
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  workoutHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+    paddingHorizontal: 2,
+  },
+  dayWorkoutTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  dayWorkoutLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  workoutStatsCard: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    marginBottom: 18,
+  },
+  editWorkoutButton: {
+    minHeight: 32,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    marginBottom: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  editWorkoutButtonText: {
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  addWorkoutActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 18,
+  },
+  addWorkoutButton: {
+    flex: 1,
+    minHeight: 46,
+    borderWidth: 1,
+    borderRadius: 15,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+  },
+  addWorkoutAIButton: {
+    borderWidth: 0,
+  },
+  addWorkoutButtonText: {
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  workoutHeaderTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    letterSpacing: -0.4,
+  },
+  workoutHeaderMeta: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  workoutHeaderMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  drillsLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: 10,
+    marginTop: 4,
+    paddingHorizontal: 2,
+  },
   completedBanner: {
     marginTop: 12,
     borderRadius: 14,
@@ -1103,5 +1481,24 @@ const styles = StyleSheet.create({
   completedBannerText: {
     fontWeight: "800",
     fontSize: 15,
+  },
+  finishWorkoutButton: {
+    marginTop: 18,
+    minHeight: 54,
+    borderRadius: 16,
+    paddingHorizontal: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.24,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  finishWorkoutButtonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "800",
   },
 });

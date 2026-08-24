@@ -393,9 +393,14 @@ export function coachToolPreamble(
     return speech.ok ? speech.text : "I'm searching for that drill.";
   }
   if (toolName === "add_workout_exercise") {
-    // Wait for the write to succeed so the athlete hears the completed,
-    // concrete addition rather than an optimistic "I'm adding" preamble.
-    return null;
+    const exerciseName = typeof args.exercise_name === "string"
+      ? args.exercise_name.replace(/\s+/g, " ").trim()
+      : "";
+    if (exerciseName && exerciseName.length <= 100) {
+      const speech = assessCoachSpeech(`I'm adding ${exerciseName}.`);
+      return speech.ok ? speech.text : "I'm adding that drill.";
+    }
+    return "I'm adding that drill.";
   }
 
   const preambles: Record<string, string> = {
@@ -404,6 +409,7 @@ export function coachToolPreamble(
     set_set_completion: "I'm marking that set complete.",
     complete_drill: "I'm marking that drill complete.",
     uncomplete_drill: "I'm reopening that drill.",
+    start_timer: "I'm starting the timer.",
     pause_timer: "I'm pausing the timer.",
     resume_timer: "I'm resuming the timer.",
     stop_timer: "I'm stopping the timer.",

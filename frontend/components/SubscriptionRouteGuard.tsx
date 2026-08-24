@@ -16,12 +16,11 @@ export function SubscriptionRouteGuard({ children }: { children: React.ReactNode
   const { colors } = useTheme();
   const rootSegment = segments[0] ?? "";
   const isPublicRoute = PUBLIC_SEGMENTS.has(rootSegment);
-  const isTutorialRoute = rootSegment === "tutorial-workout";
   const isFinishSetup = rootSegment === "finish-setup";
 
   let gate: React.ReactNode = null;
 
-  if (!isPublicRoute && !isTutorialRoute) {
+  if (!isPublicRoute) {
     if (authLoading) {
       gate = <SubscriptionGateLoading />;
     } else if (!user) {
@@ -38,16 +37,6 @@ export function SubscriptionRouteGuard({ children }: { children: React.ReactNode
       gate = <Redirect href="/" />;
     } else if (!hasPremium) {
       gate = <Redirect href={{ pathname: "/paywall", params: { next: "generating" } }} />;
-    }
-  }
-
-  if (isTutorialRoute) {
-    if (authLoading || isLoadingSubscription) {
-      gate = <SubscriptionGateLoading />;
-    } else if (!user) {
-      gate = <Redirect href="/welcome" />;
-    } else if (!profile?.onboarding_completed) {
-      gate = <Redirect href="/onboarding" />;
     }
   }
 

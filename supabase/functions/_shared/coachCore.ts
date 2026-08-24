@@ -2590,7 +2590,7 @@ export async function executeCoachTool(
       ctx.day.active_set_number = 1;
       await refreshEstimate();
       return {
-        result: `I've added ${clip.exercise_name} to your workout. You're on set 1.`,
+        result: `Added ${clip.exercise_name} and moved to set 1.`,
         dbChanged: true,
       };
     }

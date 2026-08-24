@@ -15,92 +15,15 @@ import {
   useFonts,
 } from "@expo-google-fonts/poppins";
 import { Stack, ThemeProvider as NavigationThemeProvider } from "expo-router";
-import { Text } from "@/components/Text";
-import { useTheme } from "@/hooks/useTheme";
 import * as SplashScreen from "expo-splash-screen";
 import * as SystemUI from "expo-system-ui";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import NetInfo from "@react-native-community/netinfo";
-import { Animated, StyleSheet, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { TourProvider, type TooltipRenderProps } from "guideway";
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
-
-const TUTORIAL_SPOTLIGHT_COPY: Record<string, string> = {
-  "tutorial-start-workout": "Hey! Let’s begin your tutorial workout. Press Start workout.",
-  "tutorial-drills": "These are your two tutorial exercises. Tap either one to continue.",
-  "tutorial-coach": "Now let’s start. Press the Court Coach button to talk to me!",
-  "tutorial-finish-workout": "Pound Dribbles is complete. Press this to see your finished workout.",
-};
-
-function TutorialGuidewayBubble({ step }: TooltipRenderProps) {
-  const { colors } = useTheme();
-  const [typedMessage, setTypedMessage] = useState("");
-  const [scale] = useState(() => new Animated.Value(0.92));
-  const message = TUTORIAL_SPOTLIGHT_COPY[step.id] ?? "";
-
-  useEffect(() => {
-    scale.setValue(0.92);
-    Animated.spring(scale, {
-      toValue: 1,
-      useNativeDriver: true,
-      friction: 7,
-      tension: 120,
-    }).start();
-
-    let index = 0;
-    const interval = setInterval(() => {
-      index += 1;
-      setTypedMessage(message.slice(0, index));
-      if (index >= message.length) clearInterval(interval);
-    }, 16);
-    return () => clearInterval(interval);
-  }, [message, scale]);
-
-  return (
-    <Animated.View style={[tutorialBubbleStyles.container, { transform: [{ scale }] }]}>
-      <View style={[tutorialBubbleStyles.label, { backgroundColor: colors.accent }]}>
-        {typedMessage.length >= 8 ? (
-          <Text style={tutorialBubbleStyles.labelText}>Court Coach</Text>
-        ) : null}
-      </View>
-      <View style={[tutorialBubbleStyles.bubble, { backgroundColor: colors.card }]}>
-        <Text style={[tutorialBubbleStyles.message, { color: colors.text }]}>{typedMessage}</Text>
-      </View>
-    </Animated.View>
-  );
-}
-
-const tutorialTour = [
-  {
-    id: "coach-tutorial",
-    steps: [
-      {
-        id: "tutorial-start-workout",
-        cutout: { shape: "rounded" as const, padding: 10, radius: 20 },
-        placement: "top" as const,
-      },
-      {
-        id: "tutorial-drills",
-        cutout: { shape: "rounded" as const, padding: 8, radius: 18 },
-        placement: "top" as const,
-      },
-      {
-        id: "tutorial-coach",
-        cutout: { shape: "circle" as const, padding: 10 },
-        placement: "top" as const,
-      },
-      {
-        id: "tutorial-finish-workout",
-        cutout: { shape: "rounded" as const, padding: 10, radius: 16 },
-        placement: "top" as const,
-      },
-    ],
-  },
-];
 
 function RootNavigator() {
   const { scheme, colors, setMode } = useThemeContext();
@@ -150,7 +73,6 @@ function RootNavigator() {
             <Stack.Screen name="auth/signup" />
             <Stack.Screen name="onboarding/index" />
             <Stack.Screen name="paywall" />
-            <Stack.Screen name="tutorial-workout" />
             <Stack.Screen name="finish-setup" />
             <Stack.Screen name="generating" />
             <Stack.Screen name="drill-timer" />
@@ -223,42 +145,8 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <ThemeProvider>
-        <TourProvider
-          tours={tutorialTour}
-          colorScheme="auto"
-          defaultCutout={{ shape: "rounded", padding: 8, radius: 16 }}
-          tooltipComponent={TutorialGuidewayBubble}
-          overlayTapBehavior="none"
-          allowTargetInteraction
-        >
-          <AppShell />
-        </TourProvider>
+        <AppShell />
       </ThemeProvider>
     </SafeAreaProvider>
   );
 }
-
-const tutorialBubbleStyles = StyleSheet.create({
-  container: { width: 310 },
-  label: {
-    alignSelf: "flex-start",
-    paddingHorizontal: 11,
-    paddingVertical: 5,
-    borderRadius: 12,
-    marginLeft: 12,
-    zIndex: 1,
-  },
-  labelText: { color: "#FFFFFF", fontSize: 12, fontWeight: "800" },
-  bubble: {
-    marginTop: -3,
-    paddingHorizontal: 18,
-    paddingVertical: 16,
-    borderRadius: 22,
-    shadowColor: "#000000",
-    shadowOpacity: 0.12,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 5,
-  },
-  message: { fontSize: 16, fontWeight: "700", lineHeight: 24 },
-});
