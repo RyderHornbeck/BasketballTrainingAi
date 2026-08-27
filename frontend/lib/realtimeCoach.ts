@@ -2567,17 +2567,19 @@ export class RealtimeCoachSession {
                 startAfterConfirmation: true,
                 readyForConfirmation: false,
               };
-              const side = set?.side_label ? `, ${set.side_label}` : "";
-              return `Time's up. You're now on set ${currentSet.set_number} of ${
-                current.name ?? "this drill"
-              }${side}. Would you like me to start the timer?`;
+              return `Time's up. ${this.setLocation(
+                current.name,
+                currentSet.set_number,
+                set?.side_label,
+              )}. Would you like me to start the timer?`;
             }
             const makes = currentSet.progress.makes;
             const attempts = currentSet.progress.attempts;
-            const side = set?.side_label ? `, ${set.side_label}` : "";
-            const position = `You're on set ${currentSet.set_number}${side} in ${
-              current.name ?? "this drill"
-            }.`;
+            const position = `${this.setLocation(
+              current.name,
+              currentSet.set_number,
+              set?.side_label,
+            )}.`;
             return attempts > 0
               ? `Time's up. ${position} You're ${makes} for ${attempts} so far. Keep shooting.`
               : `Time's up. ${position} You're 0 for 0 so far. Start shooting.`;
@@ -3266,12 +3268,11 @@ export class RealtimeCoachSession {
       );
       const makes = nextSet?.progress?.makes ?? nextSet?.makes ?? 0;
       const attempts = nextSet?.progress?.attempts ?? nextSet?.attempts ?? 0;
-      const side = nextSetInSameDrill.sideLabel
-        ? `, ${nextSetInSameDrill.sideLabel}`
-        : "";
-      const position = `You're on set ${nextSetInSameDrill.setNumber}${side} in ${
-        nextSetInSameDrill.drillName
-      }.`;
+      const position = `${this.setLocation(
+        nextSetInSameDrill.drillName,
+        nextSetInSameDrill.setNumber,
+        nextSetInSameDrill.sideLabel,
+      )}.`;
       const shootingPrompt = attempts > 0
         ? `${position} You're ${makes} for ${attempts} so far. Keep shooting.`
         : `${position} You're 0 for 0 so far. Start shooting.`;
@@ -3281,7 +3282,6 @@ export class RealtimeCoachSession {
     if (!next || next.set_number == null) {
       return `${result} Workout complete.`;
     }
-    const side = next.set_side_label ? `, ${next.set_side_label}` : "";
     const nextSet = next.set_results.find(
       (set) => set.set_number === next.set_number,
     );
@@ -3297,29 +3297,37 @@ export class RealtimeCoachSession {
         startAfterConfirmation: true,
         readyForConfirmation: false,
       };
-      return `${result} You're now on set ${next.set_number}${side} of ${
-        next.name ?? "the next exercise"
-      }. Would you like me to start the ${this.timerDurationLabel(durationSeconds)} set timer?`;
+      return `${result} ${this.setLocation(
+        next.name,
+        next.set_number,
+        next.set_side_label,
+      )}. Would you like me to start the ${this.timerDurationLabel(durationSeconds)} set timer?`;
     }
     if (this.acceptsShotResults(next)) {
       const makes = nextSet?.progress?.makes ?? nextSet?.makes ?? 0;
       const attempts = nextSet?.progress?.attempts ?? nextSet?.attempts ?? 0;
-      const position = `You're on set ${next.set_number}${side} in ${
-        next.name ?? "the next exercise"
-      }.`;
+      const position = `${this.setLocation(
+        next.name,
+        next.set_number,
+        next.set_side_label,
+      )}.`;
       const shootingPrompt = attempts > 0
         ? `${position} You're ${makes} for ${attempts} so far. Keep shooting.`
         : `${position} You're 0 for 0 so far. Start shooting.`;
       return `${result} ${shootingPrompt}`;
     }
     if (next.exercise_id === entry.exerciseId) {
-      return `${result} Next up: set ${next.set_number}${side} of ${
-        next.name ?? entry.drillName
-      }.`;
+      return `${result} ${this.setLocation(
+        next.name ?? entry.drillName,
+        next.set_number,
+        next.set_side_label,
+      )}.`;
     }
-    return `${result} Next up: ${next.name ?? "the next exercise"}, set ${
-      next.set_number
-    }${side}.`;
+    return `${result} ${this.setLocation(
+      next.name,
+      next.set_number,
+      next.set_side_label,
+    )}.`;
   }
 
   private async bufferShootingResult(
@@ -3715,16 +3723,27 @@ export class RealtimeCoachSession {
     return minutes != null && minutes > 0;
   }
 
+  private setLocation(
+    drillName: string | null | undefined,
+    setNumber: number,
+    sideLabel?: string | null,
+  ): string {
+    const drill = drillName?.trim() || "this drill";
+    const rawSide = sideLabel?.trim();
+    if (!rawSide) return `You're on set ${setNumber} of ${drill}`;
+    const side = /\bside\b/i.test(rawSide) ? rawSide : `${rawSide} side`;
+    return `You're on the ${side} of ${drill}, set ${setNumber}`;
+  }
+
   private timedSetReply(
     drill: RealtimeDrillState,
     setNumber: number,
     set?: RealtimeSetResult | null
   ): string | null {
     if (!this.isTimedSet(drill, set)) return null;
-    const side = set?.side_label ? `, ${set.side_label}` : "";
-    const label = `You're on set ${setNumber}${side} of ${drill.name ?? "this drill"}`;
+    const label = this.setLocation(drill.name, setNumber, set?.side_label);
     if (set?.completed) {
-      return `Set ${setNumber}${side} of ${drill.name ?? "this drill"} is complete.`;
+      return `${label}. This set is complete.`;
     }
     const minutes = set?.target?.minutes ?? drill.target.minutes ?? 0;
     const duration =
@@ -3751,9 +3770,11 @@ export class RealtimeCoachSession {
           ? !currentResult.completed
           : !currentSet.completed;
         if (currentSetIncomplete) {
-          return `Your next set is set ${currentSet.set_number} of ${
-            current.name ?? "this drill"
-          }.`;
+          return `${this.setLocation(
+            current.name,
+            currentSet.set_number,
+            currentSet.side_label,
+          )}.`;
         }
         const currentIndex = current.set_results.findIndex(
           (set) => set.set_number === currentSet.set_number
@@ -3764,10 +3785,11 @@ export class RealtimeCoachSession {
         if (nextSet) {
           const timedReply = this.timedSetReply(current, nextSet.set_number, nextSet);
           if (timedReply) return timedReply;
-          const side = nextSet.side_label ? `, ${nextSet.side_label}` : "";
-          return `Next is set ${nextSet.set_number}${side} of ${
-            current.name ?? "the current drill"
-          }.`;
+          return `${this.setLocation(
+            current.name,
+            nextSet.set_number,
+            nextSet.side_label,
+          )}.`;
         }
         const nextDrill = this.workoutState?.navigation?.next_exercise_after_current;
         if (!nextDrill) return "There are no unfinished sets left.";
@@ -3781,8 +3803,11 @@ export class RealtimeCoachSession {
         );
       }
       if (target.type === "current") {
-        const side = currentSet.side_label ? `, ${currentSet.side_label}` : "";
-        return `You're on set ${currentSet.set_number}${side} of ${current.name ?? "the current drill"}.`;
+        return `${this.setLocation(
+          current.name,
+          currentSet.set_number,
+          currentSet.side_label,
+        )}.`;
       }
     }
     const drill = this.resolveNavigationTarget(target);
@@ -3965,6 +3990,15 @@ export class RealtimeCoachSession {
     const minutes = Math.floor(seconds / 60);
     const remainder = seconds % 60;
     return `${minutes} minute${minutes === 1 ? "" : "s"} ${remainder} seconds`;
+  }
+
+  private timerDurationAdjective(durationSeconds: number): string {
+    const seconds = Math.max(1, Math.round(durationSeconds));
+    if (seconds < 60) return `${seconds}-second`;
+    if (seconds % 60 === 0) return `${seconds / 60}-minute`;
+    const minutes = Math.floor(seconds / 60);
+    const remainder = seconds % 60;
+    return `${minutes}-minute ${remainder}-second`;
   }
 
   private authoritativeTurnInstructions(): string {
@@ -5262,19 +5296,6 @@ export class RealtimeCoachSession {
       greeting,
     );
     this.callbacks?.onConversationSummary?.(this.conversationSummary);
-    // The greeting is spoken by the local TTS path rather than generated by
-    // Realtime. Add it as an assistant turn so an affirmation immediately
-    // afterward has the same conversation history as any other Coach question.
-    if (!this.cartesiaActive && !this.assemblyInworldActive) {
-      this.sendEvent({
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: greeting }],
-        },
-      });
-    }
     const playbackFinished = new Promise<void>((resolve) => {
       this.startupGreetingResolver = resolve;
       this.startupGreetingTimeout = setTimeout(() => {
@@ -5330,16 +5351,18 @@ export class RealtimeCoachSession {
         startAfterConfirmation: true,
         readyForConfirmation: false,
       };
-      const side = set?.side_label ? `, ${set.side_label}` : "";
-      const duration = this.timerDurationLabel(durationSeconds);
-      return `You're on set ${currentSet.set_number}${side} in ${
-        current.name ?? "this drill"
-      }. It's a ${duration} timed set. Would you like me to start the ${duration} timer?`;
+      const duration = this.timerDurationAdjective(durationSeconds);
+      return `${this.setLocation(
+        current.name,
+        currentSet.set_number,
+        set?.side_label,
+      )}. It's a ${duration} timed set. Would you like me to start the ${duration} timer?`;
     }
-    const side = currentSet.side_label ? `, ${currentSet.side_label}` : "";
-    const position = `You're on set ${currentSet.set_number}${side} in ${
-      current.name ?? "the current drill"
-    }`;
+    const position = this.setLocation(
+      current.name,
+      currentSet.set_number,
+      currentSet.side_label,
+    );
     // A greeting confirmation starts the active work immediately. For shooting
     // sets, include the live score only once shots have actually been logged;
     // otherwise give a clear first action instead of stopping at the location.

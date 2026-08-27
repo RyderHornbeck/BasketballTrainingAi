@@ -6,6 +6,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useSubscription } from "@/hooks/useSubscription";
 import { actionHaptic, completionHaptic, selectionHaptic } from "@/lib/haptics";
 import { PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL } from "@/lib/legal";
+import { Ionicons } from "@expo/vector-icons";
 import {
   getIntroEligibility,
   hasPremiumEntitlement,
@@ -451,6 +452,27 @@ export default function PaywallScreen() {
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]}>
       <StatusBar style="dark" />
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={mode === "deal" ? "Back to standard pricing" : "View special offer"}
+        accessibilityState={{ disabled: isWorking }}
+        disabled={isWorking}
+        hitSlop={8}
+        onPress={() => {
+          selectionHaptic();
+          setMode((current) => (current === "default" ? "deal" : "default"));
+        }}
+        style={({ pressed }) => [
+          styles.modeButton,
+          { opacity: isWorking ? 0.45 : pressed ? 0.68 : 1 },
+        ]}
+      >
+        <Ionicons
+          name={mode === "deal" ? "chevron-back" : "close"}
+          size={22}
+          color="#57534E"
+        />
+      </Pressable>
       {status === "loading" ? (
         <PaywallState
           kind="loading"
@@ -650,6 +672,18 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
+  modeButton: {
+    position: "absolute",
+    top: 16,
+    right: 18,
+    zIndex: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#E7E5E4",
+  },
   content: {
     paddingHorizontal: 22,
     paddingTop: 8,
@@ -671,7 +705,7 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     marginTop: 8,
     color: DEFAULT_COLORS.accent,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
     textAlign: "center",
   },

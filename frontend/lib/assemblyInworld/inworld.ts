@@ -2,9 +2,10 @@
 // avoids turning model token deltas into separate audible utterances.
 const MINIMUM_UTTERANCE_CHARACTERS = 240;
 const MAXIMUM_UTTERANCE_WAIT_MS = 450;
-export const INITIAL_FIRST_AUDIO_TIMEOUT_MS = 2_000;
-// Kept as a named export for the recovery call site; both generations use the
-// same two-second deadline required for a persistent socket.
+// A cold Inworld stream can take several seconds to return its first PCM
+// packet. A short deadline caused the startup greeting to tear down and
+// reconnect repeatedly before audio had a chance to begin.
+export const INITIAL_FIRST_AUDIO_TIMEOUT_MS = 8_000;
 export const RETRY_FIRST_AUDIO_TIMEOUT_MS = INITIAL_FIRST_AUDIO_TIMEOUT_MS;
 export const AUDIO_PROGRESS_TIMEOUT_MS = 4_000;
 const INWORLD_TTS_WEBSOCKET_URL =

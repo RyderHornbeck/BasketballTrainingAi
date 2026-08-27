@@ -318,13 +318,28 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
             }}
             disabled={orbDisabled}
             >
-              <CoachOrb
-                size={CLOUD_ORB_SIZE}
-                shadowColor={isRedState ? colors.danger : colors.accent}
-                style={{ transform: [{ scale: pulse }] }}
-                state={orbState}
-                volume={orbVolume}
-              />
+              {status === "muted" ? (
+                <Animated.View
+                  style={[
+                    styles.mutedOrb,
+                    {
+                      backgroundColor: colors.danger,
+                      shadowColor: colors.danger,
+                      transform: [{ scale: pulse }],
+                    },
+                  ]}
+                >
+                  <Ionicons name="mic-off" size={48} color="#FFFFFF" />
+                </Animated.View>
+              ) : (
+                <CoachOrb
+                  size={CLOUD_ORB_SIZE}
+                  shadowColor={isRedState ? colors.danger : colors.accent}
+                  style={{ transform: [{ scale: pulse }] }}
+                  state={orbState}
+                  volume={orbVolume}
+                />
+              )}
             </Pressable>
 
             <View style={styles.hints}>
@@ -470,6 +485,17 @@ const styles = StyleSheet.create({
   },
   coachControls: {
     alignItems: "center",
+  },
+  mutedOrb: {
+    width: CLOUD_ORB_SIZE,
+    height: CLOUD_ORB_SIZE,
+    borderRadius: CLOUD_ORB_SIZE / 2,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.32,
+    shadowRadius: 18,
+    elevation: 10,
   },
   cloudControls: {
     // Keeps the label just below a maximum-length user/Coach transcript while
