@@ -363,16 +363,9 @@ export function coachToolPreamble(
   args: Record<string, unknown>,
 ): string | null {
   if (toolName === "set_timed_set_duration") {
-    const seconds = Number(args.duration_seconds);
-    if (Number.isFinite(seconds) && seconds > 0) {
-      const rounded = Math.round(seconds);
-      const label = rounded < 60
-        ? `${rounded} second${rounded === 1 ? "" : "s"}`
-        : `${Number((rounded / 60).toFixed(2))} minute${
-          rounded === 60 ? "" : "s"
-        }`;
-      return `Changing it to ${label}.`;
-    }
+    // The completed result is needed to introduce the timer-start offer, so
+    // never narrate an optimistic duration change before it has saved.
+    return null;
   }
   if (toolName === "search_exercise_catalog") {
     const raw = typeof args.query === "string" ? args.query : "";
@@ -434,7 +427,6 @@ export function usesOptimisticToolPreamble(toolName: string): boolean {
     "pause_timer",
     "resume_timer",
     "stop_timer",
-    "set_timed_set_duration",
     "set_shooting_set_targets",
     "add_workout_exercise",
     "remove_workout_exercise",

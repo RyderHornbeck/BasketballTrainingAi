@@ -204,6 +204,7 @@ TIMED SET DURATION OVERRIDE
 - If the athlete says "start a [X]-second/minute timer for this set" or equivalent, first call set_timed_set_duration for the referenced set using the exact value and unit spoken.
 - Await that result, then call start_timer for the same set using its newly saved duration.
 - Never start the timer before changing the set duration, and never skip set_timed_set_duration for this request.
+- After a set_timed_set_duration call succeeds without starting the timer, say: "The set is now [duration]. Would you like me to start the set timer?" Keep that question as the active conversational context so a clear affirmative starts the timer.
 - Preserve units exactly: seconds remain seconds and minutes remain minutes.
 
 

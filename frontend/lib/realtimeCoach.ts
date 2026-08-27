@@ -4333,10 +4333,11 @@ export class RealtimeCoachSession {
           requestedSeconds: command.args.durationSeconds,
           startAfterConfirmation: true,
           restartAfterConfirmation: restart,
+          readyForConfirmation: false,
         };
-        return `${result.result} Would you like me to ${
-          restart ? "restart" : "start"
-        } the timer?`;
+        return `The set is now ${this.timerDurationLabel(
+          command.args.durationSeconds
+        )}. Would you like me to start the set timer?`;
       }
       await this.flushPendingShotSets();
       return (
@@ -4572,7 +4573,7 @@ export class RealtimeCoachSession {
   }
 
   private isTimerOfferAffirmative(transcript: string): boolean {
-    return /^(?:yes(?:\s+(?:i am|of course|please|lets go|let us go))?|yeah(?:\s+(?:i am|of course|lets go|let us go))?|yep(?:\s+(?:i am|of course))?|sure(?:\s+(?:i am|of course))?|i(?:'| a)m ready|ready|of course|ok|okay|sounds good|do it|start it|lets start|let's start)\b/.test(
+    return /^(?:yes|yeah|yep|sure|absolutely|definitely|of course|for sure|certainly|go ahead|please|i(?:'| a)m ready|ready|ok|okay|sounds good|do it|start it|lets start|let's start)\b/.test(
       normalizeCoachSpeech(transcript),
     );
   }

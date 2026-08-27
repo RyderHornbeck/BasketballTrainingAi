@@ -28,6 +28,7 @@ const GUIDE_SECTIONS = [
       '"Make." or "I made it."',
       '"Miss." or "I missed."',
       '"I made 8 out of 10."',
+      '"I’m actually 5 for 5 so far."',
       '"Mark this set complete."',
     ],
   },

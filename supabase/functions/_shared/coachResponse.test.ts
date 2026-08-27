@@ -316,16 +316,15 @@ Deno.test("catalog search preamble is natural and additions name the selected dr
   );
 });
 
-Deno.test("timer duration preamble is specific and optimistic tool mutations suppress success narration", () => {
+Deno.test("timer duration changes wait for the completed timer-start offer", () => {
   assert(
-    coachToolPreamble("set_timed_set_duration", { duration_seconds: 45 }) ===
-      "Changing it to 45 seconds.",
-    "duration changes should announce the requested timer value immediately",
+    coachToolPreamble("set_timed_set_duration", { duration_seconds: 45 }) === null,
+    "duration changes should wait for their saved result before speaking",
   );
   assert(
-    usesOptimisticToolPreamble("set_timed_set_duration") &&
+    !usesOptimisticToolPreamble("set_timed_set_duration") &&
       !usesOptimisticToolPreamble("get_progress"),
-    "only mutation tools should suppress post-success narration",
+    "duration changes should retain their completed timer-start offer",
   );
   assert(
     coachToolFailureSpeech("set_timed_set_duration") ===
