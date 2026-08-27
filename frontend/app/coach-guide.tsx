@@ -40,7 +40,7 @@ const GUIDE_SECTIONS = [
     examples: [
       '"Add a cone dribbling drill."',
       '"Remove this drill."',
-      '"Make this workout 10 minutes shorter."',
+      '"Change the set timer to be 3 minutes long."',
       '"Save a note that my left hand felt weak."',
     ],
   },
