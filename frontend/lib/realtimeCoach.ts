@@ -2841,11 +2841,16 @@ export class RealtimeCoachSession {
             : Math.max(0, entry.targetAttempts - entry.attempts),
       };
     }
-    // A local make/miss is authoritative for the exact shooting set it was
-    // counted against. Pin navigation to that set immediately, so a follow-up
-    // "which set am I?" cannot answer from a stale transition snapshot while
-    // the persisted context refresh is still in flight.
-    if (!entry.completed && state?.navigation) {
+    // Keep an incomplete local result selected only while that set is still
+    // the active cursor. A later navigation may legitimately point at another
+    // shooting set while this old result remains pending persistence; never
+    // overwrite that newer cursor with the old set's score.
+    if (
+      !entry.completed &&
+      state?.navigation &&
+      current?.exercise_id === entry.exerciseId &&
+      current.set_number === entry.setNumber
+    ) {
       this.pinLocalShootingPosition(drill, set);
     }
   }
