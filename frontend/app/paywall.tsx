@@ -674,7 +674,7 @@ const styles = StyleSheet.create({
   },
   modeButton: {
     position: "absolute",
-    top: 28,
+    top: 35,
     right: 18,
     zIndex: 10,
     width: 36,
