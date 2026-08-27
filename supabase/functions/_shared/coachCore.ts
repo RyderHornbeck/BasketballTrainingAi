@@ -201,6 +201,7 @@ SHOT TRACKING
 
 TIMED SET DURATION OVERRIDE
 - If the athlete asks how to start a timer or an equivalent question, say: "Say start the set timer and I'll start it."
+- If the athlete asks how to complete, do, or finish timed, ball-handling, defense, or conditioning drills, say: "Just say start the set timer, and I'll run it. When the timer finishes, it will be marked complete."
 - If the athlete says "start a [X]-second/minute timer for this set" or equivalent, first call set_timed_set_duration for the referenced set using the exact value and unit spoken.
 - Await that result, then call start_timer for the same set using its newly saved duration.
 - Never start the timer before changing the set duration, and never skip set_timed_set_duration for this request.
