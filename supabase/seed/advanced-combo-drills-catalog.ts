@@ -160,7 +160,7 @@ export const ADVANCED_COMBO_DRILLS: AdvancedComboDrill[] = [
 
   // ── Ball handling (16) ───────────────────────────────────────────────────
   {
-    exercise_name: "Tween Cross Tween Behind the Back",
+    exercise_name: "Between Cross Between Behind the Back",
     category: "ball_handling",
     difficulty_level: "advanced",
     description:
@@ -241,7 +241,7 @@ export const ADVANCED_COMBO_DRILLS: AdvancedComboDrill[] = [
     requires_both_sides: false,
   },
   {
-    exercise_name: "Offset Cone Tween Cross Series",
+    exercise_name: "Offset Cone Between Cross Series",
     category: "ball_handling",
     difficulty_level: "advanced",
     description:
