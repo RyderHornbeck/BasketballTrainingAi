@@ -14,7 +14,7 @@ const GUIDE_SECTIONS = [
     description:
       "Use headphones when you can. Say one thing at a time.",
     examples: [
-      '"Stop talking."',
+      '"Stop" - use this command to interrupt.',
       '"What’s next?"',
       '"Explain this drill."',
     ],

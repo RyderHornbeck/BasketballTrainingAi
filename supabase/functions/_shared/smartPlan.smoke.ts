@@ -192,6 +192,12 @@ assert(
     .every((exercise) => Number.parseInt(exercise.sets, 10) >= 2),
   "ball-handling drills prescribe at least two sets"
 );
+assert(
+  initialExercises
+    .filter((exercise) => exercise.category === "ball_handling")
+    .every((exercise) => exercise.duration === "1 min"),
+  "workouts under 60 minutes use one-minute ball-handling sets"
+);
 const timedExercises = initialExercises.filter((exercise) =>
   ["ball_handling", "defense", "conditioning"].includes(exercise.category)
 );
@@ -201,6 +207,25 @@ assert(
     return exercise.log_type === "minutes" && minutes >= 1 && minutes <= 3;
   }),
   "ball-handling, defense, and conditioning drills use one-to-three minute timed sets"
+);
+
+const longWorkout = buildSmartPlan(clips, {
+  startDayNumber: 1,
+  blockIndex: 1,
+  randomSeed: "long-workout",
+  adaptiveProfile: emptyProfile,
+  composition: buildCompositionRules(60),
+  daysPerWeek: 3,
+  mainGoal: "improve shooting",
+  hasCourtAccess: true,
+  samples: [],
+});
+assert(
+  longWorkout.days
+    .flatMap((day) => day.exercises)
+    .filter((exercise) => exercise.category === "ball_handling")
+    .every((exercise) => exercise.duration === "2 min"),
+  "60-minute workouts use two-minute ball-handling sets"
 );
 assert(
   initialExercises
