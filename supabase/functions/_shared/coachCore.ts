@@ -464,7 +464,8 @@ const REALTIME_TOOL_DEFS = [
   },
   {
     name: "get_timer_status",
-    description: "Get exact live timer status from the athlete's device.",
+    description:
+      "ONLY for a direct question about the active, currently running or paused timer: time left, current elapsed time, or whether that timer is running/paused. NEVER use for general questions about timed drills, ball handling, defense, conditioning, starting a timer, or how to do/finish/complete a drill.",
     parameters: { type: "object", properties: {} },
   },
   {
@@ -590,7 +591,8 @@ const TOOL_DEFS = [
   },
   {
     name: "get_timer_status",
-    description: "Get exact live timer status from the athlete's device.",
+    description:
+      "ONLY for a direct question about the active, currently running or paused timer: time left, current elapsed time, or whether that timer is running/paused. NEVER use for general questions about timed drills, ball handling, defense, conditioning, starting a timer, or how to do/finish/complete a drill.",
     parameters: { type: "object", properties: {} },
   },
   {
@@ -628,7 +630,8 @@ const REALTIME_TOOL_DESCRIPTIONS: Record<string, string> = {
   get_progress: "Fetch workout progress.",
   start_timer:
     "Start a timer bound to a workout exercise/set; seconds and minutes keep their units.",
-  get_timer_status: "Get exact live timer status from the athlete device.",
+  get_timer_status:
+    "ONLY for direct live-current-timer status questions (time left, current time, running/paused). Never use for general drill, timer-start, or drill-completion questions.",
   set_timed_set_duration:
     "Save one timed set's new duration; not a one-off timer.",
   set_shooting_set_targets: "Change one set's shot targets, not its results.",

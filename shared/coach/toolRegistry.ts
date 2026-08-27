@@ -211,7 +211,7 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   tool({
     name: "get_timer_status",
     description:
-      "Get the exact live timer status from the athlete's device when they ask about time left, current timer time, or whether it is running or paused.",
+      "ONLY for direct questions about the live, current timer: time left, current elapsed time, or whether it is running or paused. NEVER use for general questions about timed drills, ball handling, defense, conditioning, starting a timer, or how to do, finish, or complete a drill.",
     capability: "timers",
     execution: "server",
     kind: "read_only",
