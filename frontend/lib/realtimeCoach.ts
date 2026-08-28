@@ -2845,7 +2845,7 @@ export class RealtimeCoachSession {
     // the active cursor. A later navigation may legitimately point at another
     // shooting set while this old result remains pending persistence; never
     // overwrite that newer cursor with the old set's score.
-    //HI
+    //HII
     if (
       !entry.completed &&
       state?.navigation &&
