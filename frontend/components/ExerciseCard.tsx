@@ -674,25 +674,10 @@ export function ExerciseCard({
   const adjustSetTimer = (secondsDelta: number) => {
     if (!setPlan.perSetMinutes) return;
     hasUserEditsRef.current = true;
-    const changed = setLogs.filter((set) => set.duration_seconds_override != null);
-    const unchanged = setLogs.filter((set) => set.duration_seconds_override == null);
-    const targetSetNumbers =
-      changed.length === 0
-        ? new Set(setLogs.map((set) => set.set_number))
-        : unchanged.length > 0
-          ? new Set(unchanged.map((set) => set.set_number))
-          : new Set(
-              changed.every(
-                (set) =>
-                  set.duration_seconds_override === changed[0].duration_seconds_override
-              )
-                ? changed.map((set) => set.set_number)
-                : [Math.max(...changed.map((set) => set.set_number))]
-            );
     setMinutesOverride(null);
     setSetLogs((previous) =>
       previous.map((set) => {
-        if (!targetSetNumbers.has(set.set_number)) return set;
+        if (set.completed) return set;
         const currentSeconds =
           set.duration_seconds_override ??
           Math.round(setPlan.perSetMinutes! * 60);

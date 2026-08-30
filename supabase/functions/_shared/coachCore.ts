@@ -3163,9 +3163,13 @@ export async function executeCoachTool(
           dbChanged: false,
         };
       }
-      setLogs = updateSetLog(setLogs, plan, setNumber, {
-        duration_seconds_override: Math.round(durationSeconds),
-      });
+      // A timed prescription applies from the selected set forward within
+      // this exercise. Finished sets remain historical records.
+      setLogs = setLogs.map((set) =>
+        set.set_number >= setNumber && !set.completed
+          ? { ...set, duration_seconds_override: Math.round(durationSeconds) }
+          : set
+      );
       const notes = encodeExerciseLogMeta({
         set_logs: setLogs,
         user_notes: meta.user_notes ?? null,
