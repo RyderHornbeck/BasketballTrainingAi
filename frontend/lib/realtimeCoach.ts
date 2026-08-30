@@ -3299,20 +3299,35 @@ export class RealtimeCoachSession {
         : `${position} You're 0 for 0 so far. Start shooting.`;
       return `${result} ${shootingPrompt}`;
     }
-    const next = this.workoutState?.navigation?.next_work_item;
-    if (!next || next.set_number == null) {
+    // Prefer the live cursor set by pinNextIncompleteShootingPosition(). The
+    // cached next_work_item can briefly still name the just-finished drill
+    // while its cursor has already advanced, which produced a mismatched
+    // spoken drill name and score.
+    const activeSet = this.currentSetState();
+    const activeDrill = activeSet
+      ? this.workoutState?.sequence?.drills?.find(
+        (drill) => drill.exercise_id === activeSet.exercise_id,
+      )
+      : null;
+    const navigationNext = this.workoutState?.navigation?.next_work_item;
+    const next = activeDrill ?? navigationNext;
+    const nextSetNumber = activeDrill && activeSet
+      ? activeSet.set_number
+      : navigationNext?.set_number;
+    if (!next || nextSetNumber == null) {
       return `${result} Workout complete.`;
     }
     const nextSet = next.set_results.find(
-      (set) => set.set_number === next.set_number,
+      (set) => set.set_number === nextSetNumber,
     );
+    const nextSideLabel = nextSet?.side_label ?? activeSet?.side_label ?? null;
     if (this.isTimedSet(next, nextSet)) {
       const minutes = nextSet?.target?.minutes ?? next.target.minutes ?? 0;
       const durationSeconds = Math.round(minutes * 60);
       this.pendingTimerDurationChange = {
         exerciseId: next.exercise_id,
         drillName: next.name,
-        setNumber: next.set_number,
+        setNumber: nextSetNumber,
         prescribedSeconds: durationSeconds,
         requestedSeconds: durationSeconds,
         startAfterConfirmation: true,
@@ -3320,8 +3335,8 @@ export class RealtimeCoachSession {
       };
       return `${result} ${this.setLocation(
         next.name,
-        next.set_number,
-        next.set_side_label,
+        nextSetNumber,
+        nextSideLabel,
       )}. Would you like me to start the ${this.timerDurationLabel(durationSeconds)} set timer?`;
     }
     if (this.acceptsShotResults(next)) {
@@ -3329,8 +3344,8 @@ export class RealtimeCoachSession {
       const attempts = nextSet?.progress?.attempts ?? nextSet?.attempts ?? 0;
       const position = `${this.setLocation(
         next.name,
-        next.set_number,
-        next.set_side_label,
+        nextSetNumber,
+        nextSideLabel,
       )}.`;
       const shootingPrompt = attempts > 0
         ? `${position} You're ${makes} for ${attempts} so far. Keep shooting.`
@@ -3340,14 +3355,14 @@ export class RealtimeCoachSession {
     if (next.exercise_id === entry.exerciseId) {
       return `${result} ${this.setLocation(
         next.name ?? entry.drillName,
-        next.set_number,
-        next.set_side_label,
+        nextSetNumber,
+        nextSideLabel,
       )}.`;
     }
     return `${result} ${this.setLocation(
       next.name,
-      next.set_number,
-      next.set_side_label,
+      nextSetNumber,
+      nextSideLabel,
     )}.`;
   }
 
