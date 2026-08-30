@@ -148,6 +148,7 @@ The only permitted follow-up questions are:
 TOOL SPEECH
 - Never announce, narrate, or repeat a planned tool action before or between tools.
 - Speak only after every required tool succeeds. For an obvious requested change, say "Done."
+- EXPLANATION NO-TOOL RULE: For any how-to, explanatory, informational, or general question—including "How do I start this set?", "How do I complete this set?", or questions about timers, timed drills, pausing, or resuming—answer the question without calling any tool. Call a timer, completion, navigation, or edit tool only for a clear request to perform that action now, or a clear affirmative to Coach's immediately preceding offer.
 - For search or list requests, present the result naturally, beginning with "Here are".
 - Never mention catalogs, tools, databases, IDs, or internal state.
 
@@ -269,7 +270,7 @@ const REALTIME_TOOL_DEFS = [
   {
     name: "set_set_completion",
     description:
-      "Mark one specific set complete or incomplete without changing every set in the drill. Use for any drill category; completing a shooting or finishing set keeps its existing recorded progress.",
+      "ONLY for a clear request to mark one specific set complete or incomplete, or confirmation of the immediately preceding completion offer. Never use for a how-to, explanatory, or general completion question. Completing a shooting or finishing set keeps its existing recorded progress.",
     parameters: {
       type: "object",
       properties: {
@@ -401,7 +402,7 @@ const REALTIME_TOOL_DEFS = [
   {
     name: "start_timer",
     description:
-      "Start a countdown bound to the named set or active timed set. Include its exercise and set reference. Omit duration for its saved time and preserve units.",
+      "ONLY for a direct request to start a timer now, or confirmation of the immediately preceding timer-start offer. Never use for a how-to, explanatory, or general timer/set question. Start a countdown bound to the named set or active timed set, preserving units.",
     parameters: {
       type: "object",
       properties: {
@@ -470,17 +471,20 @@ const REALTIME_TOOL_DEFS = [
   },
   {
     name: "pause_timer",
-    description: "Pause the workout timer.",
+    description:
+      "ONLY for a direct request to pause, stop, end, cancel, or take a break from the active timer. Never use for a how-to, explanatory, or general timer question.",
     parameters: { type: "object", properties: {} },
   },
   {
     name: "resume_timer",
-    description: "Resume the paused workout timer.",
+    description:
+      "ONLY for a direct request to resume the paused timer, or confirmation of the immediately preceding resume offer. Never use for a how-to, explanatory, or general timer question.",
     parameters: { type: "object", properties: {} },
   },
   {
     name: "stop_timer",
-    description: "Stop and reset the workout timer.",
+    description:
+      "ONLY for a direct request to reset or restart the timer. Never use for a how-to, explanatory, or general timer question.",
     parameters: { type: "object", properties: {} },
   },
 ];
@@ -546,7 +550,7 @@ const TOOL_DEFS = [
   {
     name: "start_timer",
     description:
-      "Start a countdown bound to the named set or active timed set. Include its exercise and set reference. Omit duration for its saved time and preserve units.",
+      "ONLY for a direct request to start a timer now, or confirmation of the immediately preceding timer-start offer. Never use for a how-to, explanatory, or general timer/set question. Start a countdown bound to the named set or active timed set, preserving units.",
     parameters: {
       type: "object",
       properties: {
@@ -597,12 +601,14 @@ const TOOL_DEFS = [
   },
   {
     name: "pause_timer",
-    description: "Pause the workout timer.",
+    description:
+      "ONLY for a direct request to pause, stop, end, cancel, or take a break from the active timer. Never use for a how-to, explanatory, or general timer question.",
     parameters: { type: "object", properties: {} },
   },
   {
     name: "resume_timer",
-    description: "Resume the workout timer.",
+    description:
+      "ONLY for a direct request to resume the paused timer, or confirmation of the immediately preceding resume offer. Never use for a how-to, explanatory, or general timer question.",
     parameters: { type: "object", properties: {} },
   },
 ];

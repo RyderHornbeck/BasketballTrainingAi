@@ -145,7 +145,7 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   tool({
     name: "set_set_completion",
     description:
-      "Complete or reopen exactly one set. Explicit completion keeps existing shooting or finishing progress and does not require new makes or attempts.",
+      "ONLY when the athlete clearly directs a set to be completed or reopened, or confirms the immediately preceding completion offer. Never use for a how-to, explanatory, or general question about completing a set or drill. Explicit completion keeps existing shooting or finishing progress and does not require new makes or attempts.",
     capability: "completion",
     execution: "server",
     kind: "mutation",
@@ -195,7 +195,7 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   tool({
     name: "start_timer",
     description:
-      "Start a timer bound to a specific workout set whenever one is active or named; preserve seconds and minutes exactly.",
+      "ONLY when the athlete directly asks to start a timer or clearly confirms Coach's immediately preceding timer-start offer. Never use for a how-to, explanatory, or general question about timers, timed sets, or starting a set. Start a timer bound to a specific workout set and preserve seconds and minutes exactly.",
     capability: "timers",
     execution: "server",
     kind: "mutation",
@@ -220,7 +220,8 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   }),
   tool({
     name: "pause_timer",
-    description: "Pause the timer.",
+    description:
+      "ONLY when the athlete directly asks to pause, stop, end, cancel, or take a break from the active timer. Never use for a how-to, explanatory, or general question about timers.",
     capability: "timers",
     execution: "server",
     kind: "mutation",
@@ -229,7 +230,8 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   }),
   tool({
     name: "resume_timer",
-    description: "Resume the timer.",
+    description:
+      "ONLY when the athlete directly asks to resume or continue a paused timer, or clearly confirms Coach's immediately preceding resume offer. Never use for a how-to, explanatory, or general question about timers.",
     capability: "timers",
     execution: "server",
     kind: "mutation",
@@ -238,7 +240,8 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   }),
   tool({
     name: "stop_timer",
-    description: "Stop and reset the timer.",
+    description:
+      "ONLY when the athlete directly asks to reset or restart the timer. Never use for a how-to, explanatory, or general question about timers.",
     capability: "timers",
     execution: "server",
     kind: "mutation",
