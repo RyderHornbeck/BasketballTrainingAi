@@ -2969,6 +2969,8 @@ export async function executeCoachTool(
       const nextAttempts = hasAttempts ? requestedAttempts : currentAttempts;
       const nextMakes = hasMakes
         ? requestedMakes
+        : hasAttempts && currentAttempts != null && currentAttempts > 0 && currentMakes != null
+        ? Math.round((currentMakes / currentAttempts) * requestedAttempts)
         : currentMakes;
       if (
         nextAttempts == null ||
