@@ -46,6 +46,17 @@ const GUIDE_SECTIONS = [
     ],
   },
   {
+    icon: "add-circle-outline" as const,
+    title: "Adding sets",
+    description:
+      "Ask Coach to add another set when you want more work on a drill.",
+    examples: [
+      '"I want to do more Form Shooting."',
+      '"Can I do another set of Pound Dribbles?"',
+      '"Can you add another finishing set to this drill?"',
+    ],
+  },
+  {
     icon: "checkmark-done-outline" as const,
     title: "Move through drills",
     description:

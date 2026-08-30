@@ -330,20 +330,6 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
     ),
   }),
   tool({
-    name: "remove_workout_exercise",
-    description: "Remove one drill after explicit confirmation.",
-    capability: "edits",
-    execution: "server",
-    kind: "mutation",
-    realtime: true,
-    flushShots: true,
-    exactSpeech: true,
-    parameters: args({
-      ...drillReference,
-      confirmation_token: { type: "string", maxLength: 240 },
-    }),
-  }),
-  tool({
     name: "save_note",
     description: "Append a short note to one drill.",
     capability: "notes",
