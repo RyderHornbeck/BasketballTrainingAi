@@ -136,6 +136,7 @@ function SetShootingRow({
   attemptsDraft,
   onMakesChange,
   onAttemptsChange,
+  onResultsBlur,
   onTargetAttemptsChange,
   onTargetMakesChange,
   onTargetBlur,
@@ -157,6 +158,7 @@ function SetShootingRow({
   attemptsDraft?: string | null;
   onMakesChange: (value: string) => void;
   onAttemptsChange: (value: string) => void;
+  onResultsBlur: () => void;
   onTargetAttemptsChange: (value: string) => void;
   onTargetMakesChange: (value: string) => void;
   onTargetBlur: () => void;
@@ -230,6 +232,7 @@ function SetShootingRow({
             maxFontSizeMultiplier={1}
             value={makesDraft ?? makes}
             onChangeText={readOnly ? undefined : onMakesChange}
+            onBlur={onResultsBlur}
             editable={!readOnly}
             keyboardType="number-pad"
             inputMode="numeric"
@@ -249,6 +252,7 @@ function SetShootingRow({
             maxFontSizeMultiplier={1}
             value={attemptsDraft ?? attempts}
             onChangeText={readOnly ? undefined : onAttemptsChange}
+            onBlur={onResultsBlur}
             editable={!readOnly}
             keyboardType="number-pad"
             inputMode="numeric"
@@ -454,7 +458,7 @@ export function ExerciseCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setLogs, difficulty, userNotes, attemptsOverride, minutesOverride, setPlan]);
 
-  const saveShootingSet = (setNumber: number) => {
+  const commitShootingResults = (setNumber: number, complete: boolean) => {
     const makes = makesDrafts[setNumber] === ""
       ? null
       : Number.parseInt(makesDrafts[setNumber] ?? "0", 10);
@@ -484,13 +488,23 @@ export function ExerciseCard({
     );
     if ((makes ?? 0) > attempts) {
       Alert.alert("Makes can’t exceed attempts", "Adjust the result before saving this set.");
-      return;
+      setMakesDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[setNumber];
+        return next;
+      });
+      setAttemptsDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[setNumber];
+        return next;
+      });
+      return false;
     }
-    if (!Number.isFinite(makes ?? 0) || attempts < 0) return;
+    if (!Number.isFinite(makes ?? 0) || attempts < 0) return false;
     if (!Number.isFinite(targetMakes) || !Number.isFinite(targetAttempts) || targetMakes < 0 ||
       targetAttempts < 1 || targetMakes > targetAttempts) {
       Alert.alert("Invalid set target", "Targets must be valid and cannot be below this set's results.");
-      return;
+      return false;
     }
     const expandedTargetAttempts = Math.max(targetAttempts, attempts);
     const expandedTargetMakes = attempts > targetAttempts
@@ -511,7 +525,7 @@ export function ExerciseCard({
         target_attempts_override: set.set_number === setNumber
           ? expandedTargetAttempts
           : set.target_attempts_override,
-        completed: set.set_number === setNumber ? true : set.completed,
+        completed: set.set_number === setNumber ? complete : set.completed,
         force_incomplete: set.set_number === setNumber ? false : set.force_incomplete,
       }))
     );
@@ -535,6 +549,21 @@ export function ExerciseCard({
       delete next[setNumber];
       return next;
     });
+    return true;
+  };
+
+  const saveShootingSet = (setNumber: number) => {
+    const row = setLogs.find((set) => set.set_number === setNumber);
+    if (row?.completed) {
+      hasUserEditsRef.current = true;
+      setSetLogs((previous) =>
+        previous.map((set) => set.set_number === setNumber
+          ? { ...set, completed: false, force_incomplete: true }
+          : set)
+      );
+      return;
+    }
+    if (commitShootingResults(setNumber, true)) completionHaptic();
   };
 
   const commitShootingTargets = (setNumber: number) => {
@@ -548,8 +577,6 @@ export function ExerciseCard({
       targetAttemptsDrafts[setNumber] ?? String(targetAttemptsForSet(row, setPlan) ?? 0),
       10,
     );
-    const makes = row.makes ?? 0;
-    const attempts = row.attempts ?? 0;
     if (!Number.isFinite(targetMakes) || !Number.isFinite(targetAttempts) || targetMakes < 0 ||
       targetAttempts < 1 || targetMakes > targetAttempts) {
       Alert.alert("Invalid set target", "Target makes cannot exceed target attempts.");
@@ -719,50 +746,14 @@ export function ExerciseCard({
           colors={colors}
           onMakesChange={(text) => {
             const digits = text.replace(/[^0-9]/g, "");
-            const nextMakes = Number.parseInt(digits || "0", 10);
-            const attempts = Number.parseInt(
-              attemptsDrafts[row.set_number] ?? String(row.attempts ?? 0),
-              10,
-            );
-            if (nextMakes > attempts) {
-              Alert.alert("Makes can’t exceed attempts", "Increase attempts before entering more makes.");
-              return;
-            }
             setMakesDrafts((drafts) => ({ ...drafts, [row.set_number]: digits }));
-            updateSet(row.set_number, {
-              makes: digits ? nextMakes : null,
-              completed: false,
-              force_incomplete: true,
-            });
           }}
           onAttemptsChange={(text) => {
             const digits = text.replace(/[^0-9]/g, "");
-            const nextAttempts = Number.parseInt(digits || "0", 10);
-            const makes = Number.parseInt(
-              makesDrafts[row.set_number] ?? String(row.makes ?? 0),
-              10,
-            );
-            if (nextAttempts < makes) {
-              Alert.alert("Attempts can’t be lower than makes", "Increase attempts or lower makes first.");
-              return;
-            }
             setAttemptsDrafts((drafts) => ({ ...drafts, [row.set_number]: digits }));
-            const targetAttempts = targetAttemptsForSet(row, setPlan) ?? 0;
-            const targetMakes = targetMakesForSet(row, setPlan) ?? 0;
-            updateSet(row.set_number, {
-              attempts: nextAttempts,
-              completed: false,
-              force_incomplete: true,
-              ...(nextAttempts > targetAttempts
-                ? {
-                    target_attempts_override: nextAttempts,
-                    target_makes_override: Math.min(
-                      nextAttempts,
-                      Math.round((targetMakes / targetAttempts) * nextAttempts),
-                    ),
-                  }
-                : {}),
-            });
+          }}
+          onResultsBlur={() => {
+            void commitShootingResults(row.set_number, false);
           }}
           onTargetMakesChange={(text) =>
             setTargetMakesDrafts((drafts) => ({
