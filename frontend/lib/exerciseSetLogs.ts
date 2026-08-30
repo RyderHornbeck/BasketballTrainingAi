@@ -174,7 +174,20 @@ export function hydrateSetLogs(
 
   return base.map((row) => {
     const match = saved.find((s) => s.set_number === row.set_number);
-    if (match) return { ...row, ...match, set_number: row.set_number };
+    if (match) {
+      const targetAttempts = match.target_attempts_override ?? plan.perSetAttempts;
+      const legacyUntouchedAttempt =
+        !match.completed &&
+        match.makes == null &&
+        match.attempts != null &&
+        match.attempts === targetAttempts;
+      return {
+        ...row,
+        ...match,
+        attempts: legacyUntouchedAttempt ? null : match.attempts,
+        set_number: row.set_number,
+      };
+    }
 
     if (plan.setCount === 1 && fallback) {
       return {

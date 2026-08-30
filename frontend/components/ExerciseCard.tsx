@@ -252,7 +252,7 @@ function SetShootingRow({
             editable={!readOnly}
             keyboardType="number-pad"
             inputMode="numeric"
-            placeholder={targetAttempts != null ? String(targetAttempts) : "0"}
+            placeholder="0"
             placeholderTextColor={colors.textMuted}
             style={[
               styles.shootingInput,
@@ -566,6 +566,7 @@ export function ExerciseCard({
       return;
     }
     hasUserEditsRef.current = true;
+    completionHaptic();
     setSetLogs((previous) =>
       previous.map((set) => set.set_number === setNumber
         ? {
@@ -728,6 +729,11 @@ export function ExerciseCard({
               return;
             }
             setMakesDrafts((drafts) => ({ ...drafts, [row.set_number]: digits }));
+            updateSet(row.set_number, {
+              makes: digits ? nextMakes : null,
+              completed: false,
+              force_incomplete: true,
+            });
           }}
           onAttemptsChange={(text) => {
             const digits = text.replace(/[^0-9]/g, "");
@@ -741,6 +747,22 @@ export function ExerciseCard({
               return;
             }
             setAttemptsDrafts((drafts) => ({ ...drafts, [row.set_number]: digits }));
+            const targetAttempts = targetAttemptsForSet(row, setPlan) ?? 0;
+            const targetMakes = targetMakesForSet(row, setPlan) ?? 0;
+            updateSet(row.set_number, {
+              attempts: nextAttempts,
+              completed: false,
+              force_incomplete: true,
+              ...(nextAttempts > targetAttempts
+                ? {
+                    target_attempts_override: nextAttempts,
+                    target_makes_override: Math.min(
+                      nextAttempts,
+                      Math.round((targetMakes / targetAttempts) * nextAttempts),
+                    ),
+                  }
+                : {}),
+            });
           }}
           onTargetMakesChange={(text) =>
             setTargetMakesDrafts((drafts) => ({
