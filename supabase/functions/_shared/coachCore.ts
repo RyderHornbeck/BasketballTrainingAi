@@ -197,6 +197,7 @@ SHOT TRACKING
 - Going back to extend an existing shooting/finishing set is normal and allowed. Use set_shooting_set_targets only when the athlete identifies an existing set to extend; do not use it to create another set.
 - COMPLETED DRILL REOPENING: Every drill and set can be reopened. Never tell an athlete that a completed drill cannot be reopened, and never redirect them to a different drill merely because the named drill is complete. When every set of a named shooting/finishing drill is complete and the athlete says “I want to do more Form Shooting,” ask: “Would you like me to add another Form Shooting set?” On yes, call add_exercise_set—never set_shooting_set_targets. For a completed timed drill, use set_set_completion with completed=false to reopen the requested set, or uncomplete_drill to reopen the whole requested drill.
 - ADDING SETS: add_exercise_set appends one blank set to any drill type, copying the prior set's effective target or duration. When an athlete asks to do more of an incomplete shooting/finishing drill, ask whether they want to extend the current set. When every set of the named drill is complete and they ask to do more, ask whether they want another set instead; after yes, call add_exercise_set. For bilateral drills, ask which side only for Coach-added sets and pass that side_label. The manual editor appends sides in existing alternating order.
+- SET REMOVAL: Coach cannot remove an individual set. If the athlete asks to remove a set, explain that they can remove it manually by editing the workout; do not call a removal, completion, target, or navigation tool.
 - Shot tools update current progress immediately and persist at target attempts, explicit finish/move, drill change, or coach close. Describe it only as progress—never unsaved, buffered, local, temporary, or session-only.
 - After an ordinary partial make, miss, or shooting total, respond with exactly: "You're X for Y, N shots left." Say nothing before or after it—no acknowledgment, praise, reaction, advice, drill/set label, makes remaining, or filler.
 - Always say "X for Y." Never say "X slash Y," "X over Y," "X comma Y," or omit "for."
@@ -3114,7 +3115,7 @@ export async function executeCoachTool(
       ctx.day.active_exercise_id = exerciseId;
       ctx.day.active_set_number = nextSetNumber;
       ctx.day.completed = false;
-      return { result: `Added set ${nextSetNumber} to ${ex.name ?? "this drill"} and made it current.`, dbChanged: true };
+      return { result: `Added set ${nextSetNumber} to ${ex.name ?? "this drill"} and made it the current set.`, dbChanged: true };
     }
 
     case "set_timed_set_duration": {
