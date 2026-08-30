@@ -459,13 +459,17 @@ export function ExerciseCard({
   }, [setLogs, difficulty, userNotes, attemptsOverride, minutesOverride, setPlan]);
 
   const commitShootingResults = (setNumber: number, complete: boolean) => {
-    const makes = makesDrafts[setNumber] === ""
-      ? null
-      : Number.parseInt(makesDrafts[setNumber] ?? "0", 10);
-    const requestedAttempts = attemptsDrafts[setNumber] === ""
-      ? 0
-      : Number.parseInt(attemptsDrafts[setNumber] ?? "0", 10);
     const row = setLogs.find((set) => set.set_number === setNumber);
+    const makes = makesDrafts[setNumber] === undefined
+      ? row?.makes ?? null
+      : makesDrafts[setNumber] === ""
+      ? null
+      : Number.parseInt(makesDrafts[setNumber], 10);
+    const requestedAttempts = attemptsDrafts[setNumber] === undefined
+      ? row?.attempts ?? 0
+      : attemptsDrafts[setNumber] === ""
+      ? 0
+      : Number.parseInt(attemptsDrafts[setNumber], 10);
     if (row?.completed) {
       hasUserEditsRef.current = true;
       setSetLogs((previous) =>
