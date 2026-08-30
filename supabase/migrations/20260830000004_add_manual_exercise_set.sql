@@ -35,7 +35,7 @@ begin
     select max(session_row.state_version)
     from public.coach_sessions as session_row
     where session_row.day_id = p_day_id and session_row.user_id = v_user_id
-  ), 0);
+  ), 0)::bigint;
 end;
 $$;
 
