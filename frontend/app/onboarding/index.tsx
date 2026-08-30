@@ -171,6 +171,8 @@ export default function OnboardingScreen() {
   const [nameError, setNameError] = useState<string | null>(null);
   const [coachVoice, setCoachVoice] = useState<CoachVoice | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [privacyAccepted, setPrivacyAccepted] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [completedChecklistSteps, setCompletedChecklistSteps] = useState(0);
   const [checklistRun, setChecklistRun] = useState(0);
@@ -268,6 +270,8 @@ export default function OnboardingScreen() {
         return completedChecklistSteps === GENERATION_STEPS.length;
       case COACH_SELECTION_STEP:
         return coachVoice !== null;
+      case AI_CONSENT_STEP:
+        return privacyAccepted && termsAccepted;
       default:
         return true;
     }
@@ -706,16 +710,11 @@ export default function OnboardingScreen() {
 
       {step === AI_CONSENT_STEP && (
         <View style={styles.consentSlide}>
-          <AIDataProcessingDisclosure />
-          <Button
-            title="Not Now"
-            variant="outline"
-            onPress={() => {
-              selectionHaptic();
-              void handleSubmit(false);
-            }}
-            disabled={submitting}
-            style={styles.consentNotNow}
+          <AIDataProcessingDisclosure
+            privacyAccepted={privacyAccepted}
+            termsAccepted={termsAccepted}
+            onPrivacyToggle={() => setPrivacyAccepted((value) => !value)}
+            onTermsToggle={() => setTermsAccepted((value) => !value)}
           />
         </View>
       )}
