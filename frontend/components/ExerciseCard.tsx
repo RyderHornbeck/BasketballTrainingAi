@@ -205,9 +205,6 @@ function SetShootingRow({
               inputMode="numeric"
               style={[styles.targetInput, { backgroundColor: colors.card, color: colors.text, borderColor: colors.border }]}
             />
-            {onRemove ? <Pressable onPress={onRemove} hitSlop={8} style={styles.removeSetButton}>
-              <XIcon size={13} color="#FFFFFF" weight="bold" />
-            </Pressable> : null}
             <Text style={[styles.targetSlash, { color: colors.textMuted }]}>/</Text>
             <RNTextInput
               value={targetAttemptsDraft ?? String(targetAttempts ?? 0)}
@@ -217,6 +214,9 @@ function SetShootingRow({
               inputMode="numeric"
               style={[styles.targetInput, { backgroundColor: colors.card, color: colors.text, borderColor: colors.border }]}
             />
+            {onRemove ? <Pressable onPress={onRemove} hitSlop={8} style={styles.removeSetButton}>
+              <XIcon size={13} color="#FFFFFF" weight="bold" />
+            </Pressable> : null}
           </View>
         ) : targetMakes != null ? (
           <Text style={[styles.setTargetHint, { color: colors.textMuted }]}>
