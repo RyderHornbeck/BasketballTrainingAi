@@ -3,6 +3,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import {
   buildWorkoutNavigation,
   buildCoachTurnDynamicContext,
+  buildCurrentDrillExplanationContext,
   buildCompactContextSummary,
   COACH_TURN_STABLE_SYSTEM_PROMPT,
   loadWorkoutContext,
@@ -221,6 +222,9 @@ Deno.serve(async (req: Request) => {
     localShotContext != null &&
     authoritativeCurrentSet?.exercise_id === localShotContext.exerciseId &&
     authoritativeCurrentSet.set_number === localShotContext.setNumber;
+  const currentDrillExplanationRequested =
+    /\b(?:explain|describe|walk me through|show me how to do)\b[\s\S]*\b(?:current|this)\s+(?:drill|exercise)\b/i
+      .test(turn.transcript);
   const dynamicContext = `${buildCoachTurnDynamicContext(
     initialContext,
     { ...(answers ?? {}), preferred_name: profile?.preferred_name ?? null },
@@ -234,6 +238,10 @@ Deno.serve(async (req: Request) => {
       ? `\n\nLIVE DEVICE SHOOTING STATE: The athlete device has newer local progress for the current set. This overrides persisted makes and attempts only for this turn. Current set: ${JSON.stringify(
         localShotContext,
       )}. Use these exact totals for any correction.`
+      : ""
+  }${
+    currentDrillExplanationRequested
+      ? `\n\n${buildCurrentDrillExplanationContext(initialContext)}`
       : ""
   }`;
 

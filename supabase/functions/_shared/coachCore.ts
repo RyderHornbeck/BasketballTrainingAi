@@ -1677,6 +1677,22 @@ Authoritative workout state follows. Use it silently and prefer newer state from
 ${buildRealtimeModelContext(ctx, profile, timer, conversationSummary)}`;
 }
 
+/** Full source instructions for an explicit explanation of the active drill. */
+export function buildCurrentDrillExplanationContext(ctx: WorkoutContext): string {
+  const current = ctx.exercises.find((exercise) => exercise.id === ctx.day.active_exercise_id);
+  if (!current) return "";
+  const clip = Array.isArray(current.video_clip)
+    ? current.video_clip[0]
+    : current.video_clip;
+  const instructions = current.instructions?.trim() || clip?.description?.trim();
+  if (!instructions) return "";
+  return `MANDATORY CURRENT-DRILL EXPLANATION SOURCE
+The athlete explicitly asked to explain the current drill. Give the following instructions faithfully: state the setup first, then every numbered step in order. Do not summarize, paraphrase away, or replace any step with generic advice. Do not call a tool.
+Current drill: ${current.name ?? "Current drill"}
+Instructions: ${instructions}
+${clip?.coaching_notes?.trim() ? `Coaching note: ${clip.coaching_notes.trim()}` : ""}`;
+}
+
 /** Full state for reads; changed drills plus navigation/totals after mutations. */
 export function buildRealtimeNavigationUpdate(
   ctx: WorkoutContext,
