@@ -47,6 +47,7 @@ interface ExerciseCardProps {
   onExpandedChange?: (expanded: boolean) => void;
   completionAnimationToken?: number;
   onDelete?: () => void;
+  onAddSet?: () => void;
   onLogChange: (log: ExerciseLogInput) => void;
 }
 
@@ -309,6 +310,7 @@ export function ExerciseCard({
   onExpandedChange,
   completionAnimationToken,
   onDelete,
+  onAddSet,
   onLogChange,
 }: ExerciseCardProps) {
   const { colors, scheme } = useTheme();
@@ -951,6 +953,17 @@ export function ExerciseCard({
                 </View>
               ) : null}
               <View style={styles.setRows}>{renderSetRows()}</View>
+              {editMode && !readOnly && onAddSet ? (
+                <Pressable
+                  onPress={onAddSet}
+                  style={({ pressed }) => [
+                    styles.addSetButton,
+                    { backgroundColor: colors.accent, opacity: pressed ? 0.8 : 1 },
+                  ]}
+                >
+                  <Text style={styles.addSetButtonText}>Add set</Text>
+                </Pressable>
+              ) : null}
 
               {logType === "difficulty_rating" && (
                 <View style={styles.difficultyBlock}>
@@ -1247,6 +1260,18 @@ const styles = StyleSheet.create({
   },
   setRows: {
     gap: 10,
+  },
+  addSetButton: {
+    minHeight: 46,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 12,
+  },
+  addSetButtonText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "800",
   },
   setRow: {
     borderRadius: 16,

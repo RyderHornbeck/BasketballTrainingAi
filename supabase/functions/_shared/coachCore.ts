@@ -196,6 +196,7 @@ SHOT TRACKING
 - For more work on a completed shooting drill, call set_shooting_set_targets with the requested new total. A higher target reopens and activates that set without changing its score. If no total is supplied, ask for the exact total attempts.
 - Going back to extend a completed shooting/finishing set is normal and allowed. When an athlete asks to keep shooting a completed drill and gives a new total, call set_shooting_set_targets immediately. Ask a follow-up only if the target total or set is genuinely ambiguous.
 - COMPLETED DRILL REOPENING: Every drill and set can be reopened. Never tell an athlete that a completed drill cannot be reopened, and never redirect them to a different drill merely because the named drill is complete. For “I want to do more Form Shooting” or an equivalent request about a named completed shooting/finishing drill, resolve that named drill and ask: “Which set of Form Shooting would you like to extend, and how many more shots do you want to take?” Once both are known, call set_shooting_set_targets for that exact set. Convert “N more shots” to the current target attempts plus N; the higher target automatically reopens and activates that set. For a completed timed drill, use set_set_completion with completed=false to reopen the requested set, or uncomplete_drill to reopen the whole requested drill.
+- ADDING SETS: `add_exercise_set` appends one blank set to any drill type, copying the prior set's effective target or duration. When an athlete asks to do more of an incomplete shooting/finishing drill, ask whether they want to extend the current set. When every set of the named drill is complete and they ask to do more, ask whether they want another set instead; after yes, call add_exercise_set. For bilateral drills, ask which side only for Coach-added sets and pass that side_label. The manual editor appends sides in existing alternating order.
 - Shot tools update current progress immediately and persist at target attempts, explicit finish/move, drill change, or coach close. Describe it only as progress—never unsaved, buffered, local, temporary, or session-only.
 - After an ordinary partial make, miss, or shooting total, respond with exactly: "You're X for Y, N shots left." Say nothing before or after it—no acknowledgment, praise, reaction, advice, drill/set label, makes remaining, or filler.
 - Always say "X for Y." Never say "X slash Y," "X over Y," "X comma Y," or omit "for."
@@ -3059,6 +3060,61 @@ export async function executeCoachTool(
           : targetSummary,
         dbChanged: true,
       };
+    }
+
+    case "add_exercise_set": {
+      const exerciseId = validExercise(args.exercise_id, args.drill_name);
+      const ex = exerciseId
+        ? ctx.exercises.find((exercise) => exercise.id === exerciseId)
+        : null;
+      if (!exerciseId || !ex) {
+        return { result: "I couldn't uniquely match that workout drill.", dbChanged: false };
+      }
+      const plan = effectivePlanForExercise(ex, ctx.logs.get(exerciseId));
+      if (plan.setCount >= 100) {
+        return { result: "This drill already has the maximum of 100 sets.", dbChanged: false };
+      }
+      const existing = ctx.logs.get(exerciseId);
+      const meta = decodeExerciseLogMeta(existing?.notes ?? null);
+      const setLogs = hydrateSetLogs(buildSetPlan(ex), meta, existing ?? undefined);
+      const previous = setLogs.at(-1);
+      const nextSetNumber = plan.setCount + 1;
+      const requestedSide = typeof args.side_label === "string" ? args.side_label : null;
+      const existingSides = ex.set_side_labels ?? [];
+      const bilateral = existingSides.length > 0;
+      if (bilateral && !requestedSide) {
+        return { result: "Tell me whether to add the left-side or right-side set.", dbChanged: false };
+      }
+      const nextSides = bilateral ? [...existingSides, requestedSide!] : ex.set_side_labels;
+      const nextLogs = [...setLogs, {
+        set_number: nextSetNumber, completed: false, makes: null, attempts: null, minutes: null,
+        target_makes_override: previous?.target_makes_override ?? null,
+        target_attempts_override: previous?.target_attempts_override ?? null,
+        duration_seconds_override: previous?.duration_seconds_override ?? null,
+      }];
+      const nextPlan = { ...plan, setCount: nextSetNumber, setSideLabels: nextSides };
+      const totals = aggregateSetLogs(nextLogs, nextPlan);
+      const notes = encodeExerciseLogMeta({ ...meta, set_logs: totals.set_logs });
+      const { error: exerciseError } = await supabase.from("workout_exercises").update({
+        sets: String(nextSetNumber), set_side_labels: nextSides,
+      }).eq("id", exerciseId).eq("day_id", dayId).eq("user_id", userId);
+      if (exerciseError) return { result: `Error: ${exerciseError.message}`, dbChanged: false };
+      const { error: logError } = await supabase.from("exercise_logs").upsert({
+        exercise_id: exerciseId, day_id: dayId, user_id: userId, completed: false,
+        makes: totals.makes, attempts: totals.attempts, minutes_completed: totals.minutes_completed,
+        difficulty: existing?.difficulty ?? null, notes,
+      }, { onConflict: "exercise_id" });
+      if (logError) return { result: `Error: ${logError.message}`, dbChanged: false };
+      await supabase.from("workout_days").update({
+        active_exercise_id: exerciseId, active_set_number: nextSetNumber, completed: false,
+      }).eq("id", dayId).eq("user_id", userId);
+      ex.sets = String(nextSetNumber);
+      ex.set_side_labels = nextSides;
+      ctx.logs.set(exerciseId, { exercise_id: exerciseId, completed: false, makes: totals.makes, attempts: totals.attempts, minutes_completed: totals.minutes_completed, difficulty: existing?.difficulty ?? null, notes });
+      ctx.day.active_exercise_id = exerciseId;
+      ctx.day.active_set_number = nextSetNumber;
+      ctx.day.completed = false;
+      return { result: `Added set ${nextSetNumber} to ${ex.name ?? "this drill"} and made it current.`, dbChanged: true };
     }
 
     case "set_timed_set_duration": {

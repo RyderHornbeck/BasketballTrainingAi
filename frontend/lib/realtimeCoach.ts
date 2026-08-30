@@ -516,6 +516,7 @@ const FLUSH_BEFORE_TOOLS = new Set([
   "complete_drill",
   "set_set_completion",
   "set_shooting_set_targets",
+  "add_exercise_set",
   "add_workout_exercise",
   "remove_workout_exercise",
 ]);

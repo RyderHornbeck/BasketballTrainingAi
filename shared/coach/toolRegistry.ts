@@ -281,6 +281,21 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
     }, ["set_number"]),
   }),
   tool({
+    name: "add_exercise_set",
+    description:
+      "Append one new set to the named workout exercise. Use when the athlete wants another set after completing an exercise. Works for shooting, finishing, timed, and checkbox drills. For bilateral drills, provide side_label as left side or right side.",
+    capability: "edits",
+    execution: "server",
+    kind: "mutation",
+    realtime: true,
+    flushShots: true,
+    exactSpeech: true,
+    parameters: args({
+      ...drillReference,
+      side_label: { type: "string", enum: ["left side", "right side"] },
+    }),
+  }),
+  tool({
     name: "search_exercise_catalog",
     description:
       "Search active exercises to offer options. After the athlete accepts or selects a displayed option by name or number, add that exact option directly without re-searching or asking another confirmation. Result IDs are internal; present names only and never ask the athlete for an ID.",

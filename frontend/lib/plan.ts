@@ -427,6 +427,15 @@ export async function saveExerciseLog(
   return data as ExerciseLog;
 }
 
+export async function appendExerciseSet(dayId: string, exerciseId: string): Promise<void> {
+  const { error } = await supabase.rpc("append_my_exercise_set", {
+    p_day_id: dayId,
+    p_exercise_id: exerciseId,
+  });
+  if (error) throw new Error(`Failed to add set: ${error.message}`);
+  emitWorkoutUpdated("manual");
+}
+
 /**
  * Persists all exercise logs for a day, creates a workout_day_log, marks the
  * day completed, and unlocks the next day in the plan (if any). A workout can

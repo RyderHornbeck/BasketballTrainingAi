@@ -20,6 +20,7 @@ import { actionHaptic, selectionHaptic } from "@/lib/haptics";
 import { sortWorkoutExercisesForDisplay } from "@/lib/workoutOrder";
 import {
   ExerciseLogInput,
+  appendExerciseSet,
   finishWorkoutDay,
   getCurrentWorkoutStreak,
   getWorkoutDayWithExercises,
@@ -1037,6 +1038,14 @@ export default function DaysScreen() {
                   editMode={editingWorkout}
                   completionAnimationToken={completionAnimationTokens[exercise.id]}
                   onDelete={() => confirmDeleteExercise(exercise.id, exercise.name)}
+                  onAddSet={() => {
+                    void appendExerciseSet(dayDetail.id, exercise.id)
+                      .then(() => loadDetail(false))
+                      .catch((error) => Alert.alert(
+                        "Could not add set",
+                        error instanceof Error ? error.message : "Please try again.",
+                      ));
+                  }}
                   onLogChange={handleLogChange}
                 />
               ))}
