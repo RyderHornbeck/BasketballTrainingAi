@@ -138,6 +138,7 @@ function SetShootingRow({
   onAttemptsChange,
   onTargetAttemptsChange,
   onTargetMakesChange,
+  onTargetBlur,
   onCommit,
   readOnly,
   colors,
@@ -158,6 +159,7 @@ function SetShootingRow({
   onAttemptsChange: (value: string) => void;
   onTargetAttemptsChange: (value: string) => void;
   onTargetMakesChange: (value: string) => void;
+  onTargetBlur: () => void;
   onCommit: () => void;
   readOnly?: boolean;
   colors: ReturnType<typeof useTheme>["colors"];
@@ -185,6 +187,7 @@ function SetShootingRow({
             <RNTextInput
               value={targetMakesDraft ?? String(targetMakes ?? 0)}
               onChangeText={onTargetMakesChange}
+              onBlur={onTargetBlur}
               keyboardType="number-pad"
               inputMode="numeric"
               style={[styles.targetInput, { backgroundColor: colors.card, color: colors.text, borderColor: colors.border }]}
@@ -193,6 +196,7 @@ function SetShootingRow({
             <RNTextInput
               value={targetAttemptsDraft ?? String(targetAttempts ?? 0)}
               onChangeText={onTargetAttemptsChange}
+              onBlur={onTargetBlur}
               keyboardType="number-pad"
               inputMode="numeric"
               style={[styles.targetInput, { backgroundColor: colors.card, color: colors.text, borderColor: colors.border }]}
@@ -525,6 +529,47 @@ export function ExerciseCard({
     });
   };
 
+  const commitShootingTargets = (setNumber: number) => {
+    const row = setLogs.find((set) => set.set_number === setNumber);
+    if (!row) return;
+    const targetMakes = Number.parseInt(
+      targetMakesDrafts[setNumber] ?? String(targetMakesForSet(row, setPlan) ?? 0),
+      10,
+    );
+    const targetAttempts = Number.parseInt(
+      targetAttemptsDrafts[setNumber] ?? String(targetAttemptsForSet(row, setPlan) ?? 0),
+      10,
+    );
+    const makes = row.makes ?? 0;
+    const attempts = row.attempts ?? 0;
+    if (!Number.isFinite(targetMakes) || !Number.isFinite(targetAttempts) || targetMakes < 0 ||
+      targetAttempts < 1 || targetMakes > targetAttempts || targetMakes < makes ||
+      targetAttempts < attempts) {
+      Alert.alert("Invalid set target", "Target makes cannot exceed target attempts or be below your saved result.");
+      return;
+    }
+    hasUserEditsRef.current = true;
+    setSetLogs((previous) =>
+      previous.map((set) => set.set_number === setNumber
+        ? {
+            ...set,
+            target_makes_override: targetMakes,
+            target_attempts_override: targetAttempts,
+          }
+        : set)
+    );
+    setTargetMakesDrafts((drafts) => {
+      const next = { ...drafts };
+      delete next[setNumber];
+      return next;
+    });
+    setTargetAttemptsDrafts((drafts) => {
+      const next = { ...drafts };
+      delete next[setNumber];
+      return next;
+    });
+  };
+
   const toggleSetComplete = (setNumber: number) => {
     const row = setLogs.find((s) => s.set_number === setNumber);
     if (!row) return;
@@ -672,6 +717,7 @@ export function ExerciseCard({
               ...drafts,
               [row.set_number]: text.replace(/[^0-9]/g, ""),
             }))}
+          onTargetBlur={() => commitShootingTargets(row.set_number)}
           onCommit={() => saveShootingSet(row.set_number)}
         />
       ));
@@ -1224,10 +1270,10 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   shootingCheckbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 7,
-    borderWidth: 1.5,
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    borderWidth: 2,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 10,
