@@ -210,6 +210,7 @@ TIMED SET DURATION OVERRIDE
 - If the athlete asks how to complete, do, or finish timed, ball-handling, defense, or conditioning drills, say: "Just say start the set timer, and I'll run it. When the timer finishes, it will be marked complete."
 - If the athlete says "start a [X]-second/minute timer for this set" or equivalent, first call set_timed_set_duration for the referenced set using the exact value and unit spoken.
 - Await that result, then call start_timer for the same set using its newly saved duration.
+- If the athlete directly says "restart the timer," "start the timer over," "restart this timer," or an equivalent explicit restart request, call start_timer for the currently timed set using its saved duration. This starts a fresh countdown from zero; do not resume the previous elapsed timer.
 - Never start the timer before changing the set duration, and never skip set_timed_set_duration for this request.
 - After a set_timed_set_duration call succeeds without starting the timer, say: "The set is now [duration]. Would you like me to start the set timer?" Keep that question as the active conversational context so a clear affirmative starts the timer.
 - Preserve units exactly: seconds remain seconds and minutes remain minutes.
@@ -220,7 +221,7 @@ COMPLETION, TIME, OUTPUT
 - Before completing a shooting/finishing set with attempts remaining, state progress and ask whether to start or mark it complete as is.
 - After that question, treat any contextual clear finish wording as confirmation: call set_set_completion for that set with completed=true and confirmed_incomplete=true. Do not repeat. Only a clear refusal/keep-shooting intent leaves it incomplete.
 - Honor an explicit request to go back and reopen an earlier completed set: call set_set_completion with completed=false; never claim past sets cannot be reopened.
-- Coach is not aware of total workout duration, workout minutes remaining, or elapsed workout time. Judge workout progress only from drill and set completion. start_timer targets the named/current timed set and includes its reference; omit duration for saved time. Preserve seconds/minutes. After success say "A X-minute/second timer has been started." Ask duration for untimed drills. set_timed_set_duration applies to any drill configured with minute-based sets. When a timed set ends, its local announcement is: "Time's up. You're now on set N of [drill], [left/right side if any]. Would you like me to start the timer?" Treat that exact offer as active context: a clear “yeah,” “yes,” “sure,” “okay,” or “start it” means call start_timer for that announced set. “Stop the timer,” “end the timer,” “cancel the timer,” or a break means pause and preserve the remaining time. Resume when the athlete says “start it back up,” “resume,” “continue the timer,” or equivalent. Reset/restart only when they explicitly say reset, restart, start over, or restart the timer.
+- Coach is not aware of total workout duration, workout minutes remaining, or elapsed workout time. Judge workout progress only from drill and set completion. start_timer targets the named/current timed set and includes its reference; omit duration for saved time. Preserve seconds/minutes. After success say "A X-minute/second timer has been started." Ask duration for untimed drills. set_timed_set_duration applies to any drill configured with minute-based sets. When a timed set ends, its local announcement is: "Time's up. You're now on set N of [drill], [left/right side if any]. Would you like me to start the timer?" Treat that exact offer as active context: a clear “yeah,” “yes,” “sure,” “okay,” or “start it” means call start_timer for that announced set. “Stop the timer,” “end the timer,” “cancel the timer,” or a break means pause and preserve the remaining time. Resume when the athlete says “start it back up,” “resume,” “continue the timer,” or equivalent. For an explicit restart/reset/start-over request, call start_timer with the current timed set's saved duration so it begins a fresh countdown from zero; never resume or preserve the old elapsed time.
 `;
 
 // Keep the proven, detailed coaching policy in the cacheable prefix. Workout
@@ -231,7 +232,7 @@ ANTHROPIC TOOL CONTRACT
 - Use the supplied native tool blocks for every workout action or state lookup. Never write a tool call, function call, JSON, arguments, query, or tool name as ordinary text.
 - Never mention a query, command, tool, catalog, database, request mode, parameter, ID, or internal process.
 - Exact make and miss commands are handled before a turn reaches you. For a clear current-score or last-shot correction, use only correct_current_shooting_total with absolute totals calculated from LIVE DEVICE SHOOTING STATE. Otherwise ask for clarification.
-- You can start, pause, resume, and reset timers. Treat stop/end/cancel/break as pause; only reset or restart when explicitly requested. Never tell the athlete to operate a timer themselves.
+- You can start, pause, resume, and reset timers. Treat stop/end/cancel/break as pause. For an explicit reset/restart/start-over request, use start_timer for the current timed set's saved duration to create a fresh countdown, not resume. Never tell the athlete to operate a timer themselves.
 - For a drill absent from the workout, search once before offering the closest match. After a clear yes or a selection from offered options, call add_workout_exercise with that exact displayed name. Never re-search or ask a second confirmation.
 - Do not claim a workout fact or completed change until its tool succeeds.
 - Speak only natural athlete-facing language after tool results.
@@ -241,6 +242,7 @@ TOOL EXECUTION EXAMPLES AND EDGE CASES
 - For "start a five-minute timer for this set," first save the exact set duration, then start the timer for that same set. Do not reverse those actions or replace minutes with seconds in speech.
 - For "I actually want to shoot 50 shots" or "can we shoot 50 shots," call set_shooting_set_targets for the current shooting/finishing set with target_attempts=50 before replying. This is a requested workout edit, not a shot result or a question about remaining shots.
 - For "start the timer," use the saved timed-set duration when one exists. If the current drill is not timed and no duration was given, ask for a duration instead of inventing one.
+- For "restart the timer," "start the timer over," or an equivalent direct restart request, call start_timer with the saved duration of the current timed set. Do not call resume_timer and do not preserve elapsed time.
 - After Coach asks whether to start a set timer, any clear affirmative—"yes," "yeah," "sure," "okay," "do it," "start it," or equivalent—MUST call start_timer for that referenced set before speaking. Never claim a timer is starting or has started without the successful start_timer result.
 - For "add V dribbles," first search. Present the closest matching option(s) and ask permission once. A later clear yes or named/numbered option selection is permission for that exact match; add it directly without another search or question.
 - For a completed drill or workout that the athlete wants to revisit, reopen the requested scope without erasing actual makes, attempts, or completed minutes.
@@ -407,7 +409,7 @@ const REALTIME_TOOL_DEFS = [
   {
     name: "start_timer",
     description:
-      "ONLY for a direct request to start a timer now, or confirmation of the immediately preceding timer-start offer. Never use for a how-to, explanatory, or general timer/set question. Start a countdown bound to the named set or active timed set, preserving units.",
+      "ONLY for a direct request to start or restart a timer now, or confirmation of the immediately preceding timer-start offer. Never use for a how-to, explanatory, or general timer/set question. For an explicit restart/reset/start-over request, start a fresh countdown from the saved set duration rather than resuming elapsed time. Start a countdown bound to the named set or active timed set, preserving units.",
     parameters: {
       type: "object",
       properties: {
@@ -555,7 +557,7 @@ const TOOL_DEFS = [
   {
     name: "start_timer",
     description:
-      "ONLY for a direct request to start a timer now, or confirmation of the immediately preceding timer-start offer. Never use for a how-to, explanatory, or general timer/set question. Start a countdown bound to the named set or active timed set, preserving units.",
+      "ONLY for a direct request to start or restart a timer now, or confirmation of the immediately preceding timer-start offer. Never use for a how-to, explanatory, or general timer/set question. For an explicit restart/reset/start-over request, start a fresh countdown from the saved set duration rather than resuming elapsed time. Start a countdown bound to the named set or active timed set, preserving units.",
     parameters: {
       type: "object",
       properties: {

@@ -195,7 +195,7 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   tool({
     name: "start_timer",
     description:
-      "ONLY when the athlete directly asks to start a timer or clearly confirms Coach's immediately preceding timer-start offer. Never use for a how-to, explanatory, or general question about timers, timed sets, or starting a set. Start a timer bound to a specific workout set and preserve seconds and minutes exactly.",
+      "ONLY when the athlete directly asks to start or restart a timer, or clearly confirms Coach's immediately preceding timer-start offer. Never use for a how-to, explanatory, or general question about timers, timed sets, or starting a set. For an explicit restart, reset, or start-over request, start a fresh timer from the saved duration of the current set; never resume or preserve elapsed time. Start a timer bound to a specific workout set and preserve seconds and minutes exactly.",
     capability: "timers",
     execution: "server",
     kind: "mutation",
