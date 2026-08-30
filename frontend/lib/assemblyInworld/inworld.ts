@@ -79,6 +79,7 @@ interface InworldContext {
   final: boolean;
   sentText: boolean;
   lastFlushCompleted: boolean;
+  flushInFlight: boolean;
 }
 
 interface InworldSocketMessage {
@@ -185,6 +186,7 @@ export class InworldTtsClient {
       final: false,
       sentText: false,
       lastFlushCompleted: false,
+      flushInFlight: false,
     };
     this.contexts.set(contextId, context);
     this.send({
@@ -262,6 +264,17 @@ export class InworldTtsClient {
     this.pendingText.set(contextId, "");
     if (!context || (!text && !final)) return;
     context.final ||= final;
+    // Inworld's flushCompleted events identify only a context, not an
+    // individual client flush. Its protocol guarantees sequential flush
+    // completion, so keep a single flush in flight to know exactly which
+    // phrase completed and prevent an earlier sentence from ending the turn.
+    if (context.flushInFlight) {
+      this.pendingText.set(
+        contextId,
+        `${text}${this.pendingText.get(contextId) ?? ""}`,
+      );
+      return;
+    }
     if (!context.sentText && text) {
       context.sentText = true;
       const requestText = this.withSteering(text);
@@ -284,6 +297,7 @@ export class InworldTtsClient {
       return;
     }
     context.lastFlushCompleted = false;
+    context.flushInFlight = true;
     this.send({
       send_text: {
         text: this.withSteering(text),
@@ -335,8 +349,14 @@ export class InworldTtsClient {
       // completed non-final flush is healthy, not an audio stall.
       if (context.progressTimer) clearTimeout(context.progressTimer);
       context.progressTimer = null;
+      context.flushInFlight = false;
       context.lastFlushCompleted = true;
-      if (context.final) this.completeContext(context);
+      const pendingText = this.pendingText.get(context.identity.contextId)?.trim() ?? "";
+      if (pendingText) {
+        this.flush(context.identity.contextId, context.final);
+      } else if (context.final) {
+        this.completeContext(context);
+      }
     } else if (result?.contextClosed) {
       this.completeContext(context);
     }

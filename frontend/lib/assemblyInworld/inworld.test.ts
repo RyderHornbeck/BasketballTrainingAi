@@ -99,6 +99,43 @@ try {
   socket.message({ result: { contextId: "turn-1", flushCompleted: {} } });
   assert(audio[0] === "cGNt", "PCM base64 must be forwarded unchanged");
   assert(completed[0] === "turn-1", "final flush must complete the context");
+
+  client.createContext("turn-2");
+  client.pushText("turn-2", "First phrase. ".repeat(20));
+  client.pushText("turn-2", "Final sentence.", true);
+  const turnTwoMessagesBeforeFirstFlushCompletes = socket.sent
+    .map((message) => JSON.parse(message))
+    .filter((message) => message.contextId === "turn-2" && message.send_text);
+  assert(
+    turnTwoMessagesBeforeFirstFlushCompletes.length === 1,
+    "a later phrase must wait for the prior flush to complete",
+  );
+  socket.message({
+    result: {
+      contextId: "turn-2",
+      audioChunk: { audioContent: "Zmlyc3Q=" },
+    },
+  });
+  socket.message({ result: { contextId: "turn-2", flushCompleted: {} } });
+  const turnTwoMessagesAfterFirstFlushCompletes = socket.sent
+    .map((message) => JSON.parse(message))
+    .filter((message) => message.contextId === "turn-2" && message.send_text);
+  assert(
+    turnTwoMessagesAfterFirstFlushCompletes.length === 2,
+    "the final phrase must flush after the earlier phrase completes",
+  );
+  socket.message({
+    result: {
+      contextId: "turn-2",
+      audioChunk: { audioContent: "bGFzdA==" },
+    },
+  });
+  socket.message({ result: { contextId: "turn-2", flushCompleted: {} } });
+  assert(
+    audio.at(-1) === "bGFzdA==",
+    "final phrase PCM must be forwarded before the context completes",
+  );
+  assert(completed.at(-1) === "turn-2", "the final phrase must complete the context");
   console.log("✓ Inworld WebSocket protocol routes PCM by context");
 } finally {
   (globalThis as unknown as { WebSocket: typeof originalWebSocket }).WebSocket = originalWebSocket;
