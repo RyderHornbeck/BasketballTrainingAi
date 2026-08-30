@@ -187,15 +187,15 @@ function SetShootingRow({
               onChangeText={onTargetMakesChange}
               keyboardType="number-pad"
               inputMode="numeric"
-              style={[styles.targetInput, { color: colors.text, borderColor: colors.accent }]}
+              style={[styles.targetInput, { backgroundColor: colors.card, color: colors.text, borderColor: colors.border }]}
             />
-            <Text style={[styles.shootingSlash, { color: colors.textMuted }]}>/</Text>
+            <Text style={[styles.targetSlash, { color: colors.textMuted }]}>/</Text>
             <RNTextInput
               value={targetAttemptsDraft ?? String(targetAttempts ?? 0)}
               onChangeText={onTargetAttemptsChange}
               keyboardType="number-pad"
               inputMode="numeric"
-              style={[styles.targetInput, { color: colors.text, borderColor: colors.accent }]}
+              style={[styles.targetInput, { backgroundColor: colors.card, color: colors.text, borderColor: colors.border }]}
             />
           </View>
         ) : targetMakes != null ? (
@@ -206,6 +206,19 @@ function SetShootingRow({
         ) : null}
       </View>
       <View style={styles.shootingInputs}>
+        <Pressable
+          onPress={readOnly ? undefined : onCommit}
+          disabled={readOnly}
+          style={[
+            styles.shootingCheckbox,
+            {
+              backgroundColor: completed ? colors.accent : "transparent",
+              borderColor: colors.accent,
+            },
+          ]}
+        >
+          {completed ? <Text style={styles.checkmark}>✓</Text> : null}
+        </Pressable>
         <View style={styles.shootingCol}>
           <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Makes</Text>
           <RNTextInput
@@ -243,19 +256,6 @@ function SetShootingRow({
             ]}
           />
         </View>
-        <Pressable
-          onPress={readOnly ? undefined : onCommit}
-          disabled={readOnly}
-          style={[
-            styles.checkbox,
-            {
-              backgroundColor: completed ? colors.accent : "transparent",
-              borderColor: colors.accent,
-            },
-          ]}
-        >
-          {completed ? <Text style={styles.checkmark}>✓</Text> : null}
-        </Pressable>
       </View>
     </View>
   );
@@ -458,6 +458,15 @@ export function ExerciseCard({
       ? 0
       : Number.parseInt(attemptsDrafts[setNumber] ?? "0", 10);
     const row = setLogs.find((set) => set.set_number === setNumber);
+    if (row?.completed) {
+      hasUserEditsRef.current = true;
+      setSetLogs((previous) =>
+        previous.map((set) => set.set_number === setNumber
+          ? { ...set, completed: false, force_incomplete: true }
+          : set)
+      );
+      return;
+    }
     const attempts = Number.isFinite(requestedAttempts)
       ? requestedAttempts
       : row?.attempts ?? 0;
@@ -491,6 +500,7 @@ export function ExerciseCard({
           ? targetAttempts
           : set.target_attempts_override,
         completed: set.set_number === setNumber ? true : set.completed,
+        force_incomplete: set.set_number === setNumber ? false : set.force_incomplete,
       }))
     );
     setMakesDrafts((drafts) => {
@@ -1196,6 +1206,7 @@ const styles = StyleSheet.create({
   targetEditor: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 3,
   },
   targetInput: {
     width: 36,
@@ -1211,6 +1222,15 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-end",
     gap: 12,
+  },
+  shootingCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 7,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 10,
   },
   shootingCol: {
     flex: 1,
@@ -1235,6 +1255,10 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: "300",
     marginBottom: 14,
+  },
+  targetSlash: {
+    fontSize: 18,
+    fontWeight: "300",
   },
   attemptsTarget: {
     fontSize: 28,
