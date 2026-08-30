@@ -301,7 +301,7 @@ export function isCoachMutationRequest(
 }
 
 function isCoachHowToRequest(text: string): boolean {
-  return /^(?:how (?:do|can) i|what do i (?:need|have) to do to|can you explain|can you tell me how)\b/.test(
+  return /\b(?:how (?:do|can) i|what do i (?:need|have) to do to|can you explain|can you tell me how)\b/.test(
     text,
   ) &&
     /\b(?:timer|timed|set|drill|exercise|complete|finish|start|pause|resume|stop)\b/.test(

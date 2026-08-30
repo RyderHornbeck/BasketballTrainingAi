@@ -155,6 +155,12 @@ Deno.test("mutation turns and contextual confirmations force a silent tool-first
     "how-to completion questions must not be treated as mutations",
   );
   assert(
+    !isCoachMutationRequest(
+      "Coach, I'm just wondering, how do I complete a ball handling set?",
+    ),
+    "prefixed how-to completion questions must not be treated as mutations",
+  );
+  assert(
     shouldForceCoachTool("Show me some finishing drills"),
     "search and list requests should suppress pre-tool speech",
   );
