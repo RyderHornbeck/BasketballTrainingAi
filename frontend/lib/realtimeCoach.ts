@@ -311,6 +311,11 @@ interface PendingShootingTargetChange {
   targetAttempts?: number;
 }
 
+interface PendingAddExerciseSet {
+  exerciseId: string;
+  drillName: string | null;
+}
+
 interface PendingStartupOffer {
   kind: "start" | "continue";
   readyForConfirmation: boolean;
@@ -747,6 +752,7 @@ export class RealtimeCoachSession {
   private fallbackTurnCount = 0;
   private pendingTimerDurationChange: PendingTimerDurationChange | null = null;
   private pendingShootingTargetChange: PendingShootingTargetChange | null = null;
+  private pendingAddExerciseSet: PendingAddExerciseSet | null = null;
   private deferredTimerOfferConfirmation: {
     transcript: string;
     generation: number;
@@ -951,6 +957,7 @@ export class RealtimeCoachSession {
     this.fallbackTurnCount = 0;
     this.pendingTimerDurationChange = null;
     this.pendingShootingTargetChange = null;
+    this.pendingAddExerciseSet = null;
     this.pendingStartupOffer = null;
     this.pendingIncompleteShotCompletion = null;
     this.pendingIncompleteSetContinuation = null;
@@ -4832,6 +4839,28 @@ export class RealtimeCoachSession {
         .test(normalizedReply);
     const acceptedDurationChange =
       acceptedConfirmation ? true : declinedConfirmation ? false : null;
+    const requestedAddSetSide = /^(?:right(?:\s+side|\s+set|\s+side\s+set)?|left(?:\s+side|\s+set|\s+side\s+set)?)$/i
+      .test(normalizedReply)
+      ? normalizedReply.startsWith("right")
+        ? "right side"
+        : "left side"
+      : null;
+    if (this.pendingAddExerciseSet && requestedAddSetSide) {
+      const pending = this.pendingAddExerciseSet;
+      this.pendingAddExerciseSet = null;
+      const result = await this.invokeCoachTool("add_exercise_set", {
+        exercise_id: pending.exerciseId,
+        drill_name: pending.drillName,
+        side_label: requestedAddSetSide,
+        client_request_id: turn.requestId,
+      });
+      await this.speakDeterministic(
+        result.result,
+        `add-sided-set:${turn.requestId}`,
+        turn.speechEpoch,
+      );
+      return;
+    }
     const addSetOffer = this.lastAssemblyCoachSpeech?.match(
       /\bwould you like me to add\s+(?:another|a\s+(?:first|second|third|fourth|fifth|\d+(?:st|nd|rd|th))|an?)?\s*(.+?)\s+set\b/i,
     );
@@ -4841,6 +4870,19 @@ export class RealtimeCoachSession {
         (drill) => normalizeDrillReference(drill.name) === offeredName,
       );
       if (offeredDrill) {
+        const hasSides = offeredDrill.set_results.some((set) => Boolean(set.side_label));
+        if (hasSides) {
+          this.pendingAddExerciseSet = {
+            exerciseId: offeredDrill.exercise_id,
+            drillName: offeredDrill.name,
+          };
+          await this.speakDeterministic(
+            "Do you want a right side set or a left side set?",
+            `add-sided-set-choice:${turn.requestId}`,
+            turn.speechEpoch,
+          );
+          return;
+        }
         const result = await this.invokeCoachTool("add_exercise_set", {
           exercise_id: offeredDrill.exercise_id,
           drill_name: offeredDrill.name,
