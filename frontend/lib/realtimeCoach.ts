@@ -303,6 +303,14 @@ interface PendingTimerDurationChange {
   readyForConfirmation?: boolean;
 }
 
+interface PendingShootingTargetChange {
+  exerciseId: string;
+  drillName: string | null;
+  setNumber: number;
+  targetMakes?: number;
+  targetAttempts?: number;
+}
+
 interface PendingStartupOffer {
   kind: "start" | "continue";
   readyForConfirmation: boolean;
@@ -737,6 +745,7 @@ export class RealtimeCoachSession {
   private deterministicTurnCount = 0;
   private fallbackTurnCount = 0;
   private pendingTimerDurationChange: PendingTimerDurationChange | null = null;
+  private pendingShootingTargetChange: PendingShootingTargetChange | null = null;
   private deferredTimerOfferConfirmation: {
     transcript: string;
     generation: number;
@@ -940,6 +949,7 @@ export class RealtimeCoachSession {
     this.deterministicTurnCount = 0;
     this.fallbackTurnCount = 0;
     this.pendingTimerDurationChange = null;
+    this.pendingShootingTargetChange = null;
     this.pendingStartupOffer = null;
     this.pendingIncompleteShotCompletion = null;
     this.pendingIncompleteSetContinuation = null;
@@ -4424,13 +4434,39 @@ export class RealtimeCoachSession {
         )}. Would you like me to start the set timer?`;
       }
       await this.flushPendingShotSets();
+      const currentSet = current.set_results.find(
+        (setResult) => setResult.set_number === setNumber,
+      );
+      const targetAttempts = currentSet?.target?.attempts ?? current.target.attempts ?? 0;
+      const requestedAttempts = command.args.targetAttempts == null
+        ? undefined
+        : command.args.additionalAttempts
+          ? targetAttempts + command.args.targetAttempts
+          : command.args.targetAttempts;
+      if (!command.args.confirmedTargetChange) {
+        this.pendingShootingTargetChange = {
+          exerciseId: current.exercise_id,
+          drillName: current.name,
+          setNumber,
+          targetMakes: command.args.targetMakes,
+          targetAttempts: requestedAttempts,
+        };
+        const targetLabel = requestedAttempts == null
+          ? "these targets"
+          : `${requestedAttempts} attempts`;
+        return `Would you like me to extend ${this.setLocation(
+          current.name,
+          setNumber,
+          currentSet?.side_label,
+        )} to ${targetLabel}?`;
+      }
       return (
         await this.invokeCoachTool("set_shooting_set_targets", {
           exercise_id: current.exercise_id,
           drill_name: current.name,
           set_number: setNumber,
           target_makes: command.args.targetMakes,
-          target_attempts: command.args.targetAttempts,
+          target_attempts: requestedAttempts,
           ...requestArgs,
         })
       ).result;
@@ -4795,6 +4831,10 @@ export class RealtimeCoachSession {
         .test(normalizedReply);
     const acceptedDurationChange =
       acceptedConfirmation ? true : declinedConfirmation ? false : null;
+    const shootingTargetChangeConfirmation =
+      this.pendingShootingTargetChange && acceptedDurationChange != null
+        ? acceptedDurationChange
+        : null;
     const incompleteCompletionAffirmation =
       /^(?:(?:um|uh|coach|okay|ok|please|lets|let us|just)\s+)*(?:mark(?: it| this set)? complete(?: as is)?|mark(?: it| this set)? as complete(?: as is)?|complete(?: it| this set)?(?: as is)?|finish(?: it| this set)?(?: as is)?|mark(?: it| this set)? done(?: as is)?)$/.test(
         normalizedReply,
@@ -4872,6 +4912,20 @@ export class RealtimeCoachSession {
                   : "Stay on incomplete set",
                 safeToDelete: true,
               }
+        : this.pendingShootingTargetChange &&
+            shootingTargetChangeConfirmation === true
+          ? {
+              kind: "set_prescription",
+              args: {
+                setNumber: this.pendingShootingTargetChange.setNumber,
+                targetMakes: this.pendingShootingTargetChange.targetMakes,
+                targetAttempts: this.pendingShootingTargetChange.targetAttempts,
+                confirmedTargetChange: true,
+              },
+              confidence: 1,
+              heardLabel: "Shooting target extension confirmed",
+              safeToDelete: true,
+            }
         : parseCoachSpeechIntent(transcript) ??
           this.parsePlaybackStopCommand(transcript);
     const coachAddressed = /^(?:hey\s+)?coach\b/i.test(transcript.trim());
@@ -4906,6 +4960,17 @@ export class RealtimeCoachSession {
       acceptedDurationChange == null
     ) {
       this.pendingTimerDurationChange = null;
+    }
+    if (
+      this.pendingShootingTargetChange &&
+      shootingTargetChangeConfirmation !== true
+    ) {
+      this.pendingShootingTargetChange = null;
+    }
+    if (shootingTargetChangeConfirmation === true) {
+      // The confirmed values are already copied onto the synthetic command.
+      // Clear the offer so a later affirmative cannot repeat this extension.
+      this.pendingShootingTargetChange = null;
     }
     if (
       this.pendingIncompleteShotCompletion &&

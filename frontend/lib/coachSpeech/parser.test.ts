@@ -545,6 +545,10 @@ test("parses explicit set duration and shooting target edits", () => {
     kind: "set_prescription",
     args: { targetAttempts: 30 },
   });
+  expectIntent("I want to shoot 8 more", {
+    kind: "set_prescription",
+    args: { targetAttempts: 8, additionalAttempts: true },
+  });
   expectIntent("set target makes to eight", {
     kind: "set_prescription",
     args: { targetMakes: 8 },

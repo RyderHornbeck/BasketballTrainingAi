@@ -75,6 +75,8 @@ export interface SetPrescriptionIntentArgs {
   durationSeconds?: number;
   targetMakes?: number;
   targetAttempts?: number;
+  additionalAttempts?: boolean;
+  confirmedTargetChange?: boolean;
 }
 
 interface IntentBase<K extends string, A> {
@@ -938,6 +940,22 @@ export const parseSetPrescriptionIntent: Parser = (text) => {
       "set_prescription",
       { targetAttempts },
       `Change target attempts to ${targetAttempts} heard`,
+      0.99
+    );
+  }
+
+  const additionalAttempts = text.match(
+    new RegExp(
+      `^(?:i\\s+(?:actually\\s+)?(?:want|would like)\\s+(?:to\\s+)?|can\\s+we\\s+|let'?s\\s+|we\\s+should\\s+)?(?:shoot\\s+|take\\s+)?(${NUMBER})\\s+more(?:\\s+(?:attempts?|shots?))?(?:\\s+(?:for|on)\\s+(?:this|that|the current)\\s+set)?$`
+    )
+  );
+  if (additionalAttempts) {
+    const additional = parseSpokenNumber(additionalAttempts[1]);
+    if (additional == null || additional < 1 || additional > 500) return null;
+    return intent(
+      "set_prescription",
+      { targetAttempts: additional, additionalAttempts: true },
+      `Extend target attempts by ${additional} heard`,
       0.99
     );
   }
