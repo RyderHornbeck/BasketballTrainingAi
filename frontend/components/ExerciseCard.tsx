@@ -488,20 +488,28 @@ export function ExerciseCard({
     }
     if (!Number.isFinite(makes ?? 0) || attempts < 0) return;
     if (!Number.isFinite(targetMakes) || !Number.isFinite(targetAttempts) || targetMakes < 0 ||
-      targetAttempts < 1 || targetMakes > targetAttempts || targetMakes < (makes ?? 0) ||
-      targetAttempts < attempts) {
+      targetAttempts < 1 || targetMakes > targetAttempts) {
       Alert.alert("Invalid set target", "Targets must be valid and cannot be below this set's results.");
       return;
     }
+    const expandedTargetAttempts = Math.max(targetAttempts, attempts);
+    const expandedTargetMakes = attempts > targetAttempts
+      ? Math.min(
+          expandedTargetAttempts,
+          Math.round((targetMakes / targetAttempts) * expandedTargetAttempts),
+        )
+      : targetMakes;
     hasUserEditsRef.current = true;
     setSetLogs((previous) =>
       previous.map((set) => ({
         ...set,
         makes: set.set_number === setNumber ? makes : set.makes,
         attempts: set.set_number === setNumber ? attempts : set.attempts,
-        target_makes_override: set.set_number === setNumber ? targetMakes : set.target_makes_override,
+        target_makes_override: set.set_number === setNumber
+          ? expandedTargetMakes
+          : set.target_makes_override,
         target_attempts_override: set.set_number === setNumber
-          ? targetAttempts
+          ? expandedTargetAttempts
           : set.target_attempts_override,
         completed: set.set_number === setNumber ? true : set.completed,
         force_incomplete: set.set_number === setNumber ? false : set.force_incomplete,
@@ -543,9 +551,18 @@ export function ExerciseCard({
     const makes = row.makes ?? 0;
     const attempts = row.attempts ?? 0;
     if (!Number.isFinite(targetMakes) || !Number.isFinite(targetAttempts) || targetMakes < 0 ||
-      targetAttempts < 1 || targetMakes > targetAttempts || targetMakes < makes ||
-      targetAttempts < attempts) {
-      Alert.alert("Invalid set target", "Target makes cannot exceed target attempts or be below your saved result.");
+      targetAttempts < 1 || targetMakes > targetAttempts) {
+      Alert.alert("Invalid set target", "Target makes cannot exceed target attempts.");
+      setTargetMakesDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[setNumber];
+        return next;
+      });
+      setTargetAttemptsDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[setNumber];
+        return next;
+      });
       return;
     }
     hasUserEditsRef.current = true;
@@ -687,8 +704,8 @@ export function ExerciseCard({
           key={row.set_number}
           setNumber={row.set_number}
           sideLabel={setPlan.setSideLabels?.[row.set_number - 1] ?? null}
-          makes={row.makes?.toString() ?? "0"}
-          attempts={row.attempts?.toString() ?? "0"}
+          makes={row.makes ? row.makes.toString() : ""}
+          attempts={row.attempts ? row.attempts.toString() : ""}
           targetAttempts={targetAttemptsForSet(row, setPlan)}
           targetMakes={targetMakesForSet(row, setPlan)}
           targetAttemptsDraft={targetAttemptsDrafts[row.set_number]}
@@ -701,10 +718,28 @@ export function ExerciseCard({
           colors={colors}
           onMakesChange={(text) => {
             const digits = text.replace(/[^0-9]/g, "");
+            const nextMakes = Number.parseInt(digits || "0", 10);
+            const attempts = Number.parseInt(
+              attemptsDrafts[row.set_number] ?? String(row.attempts ?? 0),
+              10,
+            );
+            if (nextMakes > attempts) {
+              Alert.alert("Makes can’t exceed attempts", "Increase attempts before entering more makes.");
+              return;
+            }
             setMakesDrafts((drafts) => ({ ...drafts, [row.set_number]: digits }));
           }}
           onAttemptsChange={(text) => {
             const digits = text.replace(/[^0-9]/g, "");
+            const nextAttempts = Number.parseInt(digits || "0", 10);
+            const makes = Number.parseInt(
+              makesDrafts[row.set_number] ?? String(row.makes ?? 0),
+              10,
+            );
+            if (nextAttempts < makes) {
+              Alert.alert("Attempts can’t be lower than makes", "Increase attempts or lower makes first.");
+              return;
+            }
             setAttemptsDrafts((drafts) => ({ ...drafts, [row.set_number]: digits }));
           }}
           onTargetMakesChange={(text) =>
