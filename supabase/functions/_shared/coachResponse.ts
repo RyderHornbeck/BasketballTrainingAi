@@ -418,7 +418,6 @@ export function coachToolPreamble(
     resume_timer: "I'm resuming the timer.",
     stop_timer: "I'm stopping the timer.",
     set_timed_set_duration: "I'm changing that set time.",
-    set_shooting_set_targets: "I'm changing those targets.",
     remove_workout_exercise: "I'm removing that drill.",
     save_note: "I'm saving that note.",
   };
@@ -438,7 +437,6 @@ export function usesOptimisticToolPreamble(toolName: string): boolean {
     "pause_timer",
     "resume_timer",
     "stop_timer",
-    "set_shooting_set_targets",
     "add_workout_exercise",
     "remove_workout_exercise",
     "save_note",

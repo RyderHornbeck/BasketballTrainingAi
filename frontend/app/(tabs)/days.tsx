@@ -946,18 +946,18 @@ export default function DaysScreen() {
             </View>
             <Card style={styles.workoutStatsCard}>
               <View style={styles.weekStat}>
-                <BasketballIcon size={26} color={colors.accent} weight="duotone" />
-                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Shots</Text>
-                <Text style={[styles.weekStatValue, { color: colors.text }]}>
-                  {dayShootingStats.shots}
-                </Text>
-              </View>
-              <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
-              <View style={styles.weekStat}>
                 <TargetIcon size={26} color={colors.accent} weight="duotone" />
                 <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Makes</Text>
                 <Text style={[styles.weekStatValue, { color: colors.text }]}>
                   {dayShootingStats.makes}
+                </Text>
+              </View>
+              <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
+              <View style={styles.weekStat}>
+                <BasketballIcon size={26} color={colors.accent} weight="duotone" />
+                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Shots</Text>
+                <Text style={[styles.weekStatValue, { color: colors.text }]}>
+                  {dayShootingStats.shots}
                 </Text>
               </View>
               <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />

@@ -257,7 +257,7 @@ export default function WorkoutStatsScreen() {
                       color: performanceColor,
                     },
                     { label: "Makes", value: String(summary.makes), color: colors.text },
-                    { label: "Misses", value: String(summary.misses), color: colors.text },
+                    { label: "Shots", value: String(summary.shots), color: colors.text },
                   ]}
                 />
 

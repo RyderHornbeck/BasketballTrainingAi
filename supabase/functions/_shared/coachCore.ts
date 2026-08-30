@@ -3047,12 +3047,14 @@ export async function executeCoachTool(
         ctx.day.active_exercise_id = exerciseId;
         ctx.day.active_set_number = setNumber;
       }
+      const recordedMakes = currentSet.makes ?? 0;
+      const shootingFollowUp = recordedAttempts > 0 ? "Keep shooting." : "Start shooting.";
+      const targetSummary =
+        `Okay, you're ${recordedMakes} for ${recordedAttempts}, and you have a target of ${nextMakes} makes in ${nextAttempts} attempts. ${shootingFollowUp}`;
       return {
         result: reopensCompletedSet
-          ? `Set ${setNumber} of ${ex.name ?? "this drill"} has been reopened. Its target changed from ${currentAttempts} to ${nextAttempts} attempts, and your ${currentSet.makes ?? 0} for ${recordedAttempts} score is unchanged.`
-          : `Set ${setNumber} of ${
-            ex.name ?? "this drill"
-          } now targets ${nextMakes} makes in ${nextAttempts} attempts.`,
+          ? `${targetSummary} That set is now reopened.`
+          : targetSummary,
         dbChanged: true,
       };
     }
