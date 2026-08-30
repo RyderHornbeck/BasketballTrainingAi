@@ -679,7 +679,7 @@ export const EXERCISE_CATALOG_METADATA: Record<
     description:
       "Start at the baseline with the ball in your right hand. Step 1: Walk or jog forward down the court. Step 2: Crossover to your left hand. Step 3: Cross back to your right hand and keep going. Walk the full court doing crossovers every 3 steps, then jog back leading with the other hand.",
     coaching_notes: "Low crossover, push off the outside foot, keep the ball protected.",
-    requires_both_sides: true,
+    requires_both_sides: false,
   },
   "Wall Shooting": {
     description:
