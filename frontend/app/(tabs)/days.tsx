@@ -1040,7 +1040,10 @@ export default function DaysScreen() {
                   onDelete={() => confirmDeleteExercise(exercise.id, exercise.name)}
                   onAddSet={() => {
                     void appendExerciseSet(dayDetail.id, exercise.id)
-                      .then(() => loadDetail(false))
+                      // The exercise's set count is plan data, so the cached
+                      // detail still has the old number of rows. Force a
+                      // fresh fetch before rendering the appended set.
+                      .then(() => loadDetail(false, true))
                       .catch((error) => Alert.alert(
                         "Could not add set",
                         error instanceof Error ? error.message : "Please try again.",
