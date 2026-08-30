@@ -4289,22 +4289,25 @@ export class RealtimeCoachSession {
         return action === "reset" ? "Timer reset." : "Timer stopped.";
       }
       if (action === "restart") {
-        if (
-          !this.timer.running &&
-          this.timer.elapsed_seconds <= 0 &&
-          this.timer.duration_seconds == null
-        ) {
+        const timer = this.currentTimerSnapshot();
+        const restartDurationSeconds = timer.duration_seconds ?? null;
+        if (!timer.running && timer.elapsed_seconds <= 0 && restartDurationSeconds == null) {
           return "There isn't a timer to restart.";
         }
         this.callbacks?.onTimerAction({ type: "stop_timer" });
         this.callbacks?.onTimerAction({
           type: "start_timer",
-          duration_seconds: this.timer.duration_seconds,
+          // Stopping clears the live timer synchronously. Preserve the
+          // duration first so restart creates a fresh countdown for this set.
+          duration_seconds: restartDurationSeconds,
           timer_exercise_id: current?.exercise_id ?? null,
           timer_set_number: current?.set_number ?? null,
         });
-        return this.timer.duration_seconds != null
-          ? this.timerStartedReply(this.timer.duration_seconds)
+        return restartDurationSeconds != null
+          ? this.timerStartedReply(restartDurationSeconds).replace(
+            "has been started",
+            "has been restarted",
+          )
           : "Timer restarted.";
       }
       if (command.args.durationSeconds) {
