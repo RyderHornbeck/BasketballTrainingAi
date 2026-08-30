@@ -151,6 +151,10 @@ Deno.test("mutation turns and contextual confirmations force a silent tool-first
     "an old question should not hijack a new one-word response",
   );
   assert(
+    !isCoachMutationRequest("How do I actually complete this ball handling set?"),
+    "how-to completion questions must not be treated as mutations",
+  );
+  assert(
     shouldForceCoachTool("Show me some finishing drills"),
     "search and list requests should suppress pre-tool speech",
   );
@@ -172,6 +176,10 @@ Deno.test("tool-free routing is narrow and excludes state or mutation requests",
   assert(
     isConfidentlyToolFreeCoachRequest("How can I improve my dribbling?"),
     "generic technique advice does not require workout state or tools",
+  );
+  assert(
+    isConfidentlyToolFreeCoachRequest("How do I start this timed set?"),
+    "how-to timer questions must not expose tools to the model",
   );
   assert(
     !isConfidentlyToolFreeCoachRequest("How am I doing today?"),

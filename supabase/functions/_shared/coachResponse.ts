@@ -279,6 +279,7 @@ export function isCoachMutationRequest(
   conversationSummary?: string,
 ): boolean {
   const text = transcript.trim().toLowerCase();
+  if (isCoachHowToRequest(text)) return false;
   if (isCurrentShootingCorrectionRequest(text)) return true;
   if (
     /\b(?:add|remove|delete|change|edit|replace|move|switch|skip|complete|finish|reopen|uncomplete|start|pause|resume|stop|reset|extend|shorten|save|record|undo)\b/
@@ -299,6 +300,15 @@ export function isCoachMutationRequest(
       );
 }
 
+function isCoachHowToRequest(text: string): boolean {
+  return /^(?:how (?:do|can) i|what do i (?:need|have) to do to|can you explain|can you tell me how)\b/.test(
+    text,
+  ) &&
+    /\b(?:timer|timed|set|drill|exercise|complete|finish|start|pause|resume|stop)\b/.test(
+      text,
+    );
+}
+
 /** Whether Coach must correct the live total rather than merely narrate it. */
 export function isCurrentShootingCorrectionRequest(transcript: string): boolean {
   return /(?:\b(?:i\s+)?(?:actually|think)\s+)?\b(?:made|missed)\s+(?:that\s+|the\s+)?last(?:\s+(?:one|shot))?\b|\b(?:you\s+)?(?:counted|marked|logged)\s+(?:a\s+)?(?:make|miss)(?:\s+as|\s+instead of)\s+(?:a\s+)?(?:make|miss)\b/i
@@ -314,6 +324,7 @@ export function isConfidentlyToolFreeCoachRequest(
   transcript: string,
   conversationSummary?: string,
 ): boolean {
+  if (isCoachHowToRequest(transcript.trim().toLowerCase())) return true;
   if (isCoachMutationRequest(transcript, conversationSummary)) return false;
   const text = transcript.trim().toLowerCase();
   if (

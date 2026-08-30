@@ -212,10 +212,9 @@ Deno.serve(async (req: Request) => {
     turn.transcript,
     safeConversationSummary,
   );
-  // A final turn may have been misclassified from an incomplete transcript.
-  // Keep tools enabled for every standard turn; only the explicitly
-  // speculative request mode is tool-free.
-  const toolFreeTurn = speculativeReadOnly;
+  // How-to questions are answered directly, while action/state requests
+  // retain tools. Speculative requests are always tool-free as well.
+  const toolFreeTurn = speculativeReadOnly || confidentlyToolFree;
   const localShotContext = turn.localShotSessionContext;
   const authoritativeCurrentSet = buildWorkoutNavigation(initialContext).current_set_state;
   const localShotContextMatchesCurrentSet =

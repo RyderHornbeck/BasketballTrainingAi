@@ -3977,6 +3977,51 @@ export class RealtimeCoachSession {
       : "No timer is running right now, and you're not on a timed drill.";
   }
 
+  private unavailableBackendTimerActionReply(action: ClientTimerAction): string | null {
+    if (action.type !== "pause_timer" && action.type !== "resume_timer") return null;
+    const timer = this.currentTimerSnapshot();
+    const hasTimer = timer.running ||
+      timer.elapsed_seconds > 0 ||
+      timer.duration_seconds != null;
+    if (!hasTimer) return "No timer is running right now.";
+    if (action.type === "pause_timer" && !timer.running) {
+      return "The timer is already paused.";
+    }
+    if (
+      action.type === "resume_timer" &&
+      (timer.running || timer.elapsed_seconds <= 0)
+    ) {
+      return "The timer is already running.";
+    }
+    return null;
+  }
+
+  private rejectUnavailableBackendTimerAction(
+    action: ClientTimerAction,
+    turnId: string,
+  ): boolean {
+    const reply = this.unavailableBackendTimerActionReply(action);
+    if (!reply) return false;
+    this.turnAbortController?.abort();
+    this.ttsInputBuffer = "";
+    this.speechEpoch += 1;
+    this.playbackGeneration += 1;
+    const contextId = this.inworldContextId;
+    if (contextId) this.inworldClient?.cancel(contextId);
+    this.inworldContextId = null;
+    this.inworldSpeech = null;
+    this.playbackClearPromise = (this.duplexAudio?.clearPlaybackAsync() ?? Promise.resolve())
+      .catch((error) => console.warn("Could not clear rejected timer audio:", error));
+    this.generationActive = false;
+    this.updateStatus();
+    void this.speakDeterministic(
+      reply,
+      `timer-action-rejected:${turnId}`,
+      this.speechEpoch,
+    );
+    return true;
+  }
+
   private timerStartedReply(durationSeconds: number): string {
     const seconds = Math.max(1, Math.round(durationSeconds));
     const duration =
@@ -5833,6 +5878,12 @@ export class RealtimeCoachSession {
         };
       }
       const action = event.client_action as ClientTimerAction | null;
+      if (
+        action &&
+        this.rejectUnavailableBackendTimerAction(action, event.turn_id)
+      ) {
+        return;
+      }
       if (action?.type === "set_shooting_total") {
         void this.applyCoachShootingTotal(
           action,
@@ -6209,6 +6260,9 @@ export class RealtimeCoachSession {
     if (event.type === "tool_result") {
       if (event.client_action && typeof event.client_action === "object") {
         let action = event.client_action as ClientTimerAction;
+        if (this.rejectUnavailableBackendTimerAction(action, event.turn_id)) {
+          return;
+        }
         if (action.type === "set_shooting_total") {
           void this.applyCoachShootingTotal(
             action,
