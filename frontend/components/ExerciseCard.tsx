@@ -48,6 +48,7 @@ interface ExerciseCardProps {
   completionAnimationToken?: number;
   onDelete?: () => void;
   onAddSet?: () => void;
+  onRemoveSet?: (setNumber: number) => void;
   onLogChange: (log: ExerciseLogInput) => void;
 }
 
@@ -79,12 +80,16 @@ function SetCheckboxRow({
   label,
   completed,
   onToggle,
+  editMode,
+  onRemove,
   readOnly,
   colors,
 }: {
   label: string;
   completed: boolean;
   onToggle: () => void;
+  editMode?: boolean;
+  onRemove?: () => void;
   readOnly?: boolean;
   colors: ReturnType<typeof useTheme>["colors"];
 }) {
@@ -115,9 +120,12 @@ function SetCheckboxRow({
         {completed ? <Text style={styles.checkmark}>✓</Text> : null}
       </View>
       <Text style={[styles.setRowLabel, { color: colors.text }]}>{label}</Text>
-      <Text style={[styles.setRowHint, { color: colors.textMuted }]}>
+      {!editMode ? <Text style={[styles.setRowHint, { color: colors.textMuted }]}>
         {completed ? "Done" : "Tap when finished"}
-      </Text>
+      </Text> : null}
+      {editMode && onRemove ? <Pressable onPress={onRemove} hitSlop={8} style={styles.removeSetButton}>
+        <XIcon size={13} color="#FFFFFF" weight="bold" />
+      </Pressable> : null}
     </Pressable>
   );
 }
@@ -142,6 +150,7 @@ function SetShootingRow({
   onTargetMakesChange,
   onTargetBlur,
   onCommit,
+  onRemove,
   readOnly,
   colors,
 }: {
@@ -164,6 +173,7 @@ function SetShootingRow({
   onTargetMakesChange: (value: string) => void;
   onTargetBlur: () => void;
   onCommit: () => void;
+  onRemove?: () => void;
   readOnly?: boolean;
   colors: ReturnType<typeof useTheme>["colors"];
 }) {
@@ -195,6 +205,9 @@ function SetShootingRow({
               inputMode="numeric"
               style={[styles.targetInput, { backgroundColor: colors.card, color: colors.text, borderColor: colors.border }]}
             />
+            {onRemove ? <Pressable onPress={onRemove} hitSlop={8} style={styles.removeSetButton}>
+              <XIcon size={13} color="#FFFFFF" weight="bold" />
+            </Pressable> : null}
             <Text style={[styles.targetSlash, { color: colors.textMuted }]}>/</Text>
             <RNTextInput
               value={targetAttemptsDraft ?? String(targetAttempts ?? 0)}
@@ -311,6 +324,7 @@ export function ExerciseCard({
   completionAnimationToken,
   onDelete,
   onAddSet,
+  onRemoveSet,
   onLogChange,
 }: ExerciseCardProps) {
   const { colors, scheme } = useTheme();
@@ -766,6 +780,7 @@ export function ExerciseCard({
             }))}
           onTargetBlur={() => commitShootingTargets(row.set_number)}
           onCommit={() => saveShootingSet(row.set_number)}
+          onRemove={editMode ? () => onRemoveSet?.(row.set_number) : undefined}
         />
       ));
     }
@@ -792,6 +807,8 @@ export function ExerciseCard({
             readOnly={readOnly}
             colors={colors}
             onToggle={() => toggleSetComplete(row.set_number)}
+            editMode={editMode}
+            onRemove={editMode ? () => onRemoveSet?.(row.set_number) : undefined}
           />
         );
       });
@@ -1272,6 +1289,15 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 15,
     fontWeight: "800",
+  },
+  removeSetButton: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "#DC2626",
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 6,
   },
   setRow: {
     borderRadius: 16,

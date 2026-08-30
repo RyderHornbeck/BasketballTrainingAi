@@ -21,6 +21,7 @@ import { sortWorkoutExercisesForDisplay } from "@/lib/workoutOrder";
 import {
   ExerciseLogInput,
   appendExerciseSet,
+  removeExerciseSet,
   finishWorkoutDay,
   getCurrentWorkoutStreak,
   getWorkoutDayWithExercises,
@@ -1049,6 +1050,25 @@ export default function DaysScreen() {
                         error instanceof Error ? error.message : "Please try again.",
                       ));
                   }}
+                  onRemoveSet={(setNumber) => Alert.alert(
+                    "Remove this set?",
+                    `Remove set ${setNumber} from ${exercise.name ?? "this drill"}?`,
+                    [
+                      { text: "Cancel", style: "cancel" },
+                      {
+                        text: "Remove",
+                        style: "destructive",
+                        onPress: () => {
+                          void removeExerciseSet(dayDetail.id, exercise.id, setNumber)
+                            .then(() => loadDetail(false, true))
+                            .catch((error) => Alert.alert(
+                              "Could not remove set",
+                              error instanceof Error ? error.message : "Please try again.",
+                            ));
+                        },
+                      },
+                    ],
+                  )}
                   onLogChange={handleLogChange}
                 />
               ))}

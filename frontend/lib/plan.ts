@@ -436,6 +436,20 @@ export async function appendExerciseSet(dayId: string, exerciseId: string): Prom
   emitWorkoutUpdated("manual");
 }
 
+export async function removeExerciseSet(
+  dayId: string,
+  exerciseId: string,
+  setNumber: number,
+): Promise<void> {
+  const { error } = await supabase.rpc("remove_my_exercise_set", {
+    p_day_id: dayId,
+    p_exercise_id: exerciseId,
+    p_set_number: setNumber,
+  });
+  if (error) throw new Error(`Failed to remove set: ${error.message}`);
+  emitWorkoutUpdated("manual");
+}
+
 /**
  * Persists all exercise logs for a day, creates a workout_day_log, marks the
  * day completed, and unlocks the next day in the plan (if any). A workout can
