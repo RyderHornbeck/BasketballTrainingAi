@@ -223,7 +223,7 @@ Deno.serve(async (req: Request) => {
     authoritativeCurrentSet?.exercise_id === localShotContext.exerciseId &&
     authoritativeCurrentSet.set_number === localShotContext.setNumber;
   const currentDrillExplanationRequested =
-    /\b(?:explain|describe|walk me through|show me how to do)\b[\s\S]*\b(?:current|this)\s+(?:drill|exercise)\b/i
+    /\b(?:explain|describe|walk me through|show me how to do)\b[\s\S]*\b(?:current|this|(?:drill|exercise)\s+i(?:'| a)?m\s+on)\b/i
       .test(turn.transcript);
   const dynamicContext = `${buildCoachTurnDynamicContext(
     initialContext,
@@ -232,7 +232,7 @@ Deno.serve(async (req: Request) => {
     coachName,
     undefined,
     speculativeReadOnly,
-    !confidentlyToolFree,
+    !speculativeReadOnly,
   )}${
     localShotContextMatchesCurrentSet
       ? `\n\nLIVE DEVICE SHOOTING STATE: The athlete device has newer local progress for the current set. This overrides persisted makes and attempts only for this turn. Current set: ${JSON.stringify(
