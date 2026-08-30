@@ -470,15 +470,6 @@ export function ExerciseCard({
       : attemptsDrafts[setNumber] === ""
       ? 0
       : Number.parseInt(attemptsDrafts[setNumber], 10);
-    if (row?.completed) {
-      hasUserEditsRef.current = true;
-      setSetLogs((previous) =>
-        previous.map((set) => set.set_number === setNumber
-          ? { ...set, completed: false, force_incomplete: true }
-          : set)
-      );
-      return;
-    }
     const attempts = Number.isFinite(requestedAttempts)
       ? requestedAttempts
       : row?.attempts ?? 0;
@@ -757,7 +748,9 @@ export function ExerciseCard({
             setAttemptsDrafts((drafts) => ({ ...drafts, [row.set_number]: digits }));
           }}
           onResultsBlur={() => {
-            void commitShootingResults(row.set_number, false);
+            // Editing a completed set corrects its saved score without
+            // reopening it. The orange check is the only completion toggle.
+            void commitShootingResults(row.set_number, row.completed);
           }}
           onTargetMakesChange={(text) =>
             setTargetMakesDrafts((drafts) => ({
