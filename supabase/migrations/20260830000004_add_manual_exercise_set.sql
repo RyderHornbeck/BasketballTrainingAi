@@ -31,7 +31,11 @@ begin
   update public.workout_days
   set completed = false, active_exercise_id = v_exercise.id, active_set_number = v_count + 1
   where id = p_day_id and user_id = v_user_id;
-  return query select coalesce((select max(state_version) from public.coach_sessions where day_id = p_day_id and user_id = v_user_id), 0);
+  return query select coalesce((
+    select max(session_row.state_version)
+    from public.coach_sessions as session_row
+    where session_row.day_id = p_day_id and session_row.user_id = v_user_id
+  ), 0);
 end;
 $$;
 
