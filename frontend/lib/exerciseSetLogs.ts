@@ -154,7 +154,7 @@ export function createEmptySetLogs(plan: ExerciseSetPlan): SetLogEntry[] {
     set_number: i + 1,
     completed: false,
     makes: null,
-    attempts: plan.perSetAttempts,
+    attempts: null,
     minutes: null,
   }));
 }
@@ -219,7 +219,7 @@ export function normalizeSetLogs(setLogs: SetLogEntry[], plan: ExerciseSetPlan):
   return setLogs.map((entry) => ({
     ...entry,
     completed: isSetComplete(entry, plan),
-    attempts: entry.attempts ?? targetAttemptsForSet(entry, plan),
+    attempts: entry.attempts,
   }));
 }
 

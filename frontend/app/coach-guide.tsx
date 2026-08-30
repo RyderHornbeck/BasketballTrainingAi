@@ -41,6 +41,7 @@ const GUIDE_SECTIONS = [
       '"Add a cone dribbling drill."',
       '"Remove this drill."',
       '"Change the set timer to be 3 minutes long."',
+      '"I want to shoot 40 shots on this set instead of 20."',
       '"Save a note that my left hand felt weak."',
     ],
   },
