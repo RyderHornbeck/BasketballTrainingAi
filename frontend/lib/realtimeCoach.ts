@@ -4832,6 +4832,28 @@ export class RealtimeCoachSession {
         .test(normalizedReply);
     const acceptedDurationChange =
       acceptedConfirmation ? true : declinedConfirmation ? false : null;
+    const addSetOffer = this.lastAssemblyCoachSpeech?.match(
+      /\bwould you like me to add\s+(?:another|a\s+(?:first|second|third|fourth|fifth|\d+(?:st|nd|rd|th))|an?)?\s*(.+?)\s+set\b/i,
+    );
+    if (acceptedConfirmation && addSetOffer?.[1]) {
+      const offeredName = normalizeDrillReference(addSetOffer[1]);
+      const offeredDrill = this.workoutState?.sequence?.drills?.find(
+        (drill) => normalizeDrillReference(drill.name) === offeredName,
+      );
+      if (offeredDrill) {
+        const result = await this.invokeCoachTool("add_exercise_set", {
+          exercise_id: offeredDrill.exercise_id,
+          drill_name: offeredDrill.name,
+          client_request_id: turn.requestId,
+        });
+        await this.speakDeterministic(
+          result.result,
+          `add-set-confirmed:${turn.requestId}`,
+          turn.speechEpoch,
+        );
+        return;
+      }
+    }
     const shootingTargetChangeConfirmation =
       this.pendingShootingTargetChange && acceptedDurationChange != null
         ? acceptedDurationChange
