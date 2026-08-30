@@ -1965,10 +1965,25 @@ export class RealtimeCoachSession {
         ) {
           return;
         }
-        this.inworldContextId = null;
-        this.inworldSpeech = null;
-        this.generationActive = false;
-        this.updateStatus();
+        const speech = this.inworldSpeech;
+        // The final WebSocket flush can arrive while one or more PCM chunks
+        // are still waiting in this serialized enqueue chain. Do not release
+        // their ownership yet: doing so makes ownsActiveSpeech() reject the
+        // queued final sentence before native playback receives it.
+        void this.playbackEnqueue.finally(() => {
+          if (
+            generation !== this.connectionGeneration ||
+            this.inworldClient !== inworld ||
+            this.inworldContextId !== contextId ||
+            this.inworldSpeech !== speech
+          ) {
+            return;
+          }
+          this.inworldContextId = null;
+          this.inworldSpeech = null;
+          this.generationActive = false;
+          this.updateStatus();
+        });
       },
       onBilledCharacters: (count) => {
         this.inworldTtsCharacters += count;

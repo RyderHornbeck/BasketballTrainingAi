@@ -529,7 +529,7 @@ export const EXERCISE_CATALOG_METADATA: Record<
     description:
       "Start at half court in an athletic stance with the ball in your right hand. Step 1: Pound the ball hard 5 times with your right hand. Step 2: Switch to your left hand and pound 5 times. Step 3: Keep alternating — equal height and force on both hands. Do 5 sets of 10 pounds (5 right, 5 left) without stopping.",
     coaching_notes: "Equal height and force on both hands, stay in an athletic stance.",
-    requires_both_sides: true,
+    requires_both_sides: false,
   },
   "Rip to the ear": {
     description:
