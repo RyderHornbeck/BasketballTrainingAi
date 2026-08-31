@@ -49,7 +49,7 @@ const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
 ];
 const DISALLOWED_NAME_PATTERNS = [
   /\b(?:fuck|shit|bitch|asshole|dick|cunt|bastard)\b/i,
-  /\b(?:nigger|faggot|kike|spic|chink)\b/i,
+  /\b(?:nigga|nigger|faggot|kike|spic|chink)\b/i,
 ];
 
 type AthleteDetails = Pick<

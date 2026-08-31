@@ -124,7 +124,7 @@ const GENERATION_STEPS = [
 const CHECKLIST_STEP_MS = 1_000;
 const DISALLOWED_NAME_PATTERNS = [
   /\b(?:fuck|shit|bitch|asshole|dick|cunt|bastard)\b/i,
-  /\b(?:nigger|faggot|kike|spic|chink)\b/i,
+  /\b(?:nigga|nigger|faggot|kike|spic|chink)\b/i,
 ];
 
 function validatePreferredName(value: string): string | null {

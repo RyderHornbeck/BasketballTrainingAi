@@ -31,7 +31,7 @@ export function AIDataProcessingDisclosure({
 function ConsentRow({ accepted, onPress, label, link, url }: { accepted: boolean; onPress: () => void; label: string; link: string; url: string }) {
   const { colors } = useTheme();
   return (
-    <Pressable onPress={onPress} style={[styles.row, { borderColor: accepted ? colors.accent : colors.border }]}>
+    <Pressable onPress={onPress} style={[styles.row, { backgroundColor: colors.cardAlt, borderColor: accepted ? colors.accent : colors.border }]}>
       <View style={[styles.circle, { borderColor: accepted ? colors.accent : colors.border, backgroundColor: accepted ? colors.accent : colors.card }]}>
         {accepted ? <CheckIcon size={16} color="#FFFFFF" weight="bold" /> : null}
       </View>
