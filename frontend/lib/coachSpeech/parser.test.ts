@@ -555,6 +555,28 @@ test("parses explicit set duration and shooting target edits", () => {
   });
 });
 
+test("parses 100 natural shooting amount variations", () => {
+  const prefixes = ["", "coach ", "hey coach ", "yo coach ", "i want to "] as const;
+  const totalRequests = [
+    "shoot 20 shots", "shoot 20 total shots", "shoot 20 shots total",
+    "shoot 20 shots right now", "take 20 shots", "take 20 total shots",
+    "take 20 shots total", "shoot twenty shots", "shoot twenty total shots",
+    "shoot 20 shots for this set",
+  ] as const;
+  const moreRequests = [
+    "shoot 8 more", "shoot 8 more shots", "shoot 8 more attempts",
+    "shoot 8 shots more", "take 8 more", "take 8 more shots",
+    "shoot eight more", "shoot eight shots more", "shoot 8 more for this set",
+    "shoot 8 shots more in this set",
+  ] as const;
+  for (const phrase of totalRequests.flatMap((request) => prefixes.map((prefix) => `${prefix}${request}`))) {
+    expectIntent(phrase, { kind: "set_prescription", args: { targetAttempts: 20 } });
+  }
+  for (const phrase of moreRequests.flatMap((request) => prefixes.map((prefix) => `${prefix}${request}`))) {
+    expectIntent(phrase, { kind: "set_prescription", args: { targetAttempts: 8, additionalAttempts: true } });
+  }
+});
+
 test("rejects ambiguous, unsafe, impossible, and compound phrases", () => {
   const rejected = [
     "",

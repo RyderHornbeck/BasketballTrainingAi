@@ -4451,33 +4451,21 @@ export class RealtimeCoachSession {
         : command.args.additionalAttempts
           ? targetAttempts + command.args.targetAttempts
           : command.args.targetAttempts;
-      if (!command.args.confirmedTargetChange) {
-        this.pendingShootingTargetChange = {
-          exerciseId: current.exercise_id,
-          drillName: current.name,
-          setNumber,
-          targetMakes: command.args.targetMakes,
-          targetAttempts: requestedAttempts,
-        };
-        const targetLabel = requestedAttempts == null
-          ? "these targets"
-          : `${requestedAttempts} attempts`;
-        return `Would you like me to extend ${this.setLocation(
-          current.name,
-          setNumber,
-          currentSet?.side_label,
-        )} to ${targetLabel}?`;
+      const recordedMakes = currentSet?.progress?.makes ?? currentSet?.makes ?? 0;
+      const recordedAttempts = currentSet?.progress?.attempts ?? currentSet?.attempts ?? 0;
+      if (requestedAttempts != null && requestedAttempts < recordedMakes) {
+        return `I can't make attempts smaller than your current makes. Choose at least ${recordedMakes} attempts because you already made ${recordedMakes} shots.`;
       }
-      return (
-        await this.invokeCoachTool("set_shooting_set_targets", {
-          exercise_id: current.exercise_id,
-          drill_name: current.name,
-          set_number: setNumber,
-          target_makes: command.args.targetMakes,
-          target_attempts: requestedAttempts,
-          ...requestArgs,
-        })
-      ).result;
+      const result = await this.invokeCoachTool("set_shooting_set_targets", {
+        exercise_id: current.exercise_id,
+        drill_name: current.name,
+        set_number: setNumber,
+        target_makes: command.args.targetMakes,
+        target_attempts: requestedAttempts,
+        ...requestArgs,
+      });
+      const remaining = Math.max(0, (requestedAttempts ?? targetAttempts) - recordedAttempts);
+      return `Done. You're ${recordedMakes} for ${recordedAttempts}, ${remaining} shots left.`;
     }
 
     if (command.kind === "navigation") {

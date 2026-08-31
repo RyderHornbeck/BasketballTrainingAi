@@ -928,7 +928,7 @@ export const parseSetPrescriptionIntent: Parser = (text) => {
 
   const desiredAttempts = text.match(
     new RegExp(
-      `^(?:i\\s+(?:actually\\s+)?(?:want|would like)\\s+(?:to\\s+)?|can\\s+we\\s+|let'?s\\s+|we\\s+should\\s+)?(?:shoot\\s+|take\\s+)?(${NUMBER})\\s+shots?(?:\\s+(?:for|on)\\s+(?:this|that|the current)\\s+set)?$`
+      `^(?:hey\\s+coach\\s+|yo\\s+coach\\s+|coach\\s+)?(?:i\\s+(?:actually\\s+)?(?:only\\s+)?(?:want|would like)\\s+(?:to\\s+)?|can\\s+(?:i|we)\\s+|could\\s+i\\s+|let'?s\\s+|we\\s+should\\s+)?(?:shoot\\s+|take\\s+)?(${NUMBER})\\s+(?:total\\s+)?shots?(?:\\s+(?:total|right now))?(?:\\s+(?:for|on|in)\\s+(?:this|that|the current)\\s+set)?(?:\\s+instead\\s+of\\s+${NUMBER})?$`
     )
   );
   if (desiredAttempts) {
@@ -946,7 +946,7 @@ export const parseSetPrescriptionIntent: Parser = (text) => {
 
   const additionalAttempts = text.match(
     new RegExp(
-      `^(?:i\\s+(?:actually\\s+)?(?:want|would like)\\s+(?:to\\s+)?|can\\s+we\\s+|let'?s\\s+|we\\s+should\\s+)?(?:shoot\\s+|take\\s+)?(${NUMBER})\\s+more(?:\\s+(?:attempts?|shots?))?(?:\\s+(?:for|on)\\s+(?:this|that|the current)\\s+set)?$`
+      `^(?:hey\\s+coach\\s+|yo\\s+coach\\s+|coach\\s+)?(?:i\\s+(?:actually\\s+)?(?:want|would like)\\s+(?:to\\s+)?|can\\s+(?:i|we)\\s+|could\\s+i\\s+|let'?s\\s+|we\\s+should\\s+)?(?:shoot\\s+|take\\s+)?(${NUMBER})(?:\\s+more(?:\\s+(?:attempts?|shots?))?|\\s+(?:attempts?|shots?)\\s+more)(?:\\s+(?:for|on|in)\\s+(?:this|that|the current)\\s+set)?$`
     )
   );
   if (additionalAttempts) {
