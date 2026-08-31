@@ -556,23 +556,62 @@ test("parses explicit set duration and shooting target edits", () => {
 });
 
 test("parses 100 natural shooting amount variations", () => {
-  const prefixes = ["", "coach ", "hey coach ", "yo coach ", "i want to "] as const;
   const totalRequests = [
-    "shoot 20 shots", "shoot 20 total shots", "shoot 20 shots total",
-    "shoot 20 shots right now", "take 20 shots", "take 20 total shots",
-    "take 20 shots total", "shoot twenty shots", "shoot twenty total shots",
-    "shoot 20 shots for this set",
+    "i want to shoot 20 shots",
+    "i want to shoot 20 total shots",
+    "i want to shoot 20 shots total",
+    "can i take 20 shots right now",
+    "i would like to take twenty shots for this set",
+    "i shoot 20 shots",
+    "i shoot 20 shots total",
+    "i shoot 20 total shots",
+    "i shoot 20 shots for this set",
   ] as const;
   const moreRequests = [
-    "shoot 8 more", "shoot 8 more shots", "shoot 8 more attempts",
-    "shoot 8 shots more", "take 8 more", "take 8 more shots",
-    "shoot eight more", "shoot eight shots more", "shoot 8 more for this set",
-    "shoot 8 shots more in this set",
+    "i want to shoot 8 more",
+    "can i shoot 8 more shots",
+    "could i shoot 8 more attempts",
+    "i want to shoot 8 shots more",
+    "can i take eight more shots in this set",
   ] as const;
-  for (const phrase of totalRequests.flatMap((request) => prefixes.map((prefix) => `${prefix}${request}`))) {
+  const surroundingWords = [
+    ["", ""],
+    ["yo ", ""],
+    ["hey there coach please ", ""],
+    ["yo yo yo yo yo ", "coach please yo yo yo"],
+    ["alright friend help me now ", "because that would be great"],
+    ["okay okay okay okay okay ", "thanks coach thanks coach"],
+    ["listen please for a moment ", "for me right now please"],
+    ["this is important for today ", "before we get back soon"],
+    ["real quick before practice starts ", "so I can finish workout"],
+    ["just wondering about this current ", "if you think its okay"],
+  ] as const;
+  for (const [prefix, suffix] of surroundingWords) {
+    for (const request of totalRequests) {
+      expectIntent(`${prefix}${request} ${suffix}`.trim(), {
+        kind: "set_prescription",
+        args: { targetAttempts: 20 },
+      });
+    }
+  }
+  for (const [prefix, suffix] of surroundingWords) {
+    for (const request of moreRequests) {
+      expectIntent(`${prefix}${request} ${suffix}`.trim(), {
+        kind: "set_prescription",
+        args: { targetAttempts: 8, additionalAttempts: true },
+      });
+    }
+  }
+  // Eight words of unrelated context on each side is accepted, while the
+  // command itself remains the only part used to update the target.
+  expectIntent("yo yo yo yo yo yo yo yo i shoot 50 shots in this set coach please yo yo yo yo yo yo", {
+    kind: "set_prescription",
+    args: { targetAttempts: 50 },
+  });
+  for (const phrase of totalRequests) {
     expectIntent(phrase, { kind: "set_prescription", args: { targetAttempts: 20 } });
   }
-  for (const phrase of moreRequests.flatMap((request) => prefixes.map((prefix) => `${prefix}${request}`))) {
+  for (const phrase of moreRequests) {
     expectIntent(phrase, { kind: "set_prescription", args: { targetAttempts: 8, additionalAttempts: true } });
   }
 });

@@ -928,7 +928,7 @@ export const parseSetPrescriptionIntent: Parser = (text) => {
 
   const desiredAttempts = text.match(
     new RegExp(
-      `^(?:hey\\s+coach\\s+|yo\\s+coach\\s+|coach\\s+)?(?:i\\s+(?:actually\\s+)?(?:only\\s+)?(?:want|would like)\\s+(?:to\\s+)?|can\\s+(?:i|we)\\s+|could\\s+i\\s+|let'?s\\s+|we\\s+should\\s+)?(?:shoot\\s+|take\\s+)?(${NUMBER})\\s+(?:total\\s+)?shots?(?:\\s+(?:total|right now))?(?:\\s+(?:for|on|in)\\s+(?:this|that|the current)\\s+set)?(?:\\s+instead\\s+of\\s+${NUMBER})?$`
+      `^(?:[a-z0-9]+\\s+){0,8}?(?:(?:i\\s+(?:actually\\s+)?(?:only\\s+)?(?:want|would like)\\s+(?:to\\s+)?|can\\s+(?:i|we)\\s+|could\\s+i\\s+|let'?s\\s+|we\\s+should\\s+)(?:shoot\\s+|take\\s+)?|(?:shoot\\s+|take\\s+))(${NUMBER})\\s+(?:total\\s+)?shots?(?!\\s+more\\b)(?:\\s+(?:total|right now))?(?:\\s+(?:for|on|in)\\s+(?:this|that|the current)\\s+set)?(?:\\s+instead\\s+of\\s+${NUMBER})?(?:\\s+[a-z0-9]+){0,8}$`
     )
   );
   if (desiredAttempts) {
@@ -946,7 +946,7 @@ export const parseSetPrescriptionIntent: Parser = (text) => {
 
   const additionalAttempts = text.match(
     new RegExp(
-      `^(?:hey\\s+coach\\s+|yo\\s+coach\\s+|coach\\s+)?(?:i\\s+(?:actually\\s+)?(?:want|would like)\\s+(?:to\\s+)?|can\\s+(?:i|we)\\s+|could\\s+i\\s+|let'?s\\s+|we\\s+should\\s+)?(?:shoot\\s+|take\\s+)?(${NUMBER})(?:\\s+more(?:\\s+(?:attempts?|shots?))?|\\s+(?:attempts?|shots?)\\s+more)(?:\\s+(?:for|on|in)\\s+(?:this|that|the current)\\s+set)?$`
+      `^(?:[a-z0-9]+\\s+){0,8}?(?:(?:i\\s+(?:actually\\s+)?(?:want|would like)\\s+(?:to\\s+)?|can\\s+(?:i|we)\\s+|could\\s+i\\s+|let'?s\\s+|we\\s+should\\s+)(?:shoot\\s+|take\\s+)?|(?:shoot\\s+|take\\s+))(${NUMBER})(?:\\s+more(?:\\s+(?:attempts?|shots?))?|\\s+(?:attempts?|shots?)\\s+more)(?:\\s+(?:for|on|in)\\s+(?:this|that|the current)\\s+set)?(?:\\s+[a-z0-9]+){0,8}$`
     )
   );
   if (additionalAttempts) {
