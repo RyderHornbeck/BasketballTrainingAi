@@ -394,8 +394,8 @@ export default function OnboardingScreen() {
 
   return (
     <OnboardingStep
-      title={STEP_TITLES[step - 1].title}
-      subtitle={STEP_TITLES[step - 1].subtitle}
+      title={step === AI_CONSENT_STEP ? "" : STEP_TITLES[step - 1].title}
+      subtitle={step === AI_CONSENT_STEP ? "" : STEP_TITLES[step - 1].subtitle}
       step={visibleStep}
       totalSteps={totalSteps}
       onNext={handleNext}

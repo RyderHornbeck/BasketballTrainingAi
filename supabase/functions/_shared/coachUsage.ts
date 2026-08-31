@@ -4,7 +4,7 @@ export const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini";
 
 export const COACH_LIMITS = {
   /** One coach-credit pool across every workout in the user's local day. */
-  maxDailyCostUsd: 0.85,
+  maxDailyCostUsd: 1,
 } as const;
 
 export const COACH_DAILY_BUDGET_USD = COACH_LIMITS.maxDailyCostUsd;

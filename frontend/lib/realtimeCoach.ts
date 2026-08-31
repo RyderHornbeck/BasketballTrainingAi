@@ -797,7 +797,7 @@ export class RealtimeCoachSession {
   private transcriptRouteQueue: Promise<void> = Promise.resolve();
   private connectionGeneration = 0;
   private dailySpentBaseline = 0;
-  private dailyBudgetUsd = 0.85;
+  private dailyBudgetUsd = 1;
   private usageTracker: ReturnType<typeof createUsageTracker> | null = null;
   private handledToolCalls = new Set<string>();
   private loggedUsageSessionKeys = new Set<string>();
@@ -925,7 +925,7 @@ export class RealtimeCoachSession {
     this.connecting = true;
     this.callbacks = callbacks;
     this.dailySpentBaseline = options?.dailySpentUsd ?? 0;
-    this.dailyBudgetUsd = options?.dailyBudgetUsd ?? 0.85;
+    this.dailyBudgetUsd = options?.dailyBudgetUsd ?? 1;
 
     if (this.dailySpentBaseline >= this.dailyBudgetUsd) {
       this.connecting = false;

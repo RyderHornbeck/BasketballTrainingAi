@@ -23,7 +23,7 @@ import { parseDrillDescription } from "@/lib/drillDescription";
 import { WorkoutExerciseWithClip } from "@/types/plan";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { CaretLeftIcon, CaretRightIcon, TimerIcon, XIcon } from "phosphor-react-native";
+import { CaretLeftIcon, CaretRightIcon, CheckIcon, TimerIcon, XIcon } from "phosphor-react-native";
 import { useRouter } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -117,7 +117,7 @@ function SetCheckboxRow({
           },
         ]}
       >
-        {completed ? <Text style={styles.checkmark}>✓</Text> : null}
+        {completed ? <CheckIcon size={18} color="#FFFFFF" weight="bold" /> : null}
       </View>
       <Text style={[styles.setRowLabel, { color: colors.text }]}>{label}</Text>
       {!editMode ? <Text style={[styles.setRowHint, { color: colors.textMuted }]}>
@@ -237,7 +237,7 @@ function SetShootingRow({
             },
           ]}
         >
-          {completed ? <Text style={styles.checkmark}>✓</Text> : null}
+          {completed ? <CheckIcon size={18} color="#FFFFFF" weight="bold" /> : null}
         </Pressable>
         <View style={styles.shootingCol}>
           <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Makes</Text>
@@ -843,7 +843,7 @@ export function ExerciseCard({
               {editMode ? (
                 <XIcon size={16} color="#FFFFFF" weight="bold" />
               ) : completed ? (
-                <Ionicons name="checkmark" size={16} color="#FFFFFF" />
+                <CheckIcon size={16} color="#FFFFFF" weight="bold" />
               ) : null}
             </Animated.View>
           </Pressable>

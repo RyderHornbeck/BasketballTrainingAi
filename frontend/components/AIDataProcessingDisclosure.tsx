@@ -1,7 +1,7 @@
-import { Card } from "@/components/Card";
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL } from "@/lib/legal";
+import { CheckIcon } from "phosphor-react-native";
 import { Linking, Pressable, StyleSheet, View } from "react-native";
 
 export function AIDataProcessingDisclosure({
@@ -31,11 +31,11 @@ export function AIDataProcessingDisclosure({
 function ConsentRow({ accepted, onPress, label, link, url }: { accepted: boolean; onPress: () => void; label: string; link: string; url: string }) {
   const { colors } = useTheme();
   return (
-    <Pressable onPress={onPress} style={[styles.row, { borderColor: accepted ? colors.accent : "transparent" }]}>
-      <View style={[styles.circle, { borderColor: colors.accent, backgroundColor: accepted ? colors.accent : colors.card }]}>
-        {accepted ? <Text style={styles.check}>✓</Text> : null}
+    <Pressable onPress={onPress} style={[styles.row, { borderColor: accepted ? colors.accent : colors.border }]}>
+      <View style={[styles.circle, { borderColor: accepted ? colors.accent : colors.border, backgroundColor: accepted ? colors.accent : colors.card }]}>
+        {accepted ? <CheckIcon size={16} color="#FFFFFF" weight="bold" /> : null}
       </View>
-      <View style={styles.copy}><Text style={[styles.detail, { color: colors.text }]}>{label}</Text><Pressable onPress={() => void Linking.openURL(url)}><Text style={[styles.link, { color: colors.accent }]}>{link}</Text></Pressable></View>
+      <View style={styles.copy}><Text style={[styles.detail, { color: colors.text }]}>{label}</Text><Pressable onPress={() => void Linking.openURL(url)}><Text style={styles.link}>{link}</Text></Pressable></View>
     </Pressable>
   );
 }
@@ -44,9 +44,9 @@ const styles = StyleSheet.create({
   container: {
     paddingBottom: 8,
   },
-  title: { fontSize: 24, fontWeight: "800", marginBottom: 4 },
-  subtitle: { fontSize: 15, marginBottom: 18 },
-  row: { flexDirection: "row", padding: 14, borderWidth: 1, borderRadius: 14, marginBottom: 10, gap: 12 },
+  title: { fontSize: 24, fontWeight: "800", marginBottom: 4, textAlign: "center" },
+  subtitle: { fontSize: 15, marginBottom: 18, textAlign: "center" },
+  row: { flexDirection: "row", padding: 14, borderWidth: 2, borderRadius: 14, marginBottom: 10, gap: 12 },
   circle: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, alignItems: "center", justifyContent: "center" },
   check: { color: "#fff", fontWeight: "900" },
   copy: { flex: 1, gap: 4 },
@@ -57,8 +57,10 @@ const styles = StyleSheet.create({
   assurance: {
     fontSize: 13,
     lineHeight: 20,
+    textAlign: "center",
   },
   link: {
+    color: "#111111",
     fontSize: 13,
     lineHeight: 20,
     fontWeight: "700",
