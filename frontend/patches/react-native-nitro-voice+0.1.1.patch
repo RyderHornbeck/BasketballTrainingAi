@@ -1,0 +1,77 @@
+diff --git a/node_modules/react-native-nitro-voice/ios/HybridVAD.swift b/node_modules/react-native-nitro-voice/ios/HybridVAD.swift
+index c796008..890569f 100644
+--- a/node_modules/react-native-nitro-voice/ios/HybridVAD.swift
++++ b/node_modules/react-native-nitro-voice/ios/HybridVAD.swift
+@@ -9,6 +9,7 @@ class HybridVAD: HybridVADSpec {
+   private var onSpeechStartCallback: (() -> Void)?
+   private var onSpeechEndCallback: ((ArrayBuffer) -> Void)?
+   private var wasSpeaking = false
++  private var pendingSamples: [Float] = []
+ 
+   private let processingQueue = DispatchQueue(label: "com.nitrovoice.vad.processing", qos: .userInteractive)
+ 
+@@ -53,19 +54,26 @@ class HybridVAD: HybridVADSpec {
+   // MARK: - Process Chunk
+ 
+   func processChunk(samples: ArrayBuffer) throws {
+-    processingQueue.async { [weak self] in
++    // Nitro ArrayBuffer storage belongs to the caller and must not cross this
++    // asynchronous boundary. Copy it before returning to JavaScript.
++    let count = samples.size / MemoryLayout<Float>.size
++    guard count > 0 else { return }
++    let source = UnsafeRawPointer(samples.data).assumingMemoryBound(to: Float.self)
++    let copiedSamples = Array(UnsafeBufferPointer(start: source, count: count))
++
++    processingQueue.async { [weak self, copiedSamples] in
+       guard let self = self, let vad = self.vad else { return }
+ 
+-      let data = samples.data
+-      let count = samples.size / MemoryLayout<Float>.size
+-      let floatPtr = UnsafeRawPointer(data).assumingMemoryBound(to: Float.self)
++      self.pendingSamples.append(contentsOf: copiedSamples)
+ 
+       // Feed audio in window-sized chunks (512 samples for Silero VAD)
+       let windowSize = 512
+-      var offset = 0
+-      while offset + windowSize <= count {
+-        SherpaOnnxVoiceActivityDetectorAcceptWaveform(vad, floatPtr.advanced(by: offset), Int32(windowSize))
+-        offset += windowSize
++      while self.pendingSamples.count >= windowSize {
++        self.pendingSamples.withUnsafeBufferPointer { buffer in
++          guard let baseAddress = buffer.baseAddress else { return }
++          SherpaOnnxVoiceActivityDetectorAcceptWaveform(vad, baseAddress, Int32(windowSize))
++        }
++        self.pendingSamples.removeFirst(windowSize)
+ 
+         let isSpeaking = SherpaOnnxVoiceActivityDetectorDetected(vad) == 1
+ 
+@@ -102,18 +110,24 @@ class HybridVAD: HybridVADSpec {
+   // MARK: - Reset / Destroy
+ 
+   func reset() throws {
+-    if let vad = vad {
++    processingQueue.async { [weak self] in
++      guard let self = self, let vad = self.vad else { return }
+       SherpaOnnxVoiceActivityDetectorReset(vad)
++      self.pendingSamples.removeAll(keepingCapacity: true)
++      self.wasSpeaking = false
+     }
+-    wasSpeaking = false
+   }
+ 
+   func destroy() throws {
+     onSpeechStartCallback = nil
+     onSpeechEndCallback = nil
+-    if let vad = vad {
+-      SherpaOnnxDestroyVoiceActivityDetector(vad)
+-      self.vad = nil
++    processingQueue.async { [self] in
++      if let vad = self.vad {
++        SherpaOnnxDestroyVoiceActivityDetector(vad)
++        self.vad = nil
++      }
++      self.pendingSamples.removeAll()
++      self.wasSpeaking = false
+     }
+   }
+ 

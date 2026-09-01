@@ -1,10 +1,11 @@
-export type ProviderUsageKind = "cartesia" | "assembly-inworld";
+export type ProviderUsageKind = "cartesia" | "assembly-inworld" | "deepgram-inworld";
 
 export interface ProviderUsageDelta {
   requestId: string;
   sttSeconds?: number;
   ttsCharacters?: number;
   assemblySessionSeconds?: number;
+  deepgramAudioSeconds?: number;
   inworldTtsCharacters?: number;
 }
 

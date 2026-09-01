@@ -1,23 +1,19 @@
+import type {
+  StreamingSttCallbacks,
+  StreamingSttClient,
+  StreamingSttTurn,
+} from "../stt/types";
+
 export const ASSEMBLY_WS_URL = "wss://streaming.assemblyai.com/v3/ws";
 
-export interface AssemblyTurn {
-  turnOrder: number;
-  transcript: string;
-  endOfTurn: boolean;
-}
+export type AssemblyTurn = StreamingSttTurn;
 
-export interface AssemblyClientOptions {
+export interface AssemblyClientOptions extends StreamingSttCallbacks {
   accessToken: string;
   keyterms: readonly string[];
   prompt: string;
   agentContext?: string;
   voiceFocus: "near-field" | "far-field";
-  onSpeechStarted: () => void;
-  onPartial: (turn: AssemblyTurn) => void;
-  onTurn: (turn: AssemblyTurn) => void;
-  onServerActivity?: () => void;
-  onError: (error: Error) => void;
-  onClose: (error: Error) => void;
 }
 
 function base64ToBytes(value: string): Uint8Array {
@@ -43,7 +39,7 @@ function boundedKeyterms(keyterms: readonly string[]): string[] {
   return result;
 }
 
-export class AssemblyRealtimeClient {
+export class AssemblyRealtimeClient implements StreamingSttClient {
   private socket: WebSocket | null = null;
   private opened = false;
   private pendingAudio: Uint8Array[] = [];

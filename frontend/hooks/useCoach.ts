@@ -12,6 +12,7 @@ import { emitWorkoutUpdated, onWorkoutUpdated } from "@/lib/coachEvents";
 import { type CoachMachineState } from "@/lib/coachStateMachine";
 import {
   RealtimeCoachSession,
+  type CoachSttProvider,
   type ClientTimerAction,
   type TimerState,
 } from "@/lib/realtimeCoach";
@@ -45,6 +46,7 @@ export interface UseCoachResult {
   lastUsage: CoachUsageTotals | null;
   dailyBudget: CoachDailyBudget | null;
   connectedProvider: CoachVoiceProvider | null;
+  sttProvider: CoachSttProvider | null;
   providerFallbackReason: string | null;
   audioLevels: { microphone: number; tts: number };
   startSession: () => Promise<void>;
@@ -103,6 +105,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const [lastUsage, setLastUsage] = useState<CoachUsageTotals | null>(null);
   const [dailyBudget, setDailyBudget] = useState<CoachDailyBudget | null>(null);
   const [connectedProvider, setConnectedProvider] = useState<CoachVoiceProvider | null>(null);
+  const [sttProvider, setSttProvider] = useState<CoachSttProvider | null>(null);
   const [providerFallbackReason, setProviderFallbackReason] = useState<string | null>(null);
   const [audioLevels, setAudioLevels] = useState({ microphone: 0, tts: 0 });
   const [muted, setMuted] = useState(false);
@@ -386,6 +389,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
     setUserTranscript("");
     setCoachTranscript("");
     setConnectedProvider(null);
+    setSttProvider(null);
     setProviderFallbackReason(null);
 
     await teardownRef.current;
@@ -545,6 +549,9 @@ export function useCoach(dayId: string | null): UseCoachResult {
           onProviderConnected: (provider) => {
             if (mountedRef.current) setConnectedProvider(provider);
           },
+          onSttProviderConnected: (provider) => {
+            if (mountedRef.current) setSttProvider(provider);
+          },
           onConnectionEstablished: () => {
             if (!mountedRef.current) return;
             // Socket readiness can precede the first TTS audio on a weak
@@ -700,6 +707,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
     lastUsage,
     dailyBudget,
     connectedProvider,
+    sttProvider,
     providerFallbackReason,
     audioLevels,
     startSession,

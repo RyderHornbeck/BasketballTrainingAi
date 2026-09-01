@@ -64,6 +64,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     toggleMute,
     toggleTimer,
     audioLevels,
+    sttProvider,
   } = useCoach(dayId);
 
   const budgetExhausted = status === "budget_exhausted";
@@ -343,6 +344,11 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
             </Pressable>
 
             <View style={styles.hints}>
+              {sttProvider ? (
+                <Text style={[styles.providerLabel, { color: colors.textSecondary }]}>
+                  {sttProvider === "deepgram" ? "Deepgram" : "AssemblyAI"}
+                </Text>
+              ) : null}
               <Text style={[styles.hint, { color: colors.textSecondary }]}>{hint}</Text>
               <Text style={[styles.hint, { color: colors.textSecondary }]}>
                 Make sure headphones are connected
@@ -505,6 +511,11 @@ const styles = StyleSheet.create({
   hints: {
     marginTop: 28,
     gap: 4,
+  },
+  providerLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    textAlign: "center",
   },
   hint: {
     fontSize: 14,

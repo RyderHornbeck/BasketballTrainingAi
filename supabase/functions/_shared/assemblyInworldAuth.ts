@@ -1,5 +1,7 @@
 const ASSEMBLY_TOKEN_ENDPOINT = "https://streaming.assemblyai.com/v3/token";
-const INWORLD_TOKEN_ENDPOINT = "https://api.inworld.ai/auth/v1/tokens/token:generate";
+const DEEPGRAM_TOKEN_ENDPOINT = "https://api.deepgram.com/v1/auth/grant";
+const INWORLD_TOKEN_ENDPOINT =
+  "https://api.inworld.ai/auth/v1/tokens/token:generate";
 const INWORLD_ENGINE_HOST = "api-engine.inworld.ai";
 const INWORLD_METHOD = "ai.inworld.engine.WorldEngine/GenerateToken";
 
@@ -18,10 +20,16 @@ export interface InworldAccessToken {
   expires_at: string;
 }
 
+export interface DeepgramAccessToken {
+  token: string;
+  expires_in: number;
+  expires_at: string;
+}
+
 export class VoiceProviderAuthError extends Error {
   constructor(
     message: string,
-    readonly provider: "assemblyai" | "inworld",
+    readonly provider: "assemblyai" | "deepgram" | "inworld",
     readonly status = 502,
   ) {
     super(message);
@@ -35,16 +43,16 @@ function fromBase64(value: string): Uint8Array {
 }
 
 function hex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
 }
 
 async function hmacSha256(
   key: string | Uint8Array,
   value: string,
 ): Promise<Uint8Array> {
-  const rawKey = typeof key === "string"
-    ? new TextEncoder().encode(key)
-    : key;
+  const rawKey = typeof key === "string" ? new TextEncoder().encode(key) : key;
   const cryptoKey = await crypto.subtle.importKey(
     "raw",
     rawKey.buffer.slice(
@@ -56,7 +64,11 @@ async function hmacSha256(
     ["sign"],
   );
   return new Uint8Array(
-    await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(value)),
+    await crypto.subtle.sign(
+      "HMAC",
+      cryptoKey,
+      new TextEncoder().encode(value),
+    ),
   );
 }
 
@@ -72,18 +84,22 @@ async function inworldSigningKey(
   nonce: string,
 ): Promise<string> {
   let signingKey: string | Uint8Array = `IW1${secret}`;
-  for (const value of [
-    dateTime,
-    INWORLD_ENGINE_HOST,
-    INWORLD_METHOD,
-    nonce,
-  ]) {
+  for (
+    const value of [
+      dateTime,
+      INWORLD_ENGINE_HOST,
+      INWORLD_METHOD,
+      nonce,
+    ]
+  ) {
     signingKey = await hmacSha256(signingKey, value);
   }
   return hex(await hmacSha256(signingKey, "iw1_request"));
 }
 
-function parseInworldBasicCredential(value: string): { key: string; secret: string } {
+function parseInworldBasicCredential(
+  value: string,
+): { key: string; secret: string } {
   try {
     const decoded = new TextDecoder().decode(fromBase64(value.trim()));
     const separator = decoded.indexOf(":");
@@ -105,19 +121,37 @@ export async function mintAssemblyStreamingToken(
   fetcher: typeof fetch = fetch,
 ): Promise<AssemblyStreamingToken> {
   if (!apiKey.trim()) {
-    throw new VoiceProviderAuthError("ASSEMBLYAI_API_KEY is not configured.", "assemblyai", 500);
+    throw new VoiceProviderAuthError(
+      "ASSEMBLYAI_API_KEY is not configured.",
+      "assemblyai",
+      500,
+    );
   }
   const url = new URL(ASSEMBLY_TOKEN_ENDPOINT);
-  url.searchParams.set("expires_in_seconds", String(ASSEMBLY_STREAMING_TOKEN_TTL_SECONDS));
-  url.searchParams.set("max_session_duration_seconds", String(ASSEMBLY_MAX_SESSION_SECONDS));
+  url.searchParams.set(
+    "expires_in_seconds",
+    String(ASSEMBLY_STREAMING_TOKEN_TTL_SECONDS),
+  );
+  url.searchParams.set(
+    "max_session_duration_seconds",
+    String(ASSEMBLY_MAX_SESSION_SECONDS),
+  );
   const response = await fetcher(url, {
     headers: { Authorization: apiKey.trim() },
   }).catch(() => {
-    throw new VoiceProviderAuthError("AssemblyAI token request failed.", "assemblyai");
+    throw new VoiceProviderAuthError(
+      "AssemblyAI token request failed.",
+      "assemblyai",
+    );
   });
-  const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+  const payload = await response.json().catch(() => null) as
+    | Record<string, unknown>
+    | null;
   if (!response.ok || typeof payload?.token !== "string") {
-    throw new VoiceProviderAuthError("AssemblyAI did not issue a streaming token.", "assemblyai");
+    throw new VoiceProviderAuthError(
+      "AssemblyAI did not issue a streaming token.",
+      "assemblyai",
+    );
   }
   return {
     token: payload.token,
@@ -125,6 +159,51 @@ export async function mintAssemblyStreamingToken(
       ? payload.expires_in_seconds
       : ASSEMBLY_STREAMING_TOKEN_TTL_SECONDS,
     max_session_duration_seconds: ASSEMBLY_MAX_SESSION_SECONDS,
+  };
+}
+
+export async function mintDeepgramAccessToken(
+  apiKey: string,
+  fetcher: typeof fetch = fetch,
+): Promise<DeepgramAccessToken> {
+  if (!apiKey.trim()) {
+    throw new VoiceProviderAuthError(
+      "DEEPGRAM_API_KEY is not configured.",
+      "deepgram",
+      500,
+    );
+  }
+  const ttlSeconds = 60;
+  const response = await fetcher(DEEPGRAM_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Token ${apiKey.trim()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ ttl_seconds: ttlSeconds }),
+  }).catch(() => {
+    throw new VoiceProviderAuthError(
+      "Deepgram token request failed.",
+      "deepgram",
+    );
+  });
+  const payload = await response.json().catch(() => null) as
+    | Record<string, unknown>
+    | null;
+  if (!response.ok || typeof payload?.access_token !== "string") {
+    throw new VoiceProviderAuthError(
+      "Deepgram did not issue a temporary access token.",
+      "deepgram",
+    );
+  }
+  const expiresIn =
+    typeof payload.expires_in === "number" && payload.expires_in > 0
+      ? payload.expires_in
+      : ttlSeconds;
+  return {
+    token: payload.access_token,
+    expires_in: expiresIn,
+    expires_at: new Date(Date.now() + expiresIn * 1_000).toISOString(),
   };
 }
 
@@ -155,11 +234,19 @@ export async function mintInworldAccessToken(
       resources: normalizedWorkspace ? [normalizedWorkspace] : [],
     }),
   }).catch(() => {
-    throw new VoiceProviderAuthError("Inworld token request failed.", "inworld");
+    throw new VoiceProviderAuthError(
+      "Inworld token request failed.",
+      "inworld",
+    );
   });
-  const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+  const payload = await response.json().catch(() => null) as
+    | Record<string, unknown>
+    | null;
   if (!response.ok || typeof payload?.token !== "string") {
-    throw new VoiceProviderAuthError("Inworld did not issue an access token.", "inworld");
+    throw new VoiceProviderAuthError(
+      "Inworld did not issue an access token.",
+      "inworld",
+    );
   }
   return {
     token: payload.token,

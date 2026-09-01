@@ -6,5 +6,6 @@ const config = getDefaultConfig(__dirname);
 // reliably. Prefer the package's React Native/CommonJS entry for simulator
 // and Expo Go UI previews.
 config.resolver.resolverMainFields = ["react-native", "browser", "main"];
+config.resolver.assetExts = [...config.resolver.assetExts, "onnx"];
 
 module.exports = config;

@@ -2,14 +2,12 @@
   "expo": {
     "name": "Court Coach",
     "slug": "courtcoach",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "hoopplan",
     "userInterfaceStyle": "automatic",
-    "runtimeVersion": {
-      "policy": "fingerprint"
-    },
+    "runtimeVersion": "1.0.4-vad-1",
     "updates": {
       "enabled": true,
       "url": "https://u.expo.dev/bd3ad500-56dd-4198-a8fc-1b33470d72b3",
@@ -111,8 +109,22 @@
         }
       ],
       "expo-web-browser",
+      [
+        "react-native-nitro-voice",
+        {
+          "microphonePermission": "Court Coach uses the microphone for live coach conversations during workouts."
+        }
+      ],
       "./plugins/withForegroundOnlyAudio",
-      "expo-video"
+      "expo-video",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 29
+          }
+        }
+      ]
     ],
     "extra": {
       "eas": {

@@ -63,6 +63,17 @@ import {
   type InworldRequestIdentity,
 } from "@/lib/assemblyInworld";
 import {
+  DEEPGRAM_KEYTERMS,
+  DeepgramRealtimeClient,
+  LocalVadAudioGate,
+  type PcmFrame as DeepgramPcmFrame,
+} from "@/lib/stt/deepgram";
+import { SileroLocalVad } from "@/lib/stt/sileroVad";
+import type {
+  StreamingSttCallbacks,
+  StreamingSttClient,
+} from "@/lib/stt/types";
+import {
   type CoachVoiceProvider,
 } from "@/lib/coachVoiceProvider";
 import {
@@ -224,9 +235,12 @@ export interface RealtimeCoachCallbacks {
   onBudgetUpdate?: (spentUsd: number, budgetUsd: number) => void;
   onSessionEnded?: (reason: string) => void;
   onProviderConnected?: (provider: CoachVoiceProvider) => void;
+  onSttProviderConnected?: (provider: CoachSttProvider) => void;
   onConnectionEstablished?: () => void;
   onProviderFallback?: (reason: string) => void;
 }
+
+export type CoachSttProvider = "assemblyai" | "deepgram";
 
 export interface RecognizedCoachCommand {
   turnId: string;
@@ -832,7 +846,24 @@ export class RealtimeCoachSession {
   private cartesiaActive = false;
   private voiceProvider: CoachVoiceProvider = "cartesia";
   private assemblyInworldActive = false;
+  private sttProvider: CoachSttProvider = "assemblyai";
+  private sttClient: StreamingSttClient | null = null;
   private assemblyClient: AssemblyRealtimeClient | null = null;
+  private deepgramClient: DeepgramRealtimeClient | null = null;
+  private deepgramVad: SileroLocalVad | null = null;
+  private deepgramAudioGate: LocalVadAudioGate | null = null;
+  private deepgramReconnectPromise: Promise<void> | null = null;
+  private deepgramFinalizeWatchdog: ReturnType<typeof setTimeout> | null = null;
+  private deepgramReconnectAudio: DeepgramPcmFrame[] = [];
+  private deepgramReconnectAudioFrames = 0;
+  private deepgramAudioMilliseconds = 0;
+  private deepgramVadActivations = 0;
+  private deepgramFinalTurns = 0;
+  private deepgramReconnectCount = 0;
+  private deepgramFallbackCount = 0;
+  private deepgramEmptyTurns = 0;
+  private deepgramDuplicateTurns = 0;
+  private deepgramFinalLatencies: number[] = [];
   private inworldClient: InworldTtsClient | null = null;
   private inworldVoiceId = "";
   private voicePersona = "tyler";
@@ -882,8 +913,10 @@ export class RealtimeCoachSession {
   private cartesiaSttSeconds = 0;
   private cartesiaTtsCharacters = 0;
   private assemblySessionStartedAt = 0;
+  private deepgramSessionStartedAt = 0;
   private inworldTtsCharacters = 0;
   private reportedAssemblySessionSeconds = 0;
+  private reportedDeepgramAudioMilliseconds = 0;
   private reportedInworldTtsCharacters = 0;
   private reportedSttSeconds = 0;
   private reportedTtsCharacters = 0;
@@ -992,8 +1025,28 @@ export class RealtimeCoachSession {
     this.cartesiaSttSeconds = 0;
     this.cartesiaTtsCharacters = 0;
     this.assemblySessionStartedAt = 0;
+    this.deepgramSessionStartedAt = 0;
+    this.sttProvider = "assemblyai";
+    this.sttClient = null;
+    this.deepgramClient = null;
+    this.deepgramVad = null;
+    this.deepgramAudioGate = null;
+    this.deepgramReconnectPromise = null;
+    if (this.deepgramFinalizeWatchdog) clearTimeout(this.deepgramFinalizeWatchdog);
+    this.deepgramFinalizeWatchdog = null;
+    this.deepgramReconnectAudio = [];
+    this.deepgramReconnectAudioFrames = 0;
+    this.deepgramAudioMilliseconds = 0;
+    this.deepgramVadActivations = 0;
+    this.deepgramFinalTurns = 0;
+    this.deepgramReconnectCount = 0;
+    this.deepgramFallbackCount = 0;
+    this.deepgramEmptyTurns = 0;
+    this.deepgramDuplicateTurns = 0;
+    this.deepgramFinalLatencies = [];
     this.inworldTtsCharacters = 0;
     this.reportedAssemblySessionSeconds = 0;
+    this.reportedDeepgramAudioMilliseconds = 0;
     this.reportedInworldTtsCharacters = 0;
     this.reportedSttSeconds = 0;
     this.reportedTtsCharacters = 0;
@@ -1031,9 +1084,16 @@ export class RealtimeCoachSession {
           // The alternate route is an opt-in developer experiment. A failed
           // warm-up must not leave a user without the stable default route.
           console.warn("AssemblyAI/Inworld initialization failed; falling back to Cartesia.", assemblyError);
+          (this.sttClient as StreamingSttClient | null)?.close();
           this.assemblyClient?.close();
+          (this.deepgramClient as DeepgramRealtimeClient | null)?.close();
+          await (this.deepgramVad as SileroLocalVad | null)?.stop().catch(() => undefined);
+          this.sttClient = null;
           this.inworldClient?.close();
           this.assemblyClient = null;
+          this.deepgramClient = null;
+          this.deepgramVad = null;
+          this.deepgramAudioGate = null;
           this.inworldClient = null;
           for (const subscription of this.duplexSubscriptions) subscription.remove();
           this.duplexSubscriptions = [];
@@ -1051,6 +1111,7 @@ export class RealtimeCoachSession {
         }
         if (generation === this.connectionGeneration && this.active) {
           this.callbacks?.onProviderConnected?.(this.voiceProvider);
+          this.callbacks?.onSttProviderConnected?.(this.sttProvider);
           // Connection readiness is distinct from the greeting. Flip the UI
           // out of "Connecting" before speech begins, then Inworld playback
           // immediately moves it into the normal Coach-speaking state.
@@ -1574,7 +1635,9 @@ export class RealtimeCoachSession {
     const { data, error } = await supabase.functions.invoke<{
       error?: string;
       provider?: {
+        stt?: { selected?: "assemblyai" | "deepgram"; fallback?: boolean };
         assembly?: { access_token?: string; expires_in?: number };
+        deepgram?: { access_token?: string; expires_in?: number; expires_at?: string };
         inworld?: { access_token?: string; expires_at?: string };
       };
       voice?: { provider_voice_id?: string };
@@ -1592,12 +1655,23 @@ export class RealtimeCoachSession {
       },
     });
     if (error) throw new Error(await edgeFunctionErrorMessage(error));
+    let selectedStt: "assemblyai" | "deepgram" =
+      data?.provider?.stt?.selected === "deepgram"
+      ? "deepgram"
+      : "assemblyai";
     const assemblyToken = data?.provider?.assembly?.access_token;
+    const deepgramToken = data?.provider?.deepgram?.access_token;
     const inworldToken = data?.provider?.inworld?.access_token;
     const voiceId = data?.voice?.provider_voice_id;
-    if (!assemblyToken || !inworldToken || !voiceId) {
+    if (
+      !inworldToken ||
+      !voiceId ||
+      (selectedStt === "assemblyai" ? !assemblyToken : !deepgramToken)
+    ) {
       throw new Error(data?.error ?? "AssemblyAI/Inworld voice session was not created.");
     }
+    this.sttProvider = selectedStt;
+    if (data?.provider?.stt?.fallback) this.deepgramFallbackCount += 1;
     if (data.daily_usage) {
       this.dailySpentBaseline = data.daily_usage.spent_usd;
       this.dailyBudgetUsd = data.daily_usage.budget_usd;
@@ -1626,19 +1700,7 @@ export class RealtimeCoachSession {
     }
     this.duplexAudio = duplexAudio;
 
-    const assembly = new AssemblyRealtimeClient({
-      accessToken: assemblyToken,
-      keyterms: buildInkKeyterms(
-        COACH_INK_KEYTERMS,
-        this.orderedDrills().map((drill) => drill.name ?? "").filter(Boolean),
-      ),
-      prompt:
-        "Noisy basketball workout. Keep make, miss, made, and missed distinct. Transcribe basketball commands accurately.",
-      agentContext: this.lastDeterministicReply ?? undefined,
-      // The active duplex session routes Coach through the speaker. Far-field
-      // Voice Focus is therefore the correct default; a future headset route
-      // can explicitly select near-field when it controls the audio route.
-      voiceFocus: "far-field",
+    const sttCallbacks: StreamingSttCallbacks = {
       onSpeechStarted: () => {
         if (
           this.playbackActive ||
@@ -1671,12 +1733,14 @@ export class RealtimeCoachSession {
             // remaining final turn race in and cancel its replacement.
             this.assemblySpeechStartDeferred = false;
             this.handleAssemblySpeechStart(generation);
-            this.scheduleAssemblyPartialFallback(
-              transcript,
-              generation,
-              turn.turnOrder,
-              900,
-            );
+            if (this.sttProvider === "assemblyai") {
+              this.scheduleAssemblyPartialFallback(
+                transcript,
+                generation,
+                turn.turnOrder,
+                900,
+              );
+            }
           } else if (
             this.assemblyPartialFallback?.generation === generation &&
             this.assemblyPartialFallback.turnOrder === turn.turnOrder
@@ -1707,13 +1771,27 @@ export class RealtimeCoachSession {
         this.callbacks?.onUserTranscript?.(transcript);
         // Assembly normally follows this with a final turn. If that event is
         // lost, do not leave a visible athlete request stranded forever.
-        this.scheduleAssemblyPartialFallback(
-          transcript,
-          generation,
-          turn.turnOrder,
-        );
+        if (this.sttProvider === "assemblyai") {
+          this.scheduleAssemblyPartialFallback(
+            transcript,
+            generation,
+            turn.turnOrder,
+          );
+        }
       },
       onTurn: (turn) => {
+        if (this.sttProvider === "deepgram") {
+          if (this.deepgramFinalizeWatchdog) {
+            clearTimeout(this.deepgramFinalizeWatchdog);
+            this.deepgramFinalizeWatchdog = null;
+          }
+          this.deepgramFinalTurns += 1;
+          this.deepgramAudioGate?.completeTurn();
+          this.deepgramVad?.reset();
+          this.deepgramReconnectAudio = [];
+          this.deepgramReconnectAudioFrames = 0;
+          this.deepgramClient?.markIdle();
+        }
         this.clearAssemblyPartialFallback();
         if (this.playbackActive || this.generationActive || this.inworldContextId) {
           const interruption = this.parsePlaybackStopCommand(turn.transcript);
@@ -1778,41 +1856,80 @@ export class RealtimeCoachSession {
         this.assemblyLastServerActivityAt = Date.now();
       },
       onError: (providerError) => {
-        console.error("AssemblyAI error:", providerError);
+        if (this.sttProvider === "assemblyai") {
+          console.error("AssemblyAI error:", providerError);
+        } else {
+          console.warn("Coach STT provider error", {
+            provider: "deepgram",
+            code: providerError.name || "stream_error",
+          });
+        }
         if (generation === this.connectionGeneration) this.callbacks?.onError(providerError.message);
       },
       onClose: (providerError) => {
         if (generation === this.connectionGeneration && this.active) {
-          this.callbacks?.onError(providerError.message);
-          // A provider protocol/auth close cannot heal by repeatedly
-          // recreating the same session. Surface it so the athlete can retry
-          // after configuration is fixed instead of cycling indefinitely.
-          void this.disconnect("connect_failed").then(() => {
-            this.callbacks?.onStatus("error");
-          });
+          if (this.sttProvider === "deepgram") {
+            void this.recoverDeepgramStt(generation, sttCallbacks);
+          } else {
+            this.callbacks?.onError(providerError.message);
+            // Preserve the existing AssemblyAI failure behavior exactly.
+            void this.disconnect("connect_failed").then(() => {
+              this.callbacks?.onStatus("error");
+            });
+          }
         }
       },
-    });
+    };
+    const assembly = selectedStt === "assemblyai"
+      ? new AssemblyRealtimeClient({
+        accessToken: assemblyToken!,
+        keyterms: buildInkKeyterms(
+          COACH_INK_KEYTERMS,
+          this.orderedDrills().map((drill) => drill.name ?? "").filter(Boolean),
+        ),
+        prompt:
+          "Noisy basketball workout. Keep make, miss, made, and missed distinct. Transcribe basketball commands accurately.",
+        agentContext: this.lastDeterministicReply ?? undefined,
+        // Preserve the existing far-field AssemblyAI control configuration.
+        voiceFocus: "far-field",
+        ...sttCallbacks,
+      })
+      : null;
+    const deepgram = selectedStt === "deepgram"
+      ? this.createDeepgramClient(deepgramToken!, generation, sttCallbacks)
+      : null;
+    const sttClient = deepgram ?? assembly;
+    if (!sttClient) throw new Error("The selected STT provider was not initialized.");
     const inworld = this.createInworldTtsClient(
       inworldToken,
       generation,
       INITIAL_FIRST_AUDIO_TIMEOUT_MS,
     );
+    this.sttClient = sttClient;
     this.assemblyClient = assembly;
+    this.deepgramClient = deepgram;
     this.inworldClient = inworld;
     try {
-      await assembly.connect();
+      await sttClient.connect();
     } catch (error) {
-      throw new Error(
-        `AssemblyAI streaming connection failed: ${
-          error instanceof Error ? error.message : "unknown error"
-        }`,
-      );
+      if (selectedStt === "deepgram") {
+        await this.recoverDeepgramStt(generation, sttCallbacks);
+        selectedStt = this.sttProvider;
+        if (!this.sttClient?.isOpen) {
+          throw new Error("Deepgram and AssemblyAI streaming connections failed.");
+        }
+      } else {
+        throw new Error(
+          `AssemblyAI streaming connection failed: ${
+            error instanceof Error ? error.message : "unknown error"
+          }`,
+        );
+      }
     }
     try {
       await inworld.connect();
     } catch (error) {
-      assembly.close();
+      this.sttClient?.close();
       throw new Error(
         `Inworld TTS connection failed: ${
           error instanceof Error ? error.message : "unknown error"
@@ -1820,29 +1937,18 @@ export class RealtimeCoachSession {
       );
     }
     if (generation !== this.connectionGeneration || !this.active) {
-      assembly.close();
+      this.sttClient?.close();
       inworld.close();
       await duplexAudio.stopSessionAsync();
       return;
     }
     this.assemblyInworldActive = true;
-    this.assemblySessionStartedAt = Date.now();
+    this.assemblySessionStartedAt = selectedStt === "assemblyai" ? Date.now() : 0;
+    this.deepgramSessionStartedAt = selectedStt === "deepgram" ? Date.now() : 0;
     this.assemblyLastServerActivityAt = Date.now();
-    this.assemblyHeartbeatWatchdog = setInterval(() => {
-      if (
-        generation !== this.connectionGeneration ||
-        !this.active ||
-        !this.assemblyInworldActive
-      ) return;
-      // AssemblyAI sends Heartbeat every five seconds when heartbeat=true.
-      // Three missed heartbeats indicate a half-open mobile WebSocket.
-      if (Date.now() - this.assemblyLastServerActivityAt > 15_000) {
-        this.recoverAssemblyInworldTransport(
-          generation,
-          new Error("AssemblyAI connection stopped responding."),
-        );
-      }
-    }, 5_000);
+    if (selectedStt === "assemblyai") {
+      this.startAssemblyHeartbeatWatchdog(generation);
+    }
     // The provider streams directly to the device, so report the elapsed
     // provider session while it is active—not only after a model turn or when
     // the overlay closes. This lets the server close the session at the daily
@@ -1852,7 +1958,69 @@ export class RealtimeCoachSession {
         console.warn("Failed to persist AssemblyAI/Inworld usage:", usageError);
       });
     }, 15_000);
-    this.inkAudioGate = new InkAudioGate();
+    this.inkAudioGate = selectedStt === "assemblyai" ? new InkAudioGate() : null;
+    if (selectedStt === "deepgram") {
+      this.deepgramAudioGate = new LocalVadAudioGate(400);
+      this.deepgramVad = new SileroLocalVad();
+      try {
+        await this.deepgramVad.start({
+          onSpeechStart: () => {
+            if (
+              generation !== this.connectionGeneration ||
+              !this.active ||
+              this.sttProvider !== "deepgram"
+            ) return;
+            if (this.deepgramAudioGate?.state === "STREAMING_TURN") {
+              if (this.deepgramFinalizeWatchdog) {
+                clearTimeout(this.deepgramFinalizeWatchdog);
+                this.deepgramFinalizeWatchdog = null;
+              }
+              return;
+            }
+            this.deepgramVadActivations += 1;
+            sttCallbacks.onSpeechStarted();
+            for (const buffered of this.deepgramAudioGate?.speechStarted() ?? []) {
+              if (this.deepgramClient?.isOpen) {
+                this.deepgramClient.sendAudio(buffered.data);
+              } else {
+                this.bufferDeepgramReconnectAudio(buffered);
+              }
+            }
+          },
+          onSpeechEnd: () => {
+            if (
+              generation !== this.connectionGeneration ||
+              !this.active ||
+              this.deepgramAudioGate?.state !== "STREAMING_TURN"
+            ) return;
+            // Measure local speech-end latency immediately, but let Deepgram's
+            // endpointing finish normally. Finalize only if total continuous
+            // local silence reaches approximately 1.5 seconds.
+            this.deepgramClient?.markSpeechEnded();
+            if (this.deepgramFinalizeWatchdog) {
+              clearTimeout(this.deepgramFinalizeWatchdog);
+            }
+            this.deepgramFinalizeWatchdog = setTimeout(() => {
+              this.deepgramFinalizeWatchdog = null;
+              if (
+                generation === this.connectionGeneration &&
+                this.active &&
+                this.deepgramAudioGate?.state === "STREAMING_TURN"
+              ) {
+                this.deepgramClient?.finalize();
+              }
+            }, 1_100);
+          },
+        });
+      } catch (error) {
+        console.warn("Silero VAD initialization failed", {
+          provider: "deepgram",
+          code: error instanceof Error ? error.name : "vad_init_error",
+        });
+        await this.fallbackDeepgramToAssembly(generation, sttCallbacks);
+        selectedStt = "assemblyai";
+      }
+    }
     this.duplexSubscriptions = [
       duplexAudio.addAudioInputListener((event) => {
         this.emitAudioLevel("microphone", event.data);
@@ -1861,10 +2029,22 @@ export class RealtimeCoachSession {
           this.active &&
           !this.startupGreetingActive &&
           !this.muted &&
-          this.assemblyClient?.isOpen
+          (this.sttProvider === "deepgram" || this.sttClient?.isOpen)
         ) {
-          for (const frame of this.inkAudioGate?.accept(event) ?? []) {
-            this.assemblyClient.sendAudio(frame.data);
+          if (this.sttProvider === "deepgram") {
+            const frame: DeepgramPcmFrame = event;
+            this.deepgramVad?.process(frame);
+            for (const admitted of this.deepgramAudioGate?.accept(frame) ?? []) {
+              if (this.deepgramClient?.isOpen) {
+                this.deepgramClient.sendAudio(admitted.data);
+              } else {
+                this.bufferDeepgramReconnectAudio(admitted);
+              }
+            }
+          } else {
+            for (const frame of this.inkAudioGate?.accept(event) ?? []) {
+              this.assemblyClient?.sendAudio(frame.data);
+            }
           }
         }
       }),
@@ -1924,6 +2104,225 @@ export class RealtimeCoachSession {
         }
       }),
     ];
+  }
+
+  private createDeepgramClient(
+    accessToken: string,
+    generation: number,
+    callbacks: StreamingSttCallbacks,
+  ): DeepgramRealtimeClient {
+    return new DeepgramRealtimeClient({
+      accessToken,
+      keyterms: DEEPGRAM_KEYTERMS,
+      ...callbacks,
+      // Silero owns speech admission. Deepgram's later VAD event must not
+      // trigger the existing interruption path a second time.
+      onSpeechStarted: () => undefined,
+      onAudioSent: (milliseconds) => {
+        if (generation === this.connectionGeneration) {
+          this.deepgramAudioMilliseconds += milliseconds;
+        }
+      },
+      onEmptyTurn: () => {
+        if (generation !== this.connectionGeneration) return;
+        if (this.deepgramFinalizeWatchdog) {
+          clearTimeout(this.deepgramFinalizeWatchdog);
+          this.deepgramFinalizeWatchdog = null;
+        }
+        this.deepgramEmptyTurns += 1;
+        this.deepgramAudioGate?.completeTurn();
+        this.deepgramVad?.reset();
+      },
+      onDuplicateTurn: () => {
+        if (generation === this.connectionGeneration) {
+          this.deepgramDuplicateTurns += 1;
+        }
+      },
+      onFinalLatency: (milliseconds) => {
+        if (generation !== this.connectionGeneration) return;
+        this.deepgramFinalLatencies.push(milliseconds);
+        if (this.deepgramFinalLatencies.length > 200) {
+          this.deepgramFinalLatencies.shift();
+        }
+      },
+    });
+  }
+
+  private startAssemblyHeartbeatWatchdog(generation: number): void {
+    if (this.assemblyHeartbeatWatchdog) {
+      clearInterval(this.assemblyHeartbeatWatchdog);
+    }
+    this.assemblyLastServerActivityAt = Date.now();
+    this.assemblyHeartbeatWatchdog = setInterval(() => {
+      if (
+        generation !== this.connectionGeneration ||
+        !this.active ||
+        !this.assemblyInworldActive
+      ) return;
+      // AssemblyAI sends Heartbeat every five seconds when heartbeat=true.
+      // Three missed heartbeats indicate a half-open mobile WebSocket.
+      if (Date.now() - this.assemblyLastServerActivityAt > 15_000) {
+        this.recoverAssemblyInworldTransport(
+          generation,
+          new Error("AssemblyAI connection stopped responding."),
+        );
+      }
+    }, 5_000);
+  }
+
+  private bufferDeepgramReconnectAudio(frame: DeepgramPcmFrame): void {
+    this.deepgramReconnectAudio.push(frame);
+    this.deepgramReconnectAudioFrames += frame.frames;
+    const maxFrames = frame.sampleRate;
+    while (
+      this.deepgramReconnectAudioFrames > maxFrames &&
+      this.deepgramReconnectAudio.length > 1
+    ) {
+      this.deepgramReconnectAudioFrames -=
+        this.deepgramReconnectAudio.shift()?.frames ?? 0;
+    }
+  }
+
+  private async fetchSttReconnectToken(
+    provider: "assemblyai" | "deepgram",
+  ): Promise<string> {
+    const dayId = this.dayId;
+    const sessionKey = this.sessionKey;
+    if (!dayId || !sessionKey || !this.active) {
+      throw new Error("Coach session is not active.");
+    }
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("realtime_coach_voice")
+      .maybeSingle();
+    const { data, error } = await supabase.functions.invoke<{
+      error?: string;
+      provider?: {
+        stt?: { selected?: "assemblyai" | "deepgram" };
+        assembly?: { access_token?: string };
+        deepgram?: { access_token?: string };
+      };
+    }>("coach-assembly-session", {
+      body: {
+        day_id: dayId,
+        session_key: sessionKey,
+        voice_persona: getCoachPersonaId(profile?.realtime_coach_voice),
+        state_version: this.stateVersion,
+        timer: this.timer,
+        conversation_summary: this.conversationSummary,
+        ...(provider === "deepgram"
+          ? { stt_provider_reconnect: "deepgram" }
+          : { stt_provider_fallback: "assemblyai" }),
+      },
+    });
+    if (error) throw new Error(await edgeFunctionErrorMessage(error));
+    const token = provider === "deepgram"
+      ? data?.provider?.deepgram?.access_token
+      : data?.provider?.assembly?.access_token;
+    if (!token || data?.provider?.stt?.selected !== provider) {
+      throw new Error(`${provider} did not issue a temporary streaming token.`);
+    }
+    return token;
+  }
+
+  private async fallbackDeepgramToAssembly(
+    generation: number,
+    callbacks: StreamingSttCallbacks,
+  ): Promise<void> {
+    const assemblyToken = await this.fetchSttReconnectToken("assemblyai");
+    const assembly = new AssemblyRealtimeClient({
+      accessToken: assemblyToken,
+      keyterms: buildInkKeyterms(
+        COACH_INK_KEYTERMS,
+        this.orderedDrills().map((drill) => drill.name ?? "").filter(Boolean),
+      ),
+      prompt:
+        "Noisy basketball workout. Keep make, miss, made, and missed distinct. Transcribe basketball commands accurately.",
+      agentContext: this.lastDeterministicReply ?? undefined,
+      voiceFocus: "far-field",
+      ...callbacks,
+    });
+    await assembly.connect();
+    if (generation !== this.connectionGeneration || !this.active) {
+      assembly.close();
+      return;
+    }
+    this.sttProvider = "assemblyai";
+    if (this.deepgramFinalizeWatchdog) {
+      clearTimeout(this.deepgramFinalizeWatchdog);
+      this.deepgramFinalizeWatchdog = null;
+    }
+    const previousDeepgram = this.deepgramClient;
+    this.deepgramClient = null;
+    previousDeepgram?.close();
+    await this.deepgramVad?.stop();
+    this.deepgramVad = null;
+    this.deepgramAudioGate = null;
+    this.deepgramReconnectAudio = [];
+    this.deepgramReconnectAudioFrames = 0;
+    this.assemblySessionStartedAt = Date.now();
+    this.reportedAssemblySessionSeconds = 0;
+    this.assemblyClient = assembly;
+    this.sttClient = assembly;
+    this.inkAudioGate = new InkAudioGate();
+    this.deepgramFallbackCount += 1;
+    this.callbacks?.onSttProviderConnected?.("assemblyai");
+    this.startAssemblyHeartbeatWatchdog(generation);
+  }
+
+  private recoverDeepgramStt(
+    generation: number,
+    callbacks: StreamingSttCallbacks,
+  ): Promise<void> {
+    if (this.deepgramReconnectPromise) return this.deepgramReconnectPromise;
+    const recovery = (async () => {
+      for (const delayMs of [250, 750]) {
+        if (
+          generation !== this.connectionGeneration ||
+          !this.active ||
+          this.sttProvider !== "deepgram"
+        ) return;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        this.deepgramReconnectCount += 1;
+        try {
+          const token = await this.fetchSttReconnectToken("deepgram");
+          const replacement = this.createDeepgramClient(token, generation, callbacks);
+          await replacement.connect();
+          if (generation !== this.connectionGeneration || !this.active) {
+            replacement.close();
+            return;
+          }
+          this.deepgramClient = replacement;
+          this.sttClient = replacement;
+          for (const frame of this.deepgramReconnectAudio) {
+            replacement.sendAudio(frame.data);
+          }
+          this.deepgramReconnectAudio = [];
+          this.deepgramReconnectAudioFrames = 0;
+          return;
+        } catch (error) {
+          console.warn("Deepgram reconnect failed", {
+            provider: "deepgram",
+            attempt: this.deepgramReconnectCount,
+            code: error instanceof Error ? error.name : "reconnect_error",
+          });
+        }
+      }
+
+      try {
+        await this.fallbackDeepgramToAssembly(generation, callbacks);
+      } catch (error) {
+        console.warn("Deepgram fallback failed", {
+          provider: "assemblyai",
+          code: error instanceof Error ? error.name : "fallback_error",
+        });
+        await this.disconnect("connection_lost");
+      }
+    })().finally(() => {
+      this.deepgramReconnectPromise = null;
+    });
+    this.deepgramReconnectPromise = recovery;
+    return recovery;
   }
 
   private createInworldTtsClient(
@@ -5277,11 +5676,20 @@ export class RealtimeCoachSession {
       this.sonicContext = null;
       this.inkClient?.close();
       this.sonicClient?.close();
+      this.sttClient?.close();
       this.assemblyClient?.close();
+      this.deepgramClient?.close();
+      await this.deepgramVad?.stop().catch(() => undefined);
       this.inworldClient?.close();
       this.inkClient = null;
       this.sonicClient = null;
+      this.sttClient = null;
       this.assemblyClient = null;
+      this.deepgramClient = null;
+      this.deepgramVad = null;
+      this.deepgramAudioGate = null;
+      this.deepgramReconnectAudio = [];
+      this.deepgramReconnectAudioFrames = 0;
       this.inworldClient = null;
       this.inworldContextId = null;
       this.inworldSpeech = null;
@@ -5294,6 +5702,10 @@ export class RealtimeCoachSession {
       if (this.assemblyHeartbeatWatchdog) {
         clearInterval(this.assemblyHeartbeatWatchdog);
         this.assemblyHeartbeatWatchdog = null;
+      }
+      if (this.deepgramFinalizeWatchdog) {
+        clearTimeout(this.deepgramFinalizeWatchdog);
+        this.deepgramFinalizeWatchdog = null;
       }
       if (this.assemblyUsageReportingTimer) {
         clearInterval(this.assemblyUsageReportingTimer);
@@ -6716,26 +7128,65 @@ export class RealtimeCoachSession {
     }
     const dayId = this.dayId;
     const sessionKey = this.sessionKey;
-    if (!this.assemblyInworldActive || !dayId || !sessionKey || !this.assemblySessionStartedAt) return;
+    if (
+      !this.assemblyInworldActive ||
+      !dayId ||
+      !sessionKey ||
+      (!this.assemblySessionStartedAt && !this.deepgramSessionStartedAt)
+    ) return;
     let usage = this.pendingAssemblyInworldUsage;
     if (!usage) {
+      const useDeepgram =
+        this.sttProvider === "deepgram" ||
+        this.deepgramAudioMilliseconds > this.reportedDeepgramAudioMilliseconds;
       const sessionSeconds = Math.max(
         0,
-        (Date.now() - this.assemblySessionStartedAt) / 1000 -
-          this.reportedAssemblySessionSeconds,
+        this.assemblySessionStartedAt
+          ? (Date.now() - this.assemblySessionStartedAt) / 1000 -
+            this.reportedAssemblySessionSeconds
+          : 0,
+      );
+      const deepgramAudioSeconds = Math.max(
+        0,
+        (this.deepgramAudioMilliseconds - this.reportedDeepgramAudioMilliseconds) / 1_000,
       );
       const ttsCharacters = Math.max(
         0,
         this.inworldTtsCharacters - this.reportedInworldTtsCharacters,
       );
-      if (!force && sessionSeconds < 15 && ttsCharacters < 300) return;
-      if (sessionSeconds <= 0 && ttsCharacters <= 0) return;
-      usage = createProviderUsageDelta("assembly-inworld", ++this.providerUsageSequence, {
-        assemblySessionSeconds: Math.round(sessionSeconds * 1000) / 1000,
+      if (
+        !force &&
+        (useDeepgram ? deepgramAudioSeconds < 1 : sessionSeconds < 15) &&
+        ttsCharacters < 300
+      ) return;
+      if (
+        (useDeepgram ? deepgramAudioSeconds : sessionSeconds) <= 0 &&
+        ttsCharacters <= 0
+      ) return;
+      usage = createProviderUsageDelta(
+        useDeepgram ? "deepgram-inworld" : "assembly-inworld",
+        ++this.providerUsageSequence,
+        {
+        assemblySessionSeconds: useDeepgram
+          ? 0
+          : Math.round(sessionSeconds * 1000) / 1000,
+        deepgramAudioSeconds: useDeepgram
+          ? Math.round(deepgramAudioSeconds * 1000) / 1000
+          : 0,
         inworldTtsCharacters: Math.round(ttsCharacters),
-      });
+        },
+      );
       this.pendingAssemblyInworldUsage = usage;
     }
+    const latencyValues = [...this.deepgramFinalLatencies].sort((a, b) => a - b);
+    const averageLatencyMs = latencyValues.length
+      ? latencyValues.reduce((sum, value) => sum + value, 0) / latencyValues.length
+      : 0;
+    const p95LatencyMs = latencyValues.length
+      ? latencyValues[Math.min(latencyValues.length - 1, Math.ceil(latencyValues.length * 0.95) - 1)]
+      : 0;
+    const reportingDeepgram = (usage.deepgramAudioSeconds ?? 0) > 0 ||
+      (this.sttProvider === "deepgram" && !usage.assemblySessionSeconds);
     this.providerUsagePromise = (async () => {
       const { data, error } = await supabase.functions.invoke<{
         daily_usage?: { spent_usd: number; budget_usd: number; remaining_usd: number };
@@ -6745,14 +7196,33 @@ export class RealtimeCoachSession {
           day_id: dayId,
           session_key: sessionKey,
           request_id: usage.requestId,
-          provider: "assembly_inworld",
+          provider: reportingDeepgram ? "deepgram_inworld" : "assembly_inworld",
           assembly_session_seconds: usage.assemblySessionSeconds ?? 0,
+          deepgram_audio_seconds: usage.deepgramAudioSeconds ?? 0,
           inworld_tts_characters: usage.inworldTtsCharacters ?? 0,
+          telemetry: reportingDeepgram
+            ? {
+              selected_provider: "deepgram",
+              session_wall_ms: this.deepgramSessionStartedAt
+                ? Date.now() - this.deepgramSessionStartedAt
+                : 0,
+              vad_activations: this.deepgramVadActivations,
+              final_turns: this.deepgramFinalTurns,
+              average_final_latency_ms: Math.round(averageLatencyMs),
+              p95_final_latency_ms: Math.round(p95LatencyMs),
+              reconnect_count: this.deepgramReconnectCount,
+              assembly_fallback_count: this.deepgramFallbackCount,
+              empty_turn_count: this.deepgramEmptyTurns,
+              duplicate_turn_count: this.deepgramDuplicateTurns,
+            }
+            : undefined,
         },
       });
       if (error) throw new Error(await edgeFunctionErrorMessage(error));
       if (data?.error) throw new Error(data.error);
       this.reportedAssemblySessionSeconds += usage.assemblySessionSeconds ?? 0;
+      this.reportedDeepgramAudioMilliseconds +=
+        (usage.deepgramAudioSeconds ?? 0) * 1_000;
       this.reportedInworldTtsCharacters += usage.inworldTtsCharacters ?? 0;
       this.pendingAssemblyInworldUsage = null;
       if (data?.daily_usage) {
