@@ -1,6 +1,5 @@
 // Persistent Inworld bidirectional TTS WebSocket adapter. Local buffering
 // avoids turning model token deltas into separate audible utterances.
-const MINIMUM_UTTERANCE_CHARACTERS = 240;
 const MAXIMUM_UTTERANCE_WAIT_MS = 450;
 // A cold Inworld stream can take several seconds to return its first PCM
 // packet. A short deadline caused the startup greeting to tear down and
@@ -210,7 +209,12 @@ export class InworldTtsClient {
   pushText(contextId: string, text: string, finish = false): void {
     if (!text.trim() || this.cancelledContexts.has(contextId)) return;
     this.pendingText.set(contextId, `${this.pendingText.get(contextId) ?? ""}${text}`);
-    if (!finish && (this.pendingText.get(contextId)?.length ?? 0) < MINIMUM_UTTERANCE_CHARACTERS) {
+    if (!finish) {
+      // A completed coach response arrives as a burst followed immediately by
+      // finish(). Do not split that burst by character count: sequential
+      // Inworld flushes can leave the native PCM queue empty for several
+      // seconds between phrases, making playback end in the middle of speech.
+      // The timer still releases genuinely incremental/tool speech promptly.
       if (!this.flushTimers.has(contextId)) {
         this.flushTimers.set(
           contextId,
@@ -408,6 +412,15 @@ export class InworldTtsClient {
   private completeContext(context: InworldContext): void {
     this.clearContextTimers(context);
     this.contexts.delete(context.identity.contextId);
+    // flushCompleted ends synthesis but does not release the server-side
+    // context. Inworld permits only five open contexts per connection, so
+    // explicitly close every completed context before reusing the socket.
+    if (this.isOpen) {
+      this.send({
+        close_context: {},
+        contextId: context.identity.contextId,
+      });
+    }
     this.options.onLifecycle?.("request_completed", context.identity);
     if (context.final && !this.cancelledContexts.has(context.identity.contextId)) {
       this.options.onDone(context.identity.contextId);

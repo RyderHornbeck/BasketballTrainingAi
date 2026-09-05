@@ -8,6 +8,14 @@ export interface ShotIntentArgs {
   source: "count" | "ratio";
 }
 
+export type LastShotCorrectionArgs =
+  | { from: "make" | "miss"; to: "make" | "miss" }
+  | { action: "flip" };
+
+export interface MissTotalCorrectionArgs {
+  misses: number;
+}
+
 export interface TimerIntentArgs {
   action: "start" | "pause" | "resume" | "stop" | "reset" | "restart" | "status";
   durationSeconds?: number;
@@ -28,6 +36,15 @@ export interface ContinuationConfirmationArgs {
 
 export interface StartupConfirmationArgs {
   accepted: boolean;
+}
+
+export interface DrillExplanationArgs {
+  target: "current";
+}
+
+export interface DrillRequestArgs {
+  query: string;
+  action: "move_or_add" | "add";
 }
 
 export interface SpeechControlIntentArgs {
@@ -76,7 +93,19 @@ export interface SetPrescriptionIntentArgs {
   targetMakes?: number;
   targetAttempts?: number;
   additionalAttempts?: boolean;
+  /** Set the target to the attempts already recorded plus this value. */
+  remainingAttempts?: boolean;
+  /** Signed change to the current shooting-attempt target. */
+  attemptAdjustment?: number;
   confirmedTargetChange?: boolean;
+}
+
+export interface CoachSpeechParseContext {
+  /**
+   * Number-first target requests ("twenty shots") are only unambiguous when
+   * the caller has an active shooting set.
+   */
+  activeShootingSet?: boolean;
 }
 
 interface IntentBase<K extends string, A> {
@@ -90,12 +119,15 @@ interface IntentBase<K extends string, A> {
 export type CoachSpeechIntent =
   | IntentBase<"shot", ShotIntentArgs>
   | IntentBase<"undo_shot", Record<string, never>>
-  | IntentBase<"correct_last_shot", { from: "make" | "miss"; to: "make" | "miss" }>
+  | IntentBase<"correct_last_shot", LastShotCorrectionArgs>
+  | IntentBase<"correct_shot_misses", MissTotalCorrectionArgs>
   | IntentBase<"timer", TimerIntentArgs>
   | IntentBase<"timer_duration_confirmation", TimerDurationConfirmationArgs>
   | IntentBase<"set_completion_confirmation", SetCompletionConfirmationArgs>
   | IntentBase<"continuation_confirmation", ContinuationConfirmationArgs>
   | IntentBase<"startup_confirmation", StartupConfirmationArgs>
+  | IntentBase<"drill_explanation", DrillExplanationArgs>
+  | IntentBase<"drill_request", DrillRequestArgs>
   | IntentBase<"speech_control", SpeechControlIntentArgs>
   | IntentBase<"navigation", NavigationIntentArgs>
   | IntentBase<"completion", CompletionIntentArgs>
@@ -308,7 +340,12 @@ function parseOrdinal(value: string): number | null {
 }
 
 function validShotValues(makes: number | null, attempts: number | null): boolean {
-  return makes != null && attempts != null && attempts >= 0 && attempts <= 500 && makes <= attempts;
+  return makes != null &&
+    attempts != null &&
+    makes >= 0 &&
+    attempts >= 0 &&
+    attempts <= 500 &&
+    makes <= attempts;
 }
 
 function shotLabel(makes: number, attempts: number, mode: ShotIntentArgs["mode"]): string {
@@ -321,18 +358,43 @@ function shotLabel(makes: number, attempts: number, mode: ShotIntentArgs["mode"]
 }
 
 export const parseShotIntent: Parser = (text) => {
+  const explicitTotals = text.match(
+    new RegExp(
+      `^(?:i\\s+)?(?:have\\s+)?(${NUMBER})\\s+(?:makes?|buckets?|swishes?)\\s+and\\s+(${NUMBER})\\s+(?:miss(?:es)?|bricks?|airballs?)$`,
+    ),
+  );
+  if (explicitTotals) {
+    const makes = parseSpokenNumber(explicitTotals[1]);
+    const misses = parseSpokenNumber(explicitTotals[2]);
+    const attempts = makes != null && misses != null ? makes + misses : null;
+    if (!validShotValues(makes, attempts)) return null;
+    return intent(
+      "shot",
+      { mode: "replace", makes: makes!, attempts: attempts!, source: "count" },
+      shotLabel(makes!, attempts!, "replace"),
+      0.99,
+    );
+  }
   const ratio = text.match(
     new RegExp(
-      `^(?:(?:im|i am|currently)(?:\\s+(?:actually|currently|now))?\\s+|i\\s+)?(?:(just\\s+)?(?:made|hit)\\s+)?(${NUMBER})\\s*(?:/|for|out of|of)\\s*(${NUMBER})(?:\\s+shots?)?(?:\\s*,?\\s*${NUMBER}\\s+shots?\\s+left)?$`
+      `(?:\\b(?:im|i am|currently)(?:\\s+(?:actually|currently|now))?\\s+|^i\\s+|^)(?:(just\\s+)?(?:made|hit)\\s+)?(${NUMBER})\\s*(?:/|for|out of|of)\\s*(${NUMBER})(?:\\s+shots?)?(?:\\s*,?\\s*${NUMBER}\\s+shots?\\s+left)?`
     )
   );
   if (ratio) {
     const makes = parseSpokenNumber(ratio[2]);
     const attempts = parseSpokenNumber(ratio[3]);
-    if (!validShotValues(makes, attempts)) return null;
+    if (
+      makes == null ||
+      attempts == null ||
+      makes < 0 ||
+      attempts < 0 ||
+      makes > 500 ||
+      attempts > 500
+    ) return null;
     const mode: ShotIntentArgs["mode"] = /^(?:i\s+)?(?:just\s+)?(?:made|hit)\b/.test(text)
       ? "increment"
       : "replace";
+    if (mode === "increment" && (attempts === 0 || makes > attempts)) return null;
     return intent(
       "shot",
       { mode, makes: makes!, attempts: attempts!, source: "ratio" },
@@ -413,10 +475,30 @@ export const parseShotIntent: Parser = (text) => {
   return null;
 };
 
+export const parseMissTotalCorrectionIntent: Parser = (text) => {
+  const match = text.match(
+    new RegExp(
+      `^(?:i\\s+)?(?:have\\s+)?(?:only\\s+)?(?:missed|miss)\\s+(${NUMBER})(?:\\s+(?:shot|shots|time|times))?$`,
+    ),
+  );
+  const misses = match ? parseSpokenNumber(match[1]) : null;
+  if (misses == null || misses < 1 || misses > 500) return null;
+  return intent(
+    "correct_shot_misses",
+    { misses },
+    `${misses} ${misses === 1 ? "miss" : "misses"} total heard`,
+    0.99,
+  );
+};
+
 function parseDuration(value: string, unit: string): number | null {
-  const amount = parseSpokenNumber(value);
+  const amount = /^(?:a|an)$/.test(value) ? 1 : parseSpokenNumber(value);
   if (amount == null || amount <= 0) return null;
-  const multiplier = /^hours?/.test(unit) ? 3600 : /^minutes?/.test(unit) ? 60 : 1;
+  const multiplier = /^(?:hours?|hrs?)/.test(unit)
+    ? 3600
+    : /^(?:minutes?|mins?)/.test(unit)
+    ? 60
+    : 1;
   const seconds = amount * multiplier;
   return seconds <= 24 * 60 * 60 ? seconds : null;
 }
@@ -516,11 +598,273 @@ export const parseTimerIntent: Parser = (text) => {
   return null;
 };
 
+const TIMER_CONFIRMATION_AFFIRMATIVES = [
+  "yes",
+  "yes please",
+  "yes do it",
+  "yes start it",
+  "yeah",
+  "yeah please",
+  "yeah do it",
+  "yep",
+  "yup",
+  "sure",
+  "sure thing",
+  "absolutely",
+  "definitely",
+  "certainly",
+  "of course",
+  "for sure",
+  "sounds good",
+  "sounds great",
+  "that works",
+  "works for me",
+  "im ready",
+  "i am ready",
+  "ready",
+  "ready to go",
+  "all ready",
+  "lets go",
+  "let us go",
+  "lets do it",
+  "let us do it",
+  "lets start",
+  "let us start",
+  "go",
+  "go ahead",
+  "ahead",
+  "do",
+  "do it",
+  "please do",
+  "start",
+  "start it",
+  "start now",
+  "start timer",
+  "start the timer",
+  "begin",
+  "begin now",
+  "begin timer",
+  "begin the timer",
+  "run it",
+  "run timer",
+  "run the timer",
+  "fire it up",
+  "fire up the timer",
+  "kick it off",
+  "get it going",
+  "get started",
+  "im good",
+  "i am good",
+  "good to go",
+  "all good",
+  "okay",
+  "ok",
+  "okay go",
+  "ok go",
+  "okay start it",
+  "ok start it",
+  "why not",
+  "fine",
+  "perfect",
+  "correct",
+  "affirmative",
+  "you can",
+  "you can start",
+  "please",
+] as const;
+
+const TIMER_CONFIRMATION_NEGATIVES =
+  /\b(?:no|nope|nah|not|dont|do not|stop|wait|hold|cancel|never|later|yet)\b/;
+
+/**
+ * A permissive reply parser used only while an explicit timer-start offer is
+ * pending. Each affirmative may have up to two conversational words before
+ * and after it, while negative wording always wins.
+ */
+export function isTimerStartConfirmationAffirmative(
+  transcript: string | null | undefined,
+): boolean {
+  const raw = String(transcript ?? "")
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const texts = [...new Set([normalizeCoachSpeech(transcript), raw])].filter(Boolean);
+  if (
+    !texts.length ||
+    texts.some((text) =>
+      TIMER_CONFIRMATION_NEGATIVES.test(text.replace(/\bwhy not\b/g, ""))
+    )
+  ) {
+    return false;
+  }
+  return texts.some((text) => {
+    const words = text.split(" ");
+    return TIMER_CONFIRMATION_AFFIRMATIVES.some((phrase) => {
+      const phraseWords = phrase.split(" ");
+      if (words.length < phraseWords.length || words.length > phraseWords.length + 4) {
+        return false;
+      }
+      for (let start = 0; start <= words.length - phraseWords.length; start += 1) {
+        if (start > 2 || words.length - start - phraseWords.length > 2) continue;
+        if (phraseWords.every((word, index) => words[start + index] === word)) return true;
+      }
+      return false;
+    });
+  });
+}
+
+export const parseDrillExplanationIntent: Parser = (text) => {
+  if (
+    /\bafter this\b/.test(text) ||
+    (/\b(?:next|up next)\b/.test(text) &&
+      !/\b(?:drill|exercise|movement)\b/.test(text))
+  ) {
+    return null;
+  }
+  const leadingPadding = "(?:[a-z0-9]+\\s+){0,3}";
+  const trailingPadding = "(?:\\s+[a-z0-9]+){0,3}";
+  const drill =
+    "(?:(?:the\\s+)?(?:this|that|my|current)\\s+|the\\s+)?(?:drill|exercise|movement)";
+  const drillObject = `(?:${drill}|(?:this|that)(?:\\s+one)?|it)`;
+  const patterns = [
+    `(?:explain|describe|teach)(?:\\s+me)?(?:\\s+how\\s+to\\s+do)?\\s+${drill}`,
+    `(?:explain|describe|teach)(?:\\s+me)?\\s+${drillObject}`,
+    `(?:explain|describe|teach)(?:\\s+me)?\\s+how\\s+to\\s+(?:do|perform|execute)\\s+${drillObject}`,
+    `(?:explain|describe)(?:\\s+${drill})?(?:\\s+to\\s+me)`,
+    `(?:walk|talk)(?:\\s+me)?\\s+through\\s+${drillObject}`,
+    `(?:can\\s+you\\s+)?run\\s+through\\s+${drillObject}(?:\\s+for\\s+me)?`,
+    `(?:show|tell)(?:\\s+me)?\\s+how\\s+(?:i\\s+|to\\s+)?(?:do|perform|execute)\\s+${drillObject}`,
+    `(?:tell|show)(?:\\s+me)?\\s+what\\s+to\\s+do`,
+    `what\\s+to\\s+do`,
+    `(?:how\\s+do\\s+i|how\\s+should\\s+i|how\\s+am\\s+i\\s+supposed\\s+to)\\s+(?:do|perform|execute)\\s+${drillObject}`,
+    `how\\s+do\\s+i\\s+(?:start|run)\\s+${drillObject}`,
+    `how\\s+should\\s+i\\s+run\\s+${drillObject}`,
+    `how\\s+do\\s+i\\s+go\\s+through\\s+${drillObject}`,
+    `how\\s+do\\s+i\\s+set\\s+${drillObject}\\s+up`,
+    `how\\s+am\\s+i\\s+supposed\\s+to\\s+start`,
+    `how\\s+am\\s+i\\s+(?:doing|performing|running)\\s+${drillObject}`,
+    `how\\s+should\\s+${drillObject}\\s+go`,
+    `how\\s+(?:do|does)\\s+${drillObject}\\s+(?:work|go)`,
+    `what\\s+(?:am\\s+i\\s+supposed\\s+to(?:\\s+be)?|am\\s+i\\s+meant\\s+to|should\\s+i|do\\s+i\\s+need\\s+to|do\\s+i)\\s+(?:do|doing)(?:\\s+(?:for|on|with)\\s+${drillObject})?`,
+    `what(?:\\s+exactly)?\\s+am\\s+i\\s+doing(?:\\s+here|\\s+right\\s+now)?`,
+    `what\\s+am\\s+i\\s+doing\\s+(?:for|on|with)\\s+${drillObject}(?:\\s+again)?`,
+    `what\\s+should\\s+i\\s+be\\s+doing(?:\\s+(?:for|on|with)\\s+${drillObject})?`,
+    `what\\s+(?:are\\s+we|am\\s+i)\\s+(?:doing|working\\s+on)(?:\\s+(?:for|on|with)\\s+${drillObject}|\\s+here)?`,
+    `what\\s+am\\s+i\\s+supposed\\s+to\\s+work\\s+on`,
+    `what\\s+am\\s+i\\s+working\\s+on(?:\\s+here|\\s+right\\s+now)?`,
+    `(?:what\\s+(?:are|is)|whats)\\s+(?:the\\s+)?(?:instructions?|directions?|steps|setup)(?:\\s+(?:for|to|on)\\s+${drillObject})?`,
+    `whats\\s+(?:the\\s+)?(?:right|proper|correct)\\s+way\\s+to\\s+(?:do|perform|run)\\s+${drillObject}`,
+    `whats\\s+(?:the\\s+)?(?:move|play)\\s+here`,
+    `whats\\s+${drillObject}\\s+about`,
+    `whats\\s+${drill}\\s+supposed\\s+to\\s+look\\s+like`,
+    `what\\s+should\\s+${drillObject}\\s+look\\s+like`,
+    `what\\s+do\\s+i\\s+need\\s+to\\s+know(?:\\s+(?:for|on|with)\\s+${drillObject})?`,
+    `whats\\s+(?:the\\s+)?(?:point|purpose|goal|idea)(?:\\s+(?:for|of|on|with)\\s+${drillObject})`,
+    `whats\\s+(?:the\\s+)?(?:technique|form|process)(?:\\s+(?:for|of|on)\\s+${drillObject})?`,
+    `what\\s+should\\s+i\\s+focus\\s+on(?:\\s+(?:for|on|with)\\s+${drillObject})?`,
+    `what\\s+does\\s+${drillObject}\\s+mean`,
+    `(?:give|read)(?:\\s+me)?\\s+(?:the\\s+)?(?:instructions|directions|steps)(?:\\s+(?:for|to|on)\\s+${drillObject})?`,
+    `(?:can\\s+you\\s+)?go\\s+over\\s+${drillObject}`,
+    `(?:explain|describe)(?:\\s+to\\s+me)?\\s+what\\s+i(?:m|\\s+am)\\s+doing(?:\\s+here|\\s+right\\s+now)?`,
+    `(?:explain|describe)(?:\\s+to\\s+me)?\\s+what\\s+i(?:m|\\s+am)\\s+supposed\\s+to\\s+do`,
+    `(?:remind|tell)(?:\\s+me)?\\s+what\\s+${drillObject}\\s+is`,
+    `what\\s+do\\s+i\\s+do\\s+next\\s+(?:for|on|with)\\s+${drillObject}`,
+    `(?:can\\s+you\\s+)?break\\s+down\\s+what\\s+i\\s+need\\s+to\\s+do`,
+    `(?:remind|tell)(?:\\s+me)?\\s+(?:what|how)(?:\\s+i(?:m|\\s+am))?\\s+(?:to|supposed\\s+to|should)\\s+(?:do|perform|execute)(?:\\s+${drill})?`,
+    `(?:i\\s+)?(?:dont|do\\s+not)\\s+(?:know|understand|remember)\\s+(?:what|how)\\s+to\\s+(?:do|perform|execute)(?:\\s+(?:for|on|with)\\s+${drillObject}|\\s+${drillObject})?`,
+    `what(?:s|\\s+is)\\s+${drill}`,
+    `what(?:s|\\s+is)\\s+(?:the\\s+)?goal(?:\\s+(?:for|of|on)\\s+${drillObject})`,
+    `where\\s+do\\s+i\\s+start(?:\\s+(?:for|on|with)\\s+${drillObject})?`,
+    `(?:can\\s+you\\s+)?break\\s+${drillObject}\\s+down`,
+    `how\\s+to\\s+(?:do|perform|execute)\\s+${drillObject}`,
+  ];
+  const matched = patterns.some((pattern) =>
+    new RegExp(`^${leadingPadding}(?:${pattern})${trailingPadding}$`).test(text)
+  );
+  return matched
+    ? intent(
+        "drill_explanation",
+        { target: "current" },
+        "Explain current drill heard",
+        0.99,
+      )
+    : null;
+};
+
+function normalizedRequestedDrillName(value: string): string | null {
+  const query = value
+    .replace(/\b(?:now|today|please|for me|instead)\b.*$/, "")
+    .replace(/^(?:the\s+)?(?:drill|exercise)\s+/, "")
+    .replace(/\s+(?:drill|exercise)$/, "")
+    .trim();
+  return query.length >= 2 &&
+      !/^(?:this|that|it|next|previous|current|a drill|an exercise|drill|exercise)$/.test(query)
+    ? query
+    : null;
+}
+
+const LOCAL_NAVIGATION_PADDING = new Set([
+  "coach",
+  "hey",
+  "yo",
+  "please",
+  "okay",
+  "ok",
+  "just",
+  "now",
+  "there",
+]);
+
+function trimLocalNavigationPadding(text: string): string {
+  const words = text.split(" ").filter(Boolean);
+  for (let index = 0; index < 2 && LOCAL_NAVIGATION_PADDING.has(words[0]); index += 1) {
+    words.shift();
+  }
+  for (
+    let index = 0;
+    index < 2 && LOCAL_NAVIGATION_PADDING.has(words.at(-1) ?? "");
+    index += 1
+  ) {
+    words.pop();
+  }
+  return words.join(" ");
+}
+
+function localNavigationCategoryName(value: string): string | null {
+  const query = normalizedRequestedDrillName(value);
+  if (!query) return null;
+  if (/^(?:shooting|shoot)$/.test(query)) return "shooting";
+  if (/^(?:finishing|finish|layup|layups|rim finishes?)$/.test(query)) return "finishing";
+  if (/^(?:ball handling|ballhandling|handles|dribbling|dribble)$/.test(query)) {
+    return "ball handling";
+  }
+  if (/^(?:defense|defence|defensive)$/.test(query)) return "defense";
+  if (/^(?:conditioning|fitness)$/.test(query)) return "conditioning";
+  return null;
+}
+
+export const parseDrillRequestIntent: Parser = (text) => {
+  const add = text.match(
+    /^(?:add|include|insert|put\s+in)(?:\s+(?:a|an|the))?\s+(.+?)(?:\s+(?:drill|exercise))?$/,
+  );
+  const query = normalizedRequestedDrillName(add?.[1] ?? "");
+  if (!query) return null;
+  return intent(
+    "drill_request",
+    { query, action: "add" },
+    `Add ${query} drill heard`,
+    0.99,
+  );
+};
+
 function navigationUnit(value: string | undefined): CoachSpeechUnit {
   return value === "set" ? "set" : "drill";
 }
 
 export const parseNavigationIntent: Parser = (text) => {
+  text = trimLocalNavigationPadding(text);
   let match = text.match(
     /^(?:whats|what is) (?:the )?(next|current) (set|drill|exercise|thing)|^(?:what|which) (set|drill|exercise|thing) am i(?:\s+on)?(?:\s+\d+\s+(?:for|out of)\s+\d+)?$|^what comes after this$/
   );
@@ -543,6 +887,17 @@ export const parseNavigationIntent: Parser = (text) => {
       "navigation",
       { mode: "query", unit: "set", target: { type: "next" } },
       "What's next heard"
+    );
+  }
+  if (
+    /^(?:bring|take|send)(?:\s+me)?\s+(?:to\s+)?(?:whats|what is)\s+(?:up\s+)?next(?:\s+(?:drill|exercise|thing))?$/.test(
+      text,
+    )
+  ) {
+    return intent(
+      "navigation",
+      { mode: "action", unit: "drill", target: { type: "next" } },
+      "Move to next drill heard",
     );
   }
   if (/^(?:(?:let'?s\s+)?(?:move on|keep going|continue)|let'?s(?:\s+now)?\s+continue|let'?s go)$/.test(text)) {
@@ -627,21 +982,22 @@ export const parseNavigationIntent: Parser = (text) => {
   if (match) {
     const ordinalText = match[1] ?? match[2];
     const ordinal = parseOrdinal(ordinalText);
-    if (ordinal == null || ordinal < 1 || ordinal > 100) return null;
-    const unit = /\bset\b/.test(text) ? "set" : "drill";
-    return intent(
-      "navigation",
-      { mode: "action", unit, target: { type: "ordinal", ordinal } },
-      `Go to ${unit} ${ordinal} heard`
-    );
+    if (ordinal != null && ordinal >= 1 && ordinal <= 100) {
+      const unit = /\bset\b/.test(text) ? "set" : "drill";
+      return intent(
+        "navigation",
+        { mode: "action", unit, target: { type: "ordinal", ordinal } },
+        `Go to ${unit} ${ordinal} heard`
+      );
+    }
   }
 
   match = text.match(
     /^(?:move|go)(?:\s+me)?\s+to\s+(?:the\s+)?(?:drill|exercise)\s+(?:named\s+)?(.+)$/
   );
   if (match) {
-    const name = match[1].trim();
-    if (name.length < 2 || /^(?:next|previous|first|last|current)$/.test(name)) return null;
+    const name = normalizedRequestedDrillName(match[1]);
+    if (!name || /^(?:next|previous|first|last|current)$/.test(name)) return null;
     return intent(
       "navigation",
       { mode: "action", unit: "drill", target: { type: "named", name, match: "exact" } },
@@ -650,16 +1006,42 @@ export const parseNavigationIntent: Parser = (text) => {
     );
   }
   match = text.match(
+    /^(?:move|go)(?:\s+me)?\s+(?:to|into|onto|on|over\s+to)\s+(?:the\s+)?(.+)$/,
+  );
+  if (match) {
+    const name = normalizedRequestedDrillName(match[1]);
+    if (!name || /^(?:next|previous|first|last|current)$/.test(name)) return null;
+    return intent(
+      "navigation",
+      { mode: "action", unit: "drill", target: { type: "named", name, match: "exact" } },
+      `Go to ${name} heard`,
+      0.98,
+    );
+  }
+  match = text.match(
     /^(?:move|go)(?:\s+me)?\s+to\s+(?:the\s+)?(.+)\s+(?:drill|exercise)$/
   );
   if (match) {
-    const name = match[1].trim();
-    if (name.length < 2 || /^(?:next|previous|first|last|current)$/.test(name)) return null;
+    const name = normalizedRequestedDrillName(match[1]);
+    if (!name || /^(?:next|previous|first|last|current)$/.test(name)) return null;
     return intent(
       "navigation",
       { mode: "action", unit: "drill", target: { type: "named", name, match: "exact" } },
       `Go to ${name} heard`,
       0.98
+    );
+  }
+  match = text.match(
+    /^(?:take|bring|send|put)(?:\s+me)?\s+(?:to|into|onto|on|over\s+to)\s+(?:the\s+)?(?:(?:drill|exercise)\s+)?(.+)$/,
+  );
+  if (match) {
+    const name = normalizedRequestedDrillName(match[1]);
+    if (!name) return null;
+    return intent(
+      "navigation",
+      { mode: "action", unit: "drill", target: { type: "named", name, match: "exact" } },
+      `Go to ${name} heard`,
+      0.98,
     );
   }
   return null;
@@ -861,7 +1243,50 @@ export const parseRemoveDrillIntent: Parser = (text) => {
   );
 };
 
-export const parseSetPrescriptionIntent: Parser = (text) => {
+export function parseSetPrescriptionIntent(
+  text: string,
+  context: CoachSpeechParseContext = {},
+): CoachSpeechIntent | null {
+  const durationValue = `(${NUMBER}|a|an)`;
+  const durationUnit = "(seconds?|secs?|minutes?|mins?)";
+  const timerDurationPadding = "(?:[a-z0-9]+\\s+){0,3}";
+  const timerDurationTrailingPadding = "(?:\\s+[a-z0-9]+){0,3}";
+  // “Change it to three minutes instead of two” means three minutes. Remove
+  // the old value before applying the bounded conversational-command grammar.
+  const durationText = text.replace(
+    new RegExp(
+      `\\s+instead\\s+of\\s+(?:${NUMBER}|a|an)\\s*(?:seconds?|secs?|minutes?|mins?)(?:\\s+[a-z0-9]+){0,3}$`,
+    ),
+    "",
+  ).trim();
+  const naturalDuration =
+    durationText.match(
+      new RegExp(
+        `^${timerDurationPadding}(?:i\\s+)?(?:only\\s+)?(?:want|wanna|would\\s+like|need|prefer)\\s+(?:to\\s+)?(?:(?:do|have|make|set|run)\\s+)?(?:(?:this|that|the\\s+current)\\s+)?(?:set\\s+)?(?:for\\s+)?${durationValue}\\s*${durationUnit}(?:\\s+for\\s+(?:this|that|the\\s+current)\\s+set)?${timerDurationTrailingPadding}$`,
+      ),
+    ) ??
+    durationText.match(
+      new RegExp(
+        `^${timerDurationPadding}(?:change|make|set)\\s+(?:(?:this|that|the|my)\\s+)?(?:current\\s+)?set\\s+(?:timer|duration|time)\\s+(?:to(?:\\s+be)?|for)\\s+${durationValue}\\s*${durationUnit}${timerDurationTrailingPadding}$`,
+      ),
+    ) ??
+    durationText.match(
+      new RegExp(
+        `^${timerDurationPadding}(?:(?:can|could|would)\\s+(?:we|i)\\s+)?(?:just\\s+)?(?:(?:let(?:s|\\s+s)|let\\s+us)\\s+)?(?:do|make|set|run)\\s+(?:(?:this|that|the\\s+current)\\s+)?(?:set\\s+)?(?:for\\s+)?${durationValue}\\s*${durationUnit}(?:\\s+for\\s+(?:this|that|the\\s+current)\\s+set)?${timerDurationTrailingPadding}$`,
+      ),
+    );
+  if (naturalDuration) {
+    const durationSeconds = parseDuration(naturalDuration[1], naturalDuration[2]);
+    if (durationSeconds == null || durationSeconds < 5 || durationSeconds > 3600) {
+      return null;
+    }
+    return intent(
+      "set_prescription",
+      { durationSeconds },
+      `Change set duration to ${formatDurationLabel(durationSeconds)} heard`,
+      0.99,
+    );
+  }
   const duration =
     text.match(
     new RegExp(
@@ -926,38 +1351,186 @@ export const parseSetPrescriptionIntent: Parser = (text) => {
     );
   }
 
-  const desiredAttempts = text.match(
-    new RegExp(
-      `^(?:[a-z0-9]+\\s+){0,8}?(?:(?:i\\s+(?:actually\\s+)?(?:only\\s+)?(?:want|would like)\\s+(?:to\\s+)?|can\\s+(?:i|we)\\s+|could\\s+i\\s+|let'?s\\s+|we\\s+should\\s+)(?:shoot\\s+|take\\s+)?|(?:shoot\\s+|take\\s+))(${NUMBER})\\s+(?:total\\s+)?shots?(?!\\s+more\\b)(?:\\s+(?:total|right now))?(?:\\s+(?:for|on|in)\\s+(?:this|that|the current)\\s+set)?(?:\\s+instead\\s+of\\s+${NUMBER})?(?:\\s+[a-z0-9]+){0,8}$`
-    )
+  // Target changes must stay compact: tolerate brief STT conversational
+  // padding without turning an ordinary long sentence into a workout edit.
+  const padding = "(?:[a-z0-9]+\\s+){0,3}?";
+  const trailingPadding = "(?:\\s+[a-z0-9]+){0,3}";
+  const bounded = (pattern: string): RegExpMatchArray | null =>
+    text.match(new RegExp(`^${padding}(?:${pattern})${trailingPadding}$`));
+  const attemptNoun = "(?:attempts?|shots?)";
+  const currentSet = "(?:(?:this|that|the current)\\s+set)";
+  const targetReference = `(?:(?:the\\s+)?(?:target\\s+)?${attemptNoun}|${currentSet}(?:'?s)?(?:\\s+(?:target\\s+)?${attemptNoun})?)`;
+  const targetVerb = "(?:set|change|update|adjust|make)";
+  const targetNumber = (value: string | undefined): number | null => {
+    const targetAttempts = value ? parseSpokenNumber(value) : null;
+    return targetAttempts != null && targetAttempts >= 1 && targetAttempts <= 500
+      ? targetAttempts
+      : null;
+  };
+
+  const fromTo = bounded(
+    `${targetVerb}\\s+${targetReference}\\s+from\\s+(${NUMBER})\\s+to\\s+(${NUMBER})`,
   );
-  if (desiredAttempts) {
-    const targetAttempts = parseSpokenNumber(desiredAttempts[1]);
-    if (targetAttempts == null || targetAttempts < 1 || targetAttempts > 500) {
-      return null;
-    }
+  if (fromTo) {
+    const targetAttempts = targetNumber(fromTo[2]);
+    if (targetAttempts == null) return null;
+    return intent("set_prescription", { targetAttempts }, `Change target attempts to ${targetAttempts} heard`, 0.99);
+  }
+
+  const namedAbsolute = bounded(
+    `${targetVerb}\\s+${targetReference}\\s+(?:to|at|for)\\s+(${NUMBER})`,
+  );
+  if (namedAbsolute) {
+    const targetAttempts = targetNumber(namedAbsolute[1]);
+    if (targetAttempts == null) return null;
+    return intent("set_prescription", { targetAttempts }, `Change target attempts to ${targetAttempts} heard`, 0.99);
+  }
+
+  const absolute = bounded(
+    `(?:${targetVerb}\\s+${currentSet}\\s+(?:to\\s+)?|(?:i\\s+)?(?:want|need|would\\s+like|prefer)\\s+(?:to\\s+)?(?:shoot|take)\\s+|(?:can|could)\\s+(?:i|we)\\s+(?:shoot|take)\\s+|(?:i\\s+)?(?:shoot|take)\\s+)(${NUMBER})\\s+(?:total\\s+)?${attemptNoun}(?!\\s+more\\b)(?:\\s+(?:total|right\\s+now))?(?:\\s+(?:for|on|in)\\s+${currentSet})?(?:\\s+instead\\s+of\\s+${NUMBER})?`,
+  );
+  if (absolute) {
+    const targetAttempts = targetNumber(absolute[1]);
+    if (targetAttempts == null) return null;
+    return intent("set_prescription", { targetAttempts }, `Change target attempts to ${targetAttempts} heard`, 0.99);
+  }
+
+  const insteadOf = bounded(
+    `(?:${targetVerb}\\s+)?(${NUMBER})\\s+${attemptNoun}\\s+instead\\s+of\\s+${NUMBER}(?:\\s+(?:for|on|in)\\s+${currentSet})?`,
+  );
+  if (insteadOf) {
+    const targetAttempts = targetNumber(insteadOf[1]);
+    if (targetAttempts == null) return null;
+    return intent("set_prescription", { targetAttempts }, `Change target attempts to ${targetAttempts} heard`, 0.99);
+  }
+
+  const relative = bounded(
+    `(?:${targetVerb}\\s+)?(increase|raise|add|extend|decrease|lower|reduce|shorten)\\s+(?:the\\s+)?(?:target\\s+)?${attemptNoun}(?:\\s+(?:for|on|in)\\s+${currentSet})?\\s+(?:by\\s+)?(${NUMBER})`,
+  );
+  if (relative) {
+    const amount = targetNumber(relative[2]);
+    if (amount == null) return null;
+    const attemptAdjustment = /^(?:increase|raise|add|extend)$/.test(relative[1])
+      ? amount
+      : -amount;
     return intent(
       "set_prescription",
-      { targetAttempts },
-      `Change target attempts to ${targetAttempts} heard`,
-      0.99
+      { attemptAdjustment },
+      `${attemptAdjustment > 0 ? "Increase" : "Decrease"} target attempts by ${amount} heard`,
+      0.99,
     );
   }
 
-  const additionalAttempts = text.match(
-    new RegExp(
-      `^(?:[a-z0-9]+\\s+){0,8}?(?:(?:i\\s+(?:actually\\s+)?(?:want|would like)\\s+(?:to\\s+)?|can\\s+(?:i|we)\\s+|could\\s+i\\s+|let'?s\\s+|we\\s+should\\s+)(?:shoot\\s+|take\\s+)?|(?:shoot\\s+|take\\s+))(${NUMBER})(?:\\s+more(?:\\s+(?:attempts?|shots?))?|\\s+(?:attempts?|shots?)\\s+more)(?:\\s+(?:for|on|in)\\s+(?:this|that|the current)\\s+set)?(?:\\s+[a-z0-9]+){0,8}$`
-    )
-  );
-  if (additionalAttempts) {
-    const additional = parseSpokenNumber(additionalAttempts[1]);
-    if (additional == null || additional < 1 || additional > 500) return null;
+  // "I made two more" is a shot result, not a target extension. Do not let
+  // bounded conversational padding consume the shot verb before this parser.
+  const wantsRemaining = new RegExp(
+    `\\b(?:only|just)\\s+(?:want\\s+)?(?:to\\s+)?(?:(?:shoot|take|do)\\s+)?${NUMBER}\\s+more\\b`,
+  ).test(text);
+  const more = new RegExp(
+    `\\b(?:made|make|hit|miss(?:ed)?|brick(?:ed)?|airball(?:ed)?)\\s+${NUMBER}\\s+more\\b`,
+  ).test(text)
+    ? null
+    : bounded(
+        `(?:(?:i\\s+)?(?:want|need|would\\s+like)\\s+(?:to\\s+)?(?:shoot|take)\\s+|(?:can|could)\\s+(?:i|we)\\s+(?:shoot|take)\\s+|(?:i\\s+)?(?:shoot|take)\\s+)?(${NUMBER})\\s+(?:more(?:\\s+${attemptNoun})?|${attemptNoun}\\s+more)(?:\\s+(?:for|on|in)\\s+${currentSet})?`,
+      );
+  if (more) {
+    const additional = targetNumber(more[1]);
+    if (additional == null) return null;
     return intent(
       "set_prescription",
-      { targetAttempts: additional, additionalAttempts: true },
-      `Extend target attempts by ${additional} heard`,
-      0.99
+      wantsRemaining
+        ? { targetAttempts: additional, remainingAttempts: true }
+        : { targetAttempts: additional, additionalAttempts: true },
+      wantsRemaining
+        ? `Set remaining attempts to ${additional} heard`
+        : `Extend target attempts by ${additional} heard`,
+      0.99,
     );
+  }
+
+  if (context.activeShootingSet) {
+    const reverseReplacement = bounded(
+      `(?:(?:instead\\s+of|rather\\s+than|not|forget)\\s+${NUMBER}(?:\\s+${attemptNoun})?(?:\\s*,?\\s*(?:do|make\\s+it|lets\\s+do|i\\s+want(?:\\s+to\\s+shoot)?)\\s+)|dont\\s+do\\s+${NUMBER}(?:\\s+${attemptNoun})?\\s*,?\\s*(?:do|make\\s+it)\\s+)(${NUMBER})(?:\\s+${attemptNoun})?`,
+    );
+    if (reverseReplacement) {
+      const targetAttempts = targetNumber(reverseReplacement[1]);
+      if (targetAttempts == null) return null;
+      return intent("set_prescription", { targetAttempts }, `Change target attempts to ${targetAttempts} heard`, 0.99);
+    }
+
+    const decreaseByAmount = bounded(
+      `(?:(?:do|make\\s+it|lets\\s+do|i\\s+(?:want\\s+)?(?:to\\s+)?do)\\s+)?(${NUMBER})\\s+(?:less|fewer)(?:\\s+${attemptNoun})?`,
+    );
+    if (decreaseByAmount) {
+      const decrease = targetNumber(decreaseByAmount[1]);
+      if (decrease == null) return null;
+      return intent(
+        "set_prescription",
+        { attemptAdjustment: -decrease },
+        `Decrease target attempts by ${decrease} heard`,
+        0.99,
+      );
+    }
+
+    const relativeShort = bounded(
+      `(?:(?:add|give\\s+me|extend|increase|bump\\s+(?:it\\s+)?up\\s+by|make\\s+it)\\s+(?:another\\s+)?(${NUMBER})(?:\\s+(?:more\\s+)?${attemptNoun})?|(?:take\\s+off|take\\s+(${NUMBER})\\s+off|remove|drop\\s+(?:it\\s+)?by|lower\\s+(?:it\\s+)?by|bring\\s+(?:it\\s+)?down\\s+by|cut\\s+(?:it\\s+)?by|knock\\s+(${NUMBER})\\s+off)\\s*(${NUMBER})?(?:\\s+(?:less|fewer|${attemptNoun}))?)`,
+    );
+    if (relativeShort) {
+      const increase = targetNumber(relativeShort[1]);
+      const decrease = targetNumber(
+        relativeShort[2] ?? relativeShort[3] ?? relativeShort[4],
+      );
+      if (increase != null) {
+        return intent(
+          "set_prescription",
+          { targetAttempts: increase, additionalAttempts: true },
+          `Extend target attempts by ${increase} heard`,
+          0.99,
+        );
+      }
+      if (decrease != null) {
+        return intent(
+          "set_prescription",
+          { attemptAdjustment: -decrease },
+          `Decrease target attempts by ${decrease} heard`,
+          0.99,
+        );
+      }
+    }
+
+    // These short conversational forms are intentionally active-set-only: out
+    // of workout context, "fifteen is good" is far too ambiguous to edit.
+    const replacement = bounded(
+      `(?:(?:i\\s+)?(?:want|wanna|need|prefer|will|am\\s+gonna|am\\s+going\\s+to)|ill|let\\s+me|lets|can\\s+(?:i|we|you)|could\\s+(?:i|we|you)|would\\s+(?:i|we)|how\\s+about|what\\s+about|do|make|set|change|switch|put|give\\s+me|just|only|maybe|actually|nah|no|wait|sorry|i\\s+(?:meant|said)|never\\s+mind|make\\s+that|change\\s+that|i\\s+(?:would\\s+)?rather)\\s+(?:(?:to\\s+)?(?:shoot|take|do)\\s+)?(?:(?:it|this|that|this\\s+(?:set|one)|the\\s+(?:target|attempts?|shots?))\\s+)?(?:to\\s+|at\\s+)?(${NUMBER})(?:\\s+(?:total\\s+)?${attemptNoun})?(?:\\s+(?:for|on|in)\\s+${currentSet})?(?:\\s+(?:is|should\\s+be)\\s+(?:good|fine|okay|ok|work(?:s)?))?(?:\\s+instead(?:\\s+of\\s+${NUMBER})?)?`,
+    );
+    if (replacement) {
+      const targetAttempts = targetNumber(replacement[1]);
+      if (targetAttempts == null) return null;
+      return intent("set_prescription", { targetAttempts }, `Change target attempts to ${targetAttempts} heard`, 0.99);
+    }
+
+    const remaining = bounded(
+      `(?:(?:i\\s+)?(?:only\\s+)?(?:want|need)\\s+(?:to\\s+)?(?:shoot|take|do)\\s+|(?:let\\s+me|just)\\s+(?:shoot|take|do)?\\s*|(?:shoot|take|do)\\s+)?(${NUMBER})\\s+(?:more(?:\\s+${attemptNoun})?|another\\s+${NUMBER})`,
+    );
+    if (remaining) {
+      const remainingAttempts = targetNumber(remaining[1]);
+      if (remainingAttempts == null) return null;
+      return intent(
+        "set_prescription",
+        { targetAttempts: remainingAttempts, remainingAttempts: true },
+        `Set remaining attempts to ${remainingAttempts} heard`,
+        0.99,
+      );
+    }
+
+    const numberFirst = bounded(
+      `(${NUMBER})(?:\\s+(?:total\\s+)?${attemptNoun}(?:\\s+total)?(?:\\s+(?:for|on|in)\\s+${currentSet})?|\\s+(?:for|on|in)\\s+(?:this\\s+)?(?:set|one)|\\s+instead|\\s+(?:is\\s+)?(?:good|fine|okay|ok|works?|should\\s+be\\s+good))`,
+    );
+    if (numberFirst) {
+      const targetAttempts = targetNumber(numberFirst[1]);
+      if (targetAttempts == null) return null;
+      return intent("set_prescription", { targetAttempts }, `Change target attempts to ${targetAttempts} heard`, 0.99);
+    }
   }
 
   const singleTarget = text.match(
@@ -988,22 +1561,38 @@ export const parseSetPrescriptionIntent: Parser = (text) => {
       : `Change target attempts to ${value} heard`,
     0.99
   );
-};
+}
 
 export const parseUndoShotIntent: Parser = (text) => {
+  const padding = "(?:[a-z0-9]+\\s+){0,2}";
+  const trailingPadding = "(?:\\s+[a-z0-9]+){0,2}";
   if (
-    !/^(?:(?:please\s+)?(?:undo|revert|take back|remove|delete)(?:\s+(?:that|it|the|my))?(?:\s+(?:last|latest|previous))?(?:\s+(?:shot|make|miss|result))?|scratch that)$/.test(
-      text
+    !new RegExp(
+      `^${padding}(?:(?:undo|revert)(?:\\s+(?:that|it|the|my|last|latest|previous|one|shot|make|miss|result))*|take(?:\\s+back(?:\\s+(?:that|it|the|my|last|latest|previous|one|shot|result))*|\\s+(?:(?:that|it|the|my|last|latest|previous|one|shot|result)\\s+)*back)|scratch(?:\\s+(?:that|it|the|my|last|latest|previous|one|shot|result))*|redo(?:\\s+(?:that|it|the|my|last|latest|previous|one|shot|result))*)${trailingPadding}$`,
+    ).test(
+      text,
     )
   ) {
     return null;
   }
-  return intent("undo_shot", {}, "Undo last shot heard", 0.99);
+  return intent(
+    "correct_last_shot",
+    { action: "flip" },
+    "Flip last shot heard",
+    0.99,
+  );
 };
 
 export const parseShotCorrectionIntent: Parser = (text) => {
-  const correction = text.match(
-    /^(?:(?:hey\s+)?coach\s+)?(?:you\s+)?(?:counted|marked|logged)\s+(?:a\s+)?(make|miss)(?:\s+as|\s+instead of)\s+(?:a\s+)?(make|miss)$/,
+  // Corrections are deliberately bounded to four unrelated words on either
+  // side. This tolerates conversational STT padding without treating a long,
+  // ordinary sentence as a score edit.
+  const padding = "(?:[a-z0-9]+\\s+){0,4}";
+  const trailingPadding = "(?:\\s+[a-z0-9]+){0,4}";
+  const parseBounded = (pattern: string): RegExpMatchArray | null =>
+    text.match(new RegExp(`^${padding}(?:${pattern})${trailingPadding}$`));
+  const correction = parseBounded(
+    "(?:you\\s+)?(?:counted|marked|logged)\\s+(?:a\\s+)?(make|miss)(?:\\s+as|\\s+instead\\s+of)\\s+(?:a\\s+)?(make|miss)",
   );
   if (correction && correction[1] !== correction[2]) {
     return intent(
@@ -1013,11 +1602,37 @@ export const parseShotCorrectionIntent: Parser = (text) => {
       0.99,
     );
   }
-  const lastShot = text.match(
-    /^(?:(?:hey\s+)?coach\s+)?(?:i\s+)?(?:actually\s+)?(made|missed)(?:\s+(?:that|the))?\s+last(?:\s+one|\s+shot)?$/,
+  const statedResult = parseBounded(
+    "(?:the\\s+)?(?:last|latest|previous)(?:\\s+(?:shot|one|result))?\\s+(?:was|is|should\\s+(?:be|have\\s+been))\\s+(?:a\\s+)?(make|made|hit|swish|bucket|miss|missed|brick|bricked|airball|airballed)",
+  );
+  if (statedResult) {
+    const to = /^(?:make|made|hit|swish|bucket)$/.test(statedResult[1]) ? "make" : "miss";
+    const from = to === "make" ? "miss" : "make";
+    return intent(
+      "correct_last_shot",
+      { from, to },
+      `Correct last ${from} to ${to} heard`,
+      0.99,
+    );
+  }
+  const disputedResult = text.match(
+    /\b(?:youre|your|you are)\s+wrong\b(?:\s+[a-z0-9]+){0,4}?\s+(?:i\s+)?(?:actually\s+)?(made|missed|hit|bricked|airballed)\b/,
+  );
+  if (disputedResult) {
+    const to = /^(?:made|hit)$/.test(disputedResult[1]) ? "make" : "miss";
+    const from = to === "make" ? "miss" : "make";
+    return intent(
+      "correct_last_shot",
+      { from, to },
+      `Correct disputed ${from} to ${to} heard`,
+      0.99,
+    );
+  }
+  const lastShot = parseBounded(
+    "(?:i\\s+)?(?:actually\\s+)?(made|missed|hit|bricked|airballed)(?:\\s+(?:that|the))?\\s+(?:last|latest|previous)(?:\\s+(?:one|shot|result))?",
   );
   if (!lastShot) return null;
-  const to = lastShot[1] === "made" ? "make" : "miss";
+  const to = /^(?:made|hit)$/.test(lastShot[1]) ? "make" : "miss";
   const from = to === "make" ? "miss" : "make";
   return intent(
     "correct_last_shot",
@@ -1027,30 +1642,74 @@ export const parseShotCorrectionIntent: Parser = (text) => {
   );
 };
 
+export const parseGenericShotCorrectionIntent: Parser = (text) => {
+  // Let the more specific disputed-result parser own phrases such as
+  // "you're wrong, I missed that one"; otherwise two parsers match and the
+  // intentionally unambiguous parser dispatcher rejects the command.
+  if (
+    /\b(?:youre|your|you are)\s+wrong\b.*\b(?:made|missed|hit|bricked|airballed)\b/.test(
+      text,
+    )
+  ) {
+    return null;
+  }
+  const padding = "(?:[a-z0-9]+\\s+){0,2}";
+  const trailingPadding = "(?:\\s+[a-z0-9]+){0,2}";
+  const generic = [
+    "(?:youre|your|you\\s+are)\\s+(?:wrong|off)(?:\\s+on\\s+(?:that|it|that\\s+one))?",
+    "(?:that|thats|it|that\\s+call|the\\s+last\\s+(?:one|shot)|that\\s+last\\s+one|the\\s+result|that\\s+result|the\\s+count|my\\s+count|your\\s+count|the\\s+shot\\s+count|my\\s+stats|the\\s+stats)(?:\\s+(?:was|is|isnt|wasnt))?\\s+(?:wrong|off|incorrect|not\\s+right|not\\s+correct|a\\s+(?:mistake|bad\\s+call|error))",
+    "(?:you\\s+)?got\\s+(?:that|it|that\\s+one|the\\s+last\\s+shot|my\\s+stats|the\\s+result)?\\s*(?:wrong|backwards)",
+    "(?:you\\s+)?(?:called|marked|recorded|counted|logged|entered|read|saw)\\s+(?:that|it|that\\s+one|the\\s+last\\s+shot|the\\s+result|my\\s+stats)?\\s*(?:wrong|incorrectly)",
+    "(?:you\\s+)?put\\s+(?:(?:that|it)\\s+(?:in\\s+)?wrong|the\\s+wrong\\s+thing)",
+    "(?:you\\s+)?(?:made\\s+(?:an?\\s+)?(?:mistake|error)|messed(?:\\s+(?:that|it|that\\s+one))?\\s+up|screwed(?:\\s+(?:that|it|that\\s+one))?\\s+up|mixed(?:\\s+(?:that|it|that\\s+one))?\\s+up|flipped\\s+(?:that|it|that\\s+one)|switched\\s+(?:that|it|those\\s+up)|confused\\s+(?:that|it)|miscounted(?:\\s+(?:that|it))?|misread(?:\\s+(?:that|it|the\\s+shot))?)",
+    "(?:you\\s+)?(?:have|got)\\s+(?:that|it)\\s+backwards",
+    "(?:you\\s+)?(?:didnt\\s+(?:get|mark|count)\\s+(?:that|it)\\s+right|need\\s+to\\s+(?:fix|change|correct)\\s+(?:that|it|the\\s+last\\s+one)|gotta\\s+(?:fix|change|correct)\\s+(?:that|it|the\\s+last\\s+one))",
+    "(?:that|it)\\s+(?:isnt|aint|wasnt)\\s+(?:right|correct)",
+    "(?:wrong|incorrect|not\\s+right|bad\\s+call|wrong\\s+call|correction(?:\\s+on\\s+(?:that|it|the\\s+last\\s+one))?)",
+    "(?:fix|correct|change|switch|flip|reverse|check|recheck)\\s+(?:your\\s+call|that|that\\s+one|the\\s+last\\s+one|the\\s+last\\s+shot|the\\s+result)(?:\\s+again)?",
+    "(?:look\\s+(?:again|at\\s+that\\s+again)|i\\s+(?:need|want)\\s+to\\s+correct\\s+(?:that|it)|let\\s+me\\s+correct\\s+(?:that|it)|(?:that|it)\\s+needs\\s+(?:a\\s+)?(?:correction|to\\s+be\\s+(?:fixed|corrected))|you\\s+missed\\s+(?:one|that\\s+one)|you\\s+got\\s+one\\s+wrong)",
+    "(?:correction|my\\s+mistake|i\\s+was\\s+wrong)",
+  ].some((pattern) => new RegExp(`^${padding}(?:${pattern})${trailingPadding}$`).test(text));
+  return generic
+    ? intent("correct_last_shot", { action: "flip" }, "Flip last shot heard", 0.99)
+    : null;
+};
+
 const PARSERS: readonly Parser[] = [
   parseSaveNoteIntent,
   parseSpeechControlIntent,
   parseUndoShotIntent,
   parseShotCorrectionIntent,
+  parseGenericShotCorrectionIntent,
+  parseMissTotalCorrectionIntent,
   parseShotIntent,
+  parseDrillExplanationIntent,
   parseTimerIntent,
   parseNavigationIntent,
   parseCompletionIntent,
   parseProgressIntent,
   parseListDrillsIntent,
   parseRepeatIntent,
-  parseRemoveDrillIntent,
   parseSetPrescriptionIntent,
 ];
 
 export function parseCoachSpeechIntent(
-  transcript: string | null | undefined
+  transcript: string | null | undefined,
+  context: CoachSpeechParseContext = {},
 ): CoachSpeechIntent | null {
   const text = normalizeCoachSpeech(transcript);
   if (!text) return null;
+  // An explicit score ratio always describes current session progress, never
+  // a set target. Preserve even an impossible ratio so the local execution
+  // path can explain the validation error instead of routing its denominator
+  // into a target-changing command or model tool.
+  const scoreRatio = parseShotIntent(text);
+  if (scoreRatio?.kind === "shot" && scoreRatio.args.mode === "replace") {
+    return scoreRatio;
+  }
   // A request to shoot a different number of shots is a workout edit, even
   // though its wording can resemble a general shooting question.
-  const setPrescription = parseSetPrescriptionIntent(text);
+  const setPrescription = parseSetPrescriptionIntent(text, context);
   if (setPrescription) return setPrescription;
   const matches = PARSERS.map((parser) => parser(text)).filter(
     (result): result is CoachSpeechIntent => result != null

@@ -68,7 +68,7 @@ try {
   socket.open();
   void connecting;
   client.createContext("turn-1");
-  client.pushText("turn-1", "Set one is ready.");
+  client.pushText("turn-1", "Set one is ready.", true);
 
   const sent = socket.sent.map((message) => JSON.parse(message));
   assert(sent[0].create.audioConfig.audioEncoding === "PCM", "context must request PCM");
@@ -99,16 +99,30 @@ try {
   socket.message({ result: { contextId: "turn-1", flushCompleted: {} } });
   assert(audio[0] === "cGNt", "PCM base64 must be forwarded unchanged");
   assert(completed[0] === "turn-1", "final flush must complete the context");
+  assert(
+    socket.sent
+      .map((message) => JSON.parse(message))
+      .some(
+        (message) =>
+          message.contextId === "turn-1" && message.close_context,
+      ),
+    "a completed turn must release its server-side Inworld context",
+  );
 
   client.createContext("turn-2");
   client.pushText("turn-2", "First phrase. ".repeat(20));
   client.pushText("turn-2", "Final sentence.", true);
-  const turnTwoMessagesBeforeFirstFlushCompletes = socket.sent
+  const turnTwoMessages = socket.sent
     .map((message) => JSON.parse(message))
     .filter((message) => message.contextId === "turn-2" && message.send_text);
   assert(
-    turnTwoMessagesBeforeFirstFlushCompletes.length === 1,
-    "a later phrase must wait for the prior flush to complete",
+    turnTwoMessages.length === 1,
+    "a completed response burst must use one uninterrupted synthesis flush",
+  );
+  assert(
+    turnTwoMessages[0].send_text.text.includes("First phrase.") &&
+      turnTwoMessages[0].send_text.text.includes("Final sentence."),
+    "the final flush must include every buffered phrase",
   );
   socket.message({
     result: {
@@ -121,20 +135,10 @@ try {
     .map((message) => JSON.parse(message))
     .filter((message) => message.contextId === "turn-2" && message.send_text);
   assert(
-    turnTwoMessagesAfterFirstFlushCompletes.length === 2,
-    "the final phrase must flush after the earlier phrase completes",
+    turnTwoMessagesAfterFirstFlushCompletes.length === 1,
+    "flush completion must not create a second synthesis request",
   );
-  socket.message({
-    result: {
-      contextId: "turn-2",
-      audioChunk: { audioContent: "bGFzdA==" },
-    },
-  });
-  socket.message({ result: { contextId: "turn-2", flushCompleted: {} } });
-  assert(
-    audio.at(-1) === "bGFzdA==",
-    "final phrase PCM must be forwarded before the context completes",
-  );
+  assert(audio.at(-1) === "Zmlyc3Q=", "response PCM must be forwarded before completion");
   assert(completed.at(-1) === "turn-2", "the final phrase must complete the context");
   console.log("✓ Inworld WebSocket protocol routes PCM by context");
 } finally {

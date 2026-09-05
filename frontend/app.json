@@ -3,11 +3,11 @@
     "name": "Court Coach",
     "slug": "courtcoach",
     "version": "1.0.4",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "hoopplan",
     "userInterfaceStyle": "automatic",
-    "runtimeVersion": "1.0.4-vad-1",
+    "runtimeVersion": "1.0.4-video-3",
     "updates": {
       "enabled": true,
       "url": "https://u.expo.dev/bd3ad500-56dd-4198-a8fc-1b33470d72b3",
@@ -16,10 +16,12 @@
     },
     "ios": {
       "supportsTablet": true,
+      "requireFullScreen": true,
       "usesAppleSignIn": true,
       "bundleIdentifier": "com.hoopplan.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Court Coach uses the camera for private, on-device basketball shot tracking during video coaching.",
         "NSMicrophoneUsageDescription": "Court Coach uses the microphone for live coach conversations during workouts.",
         "NSPhotoLibraryAddUsageDescription": "Court Coach saves workout stats images to your Photos library when you tap Download."
       },
@@ -70,6 +72,12 @@
       "expo-router",
       "expo-dev-client",
       [
+        "expo-screen-orientation",
+        {
+          "initialOrientation": "DEFAULT"
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#FFFFFF",
@@ -115,6 +123,7 @@
           "microphonePermission": "Court Coach uses the microphone for live coach conversations during workouts."
         }
       ],
+      "./plugins/withShotTrackerModel",
       "./plugins/withForegroundOnlyAudio",
       "expo-video",
       [

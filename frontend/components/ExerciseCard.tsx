@@ -338,11 +338,15 @@ export function ExerciseCard({
 
   const baseSetPlan = useMemo(() => {
     const plan = buildSetPlan(exercise);
-    if (!TIMED_CATEGORIES.has((exercise.category ?? "").toLowerCase())) return plan;
+    const category = (exercise.category ?? "").toLowerCase();
+    if (!TIMED_CATEGORIES.has(category)) return plan;
     return {
       ...plan,
       logType: "minutes" as const,
-      perSetMinutes: Math.max(1, Math.min(3, plan.perSetMinutes ?? 2)),
+      perSetMinutes: Math.max(
+        1,
+        Math.min(3, plan.perSetMinutes ?? (category === "ball_handling" ? 1 : 2)),
+      ),
     };
   }, [exercise]);
   const [attemptsOverride, setAttemptsOverride] = useState<number | null>(() => {

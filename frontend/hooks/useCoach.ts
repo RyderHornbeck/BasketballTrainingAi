@@ -14,8 +14,15 @@ import {
   RealtimeCoachSession,
   type CoachSttProvider,
   type ClientTimerAction,
+  type ShotEventRecordOutcome,
   type TimerState,
+  type VideoCoachHudState,
 } from "@/lib/realtimeCoach";
+import {
+  type ShotEventSource,
+  type ShotInputMode,
+  type ShotResult,
+} from "@/lib/shotEventSeam";
 import { type CoachVoiceProvider } from "@/lib/coachVoiceProvider";
 import { useTimerAudioCues } from "@/hooks/useTimerAudioCues";
 import {
@@ -33,6 +40,25 @@ export type CoachStatus = CoachMachineState;
 const coachConversationKey = (dayId: string) =>
   `court-coach:conversation:${dayId}`;
 const MAX_AUTOMATIC_RECONNECT_ATTEMPTS = 3;
+const STARTUP_BUDGET_TIMEOUT_MS = 8_000;
+
+async function resolveWithin<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: T,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timeout = setTimeout(() => resolve(fallback), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 export interface UseCoachResult {
   status: CoachStatus;
@@ -49,13 +75,30 @@ export interface UseCoachResult {
   sttProvider: CoachSttProvider | null;
   providerFallbackReason: string | null;
   audioLevels: { microphone: number; tts: number };
+  shotInputMode: ShotInputMode;
+  videoHudState: VideoCoachHudState | null;
   startSession: () => Promise<void>;
   stopSession: () => Promise<void>;
+  suspendSessionForModeTransition: () => Promise<void>;
   toggleMute: () => void;
   toggleTimer: () => void;
+  setShotInputMode: (mode: ShotInputMode) => void;
+  recordShotResult: (
+    result: ShotResult,
+    source: ShotEventSource,
+    eventId: string,
+  ) => Promise<ShotEventRecordOutcome>;
 }
 
-export function useCoach(dayId: string | null): UseCoachResult {
+export function useCoach(
+  dayId: string | null,
+  initialShotInputMode: ShotInputMode = "voice",
+  connectionEnabled: boolean | Partial<Record<ShotInputMode, boolean>> = true,
+): UseCoachResult {
+  const connectionAllowedFor = (
+    value: boolean | Partial<Record<ShotInputMode, boolean>>,
+    mode: ShotInputMode,
+  ) => typeof value === "boolean" ? value : value[mode] !== false;
   const sessionRef = useRef<RealtimeCoachSession | null>(null);
   const timerRef = useRef({
     running: false,
@@ -68,8 +111,9 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const timerRunIdRef = useRef(0);
   const timerEncouragementRef = useRef<{
     runId: number;
-    fired: Set<"seventy_five" | "twenty_five">;
-  }>({ runId: 0, fired: new Set() });
+    previousRemaining: number | null;
+    fired: Set<"seventy_five" | "halfway" | "twenty_five" | "ten_seconds">;
+  }>({ runId: 0, previousRemaining: null, fired: new Set() });
   const timedSetPrefetchRef = useRef<{
     dayId: string;
     exerciseId: string;
@@ -79,6 +123,12 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const conversationSummaryRef = useRef("");
   const conversationDayIdRef = useRef<string | null>(null);
   const connectingRef = useRef(false);
+  const connectionIntentRef = useRef(0);
+  const liveAudioEnabledRef = useRef(
+    connectionAllowedFor(connectionEnabled, initialShotInputMode) &&
+      initialShotInputMode !== "video",
+  );
+  const connectionEnabledRef = useRef(connectionEnabled);
   const overlayOpenRef = useRef(true);
   const mountedRef = useRef(true);
   const limitBlockedRef = useRef(false);
@@ -93,6 +143,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const coachTranscriptShownWordCountRef = useRef(0);
   const userTranscriptRef = useRef("");
   const transcriptGenerationRef = useRef(0);
+  const shotInputModeRef = useRef<ShotInputMode>(initialShotInputMode);
 
   const [status, setStatus] = useState<CoachStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -109,6 +160,10 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const [providerFallbackReason, setProviderFallbackReason] = useState<string | null>(null);
   const [audioLevels, setAudioLevels] = useState({ microphone: 0, tts: 0 });
   const [muted, setMuted] = useState(false);
+  const [shotInputMode, setShotInputModeState] =
+    useState<ShotInputMode>(initialShotInputMode);
+  const [videoHudState, setVideoHudState] =
+    useState<VideoCoachHudState | null>(null);
   const timerAudio = useTimerAudioCues();
 
   const markLimitReached = useCallback((msg: string) => {
@@ -181,32 +236,33 @@ export function useCoach(dayId: string | null): UseCoachResult {
         durationSeconds == null ? null : Math.max(0, durationSeconds - elapsed);
 
       if (remaining != null && durationSeconds != null) {
-        timerAudio.sync(
-          timerRunIdRef.current,
-          durationSeconds,
-          remaining,
-          t.running
-        );
         const encouragementState = timerEncouragementRef.current;
         if (encouragementState.runId !== timerRunIdRef.current) {
           encouragementState.runId = timerRunIdRef.current;
+          encouragementState.previousRemaining = durationSeconds;
           encouragementState.fired = new Set();
         }
-        const remainingRatio =
-          durationSeconds > 0 ? remaining / durationSeconds : 1;
-        const marker =
-          remaining > 0 &&
-          remainingRatio <= 0.25 &&
-          !encouragementState.fired.has("twenty_five")
+        const previousRemaining = encouragementState.previousRemaining ?? durationSeconds;
+        const crossed = (threshold: number) =>
+          previousRemaining > threshold && remaining <= threshold;
+        // Ten seconds wins whenever it coincides with a percentage milestone.
+        // This can occur for short timer durations (for example, 40 seconds).
+        const marker = remaining > 0 && crossed(10) && !encouragementState.fired.has("ten_seconds")
+          ? "ten_seconds"
+          : remaining > 0 && crossed(durationSeconds * 0.25) &&
+              !encouragementState.fired.has("twenty_five")
             ? "twenty_five"
-            : remaining > 0 &&
-                remainingRatio <= 0.75 &&
-                !encouragementState.fired.has("seventy_five")
-              ? "seventy_five"
-              : null;
-        if (marker && sessionRef.current?.announceTimerEncouragement()) {
+            : remaining > 0 && crossed(durationSeconds * 0.5) &&
+                !encouragementState.fired.has("halfway")
+              ? "halfway"
+              : remaining > 0 && crossed(durationSeconds * 0.75) &&
+                  !encouragementState.fired.has("seventy_five")
+                ? "seventy_five"
+                : null;
+        if (marker && sessionRef.current?.announceTimerMilestone(remaining)) {
           encouragementState.fired.add(marker);
         }
+        encouragementState.previousRemaining = remaining;
       }
       if (
         remaining != null &&
@@ -319,6 +375,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
       timerRunIdRef.current += 1;
       timerEncouragementRef.current = {
         runId: timerRunIdRef.current,
+        previousRemaining: null,
         fired: new Set(),
       };
       timerAudio.stopAll();
@@ -326,6 +383,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
       timerRunIdRef.current += 1;
       timerEncouragementRef.current = {
         runId: timerRunIdRef.current,
+        previousRemaining: action.duration_seconds ?? null,
         fired: new Set(),
       };
       timedSetPrefetchRef.current = null;
@@ -363,22 +421,87 @@ export function useCoach(dayId: string | null): UseCoachResult {
   const ensureSession = useCallback(() => {
     if (!sessionRef.current) {
       sessionRef.current = new RealtimeCoachSession();
+      sessionRef.current.setShotInputMode(shotInputModeRef.current);
     }
     return sessionRef.current;
   }, []);
 
+  const setShotInputMode = useCallback((mode: ShotInputMode) => {
+    if (mode === "video") liveAudioEnabledRef.current = false;
+    shotInputModeRef.current = mode;
+    sessionRef.current?.setShotInputMode(mode);
+    setShotInputModeState(mode);
+    setVideoHudState(
+      mode === "video"
+        ? sessionRef.current?.getVideoCoachHudState() ?? null
+        : null,
+    );
+  }, []);
+
+  const recordShotResult = useCallback(
+    async (
+      result: ShotResult,
+      source: ShotEventSource,
+      eventId: string,
+    ): Promise<ShotEventRecordOutcome> => {
+      const session = sessionRef.current;
+      if (!session) {
+        return Promise.resolve({
+          status: "rejected",
+          reason: "session_inactive",
+        });
+      }
+      const outcome = await session.recordShotResult(result, source, eventId);
+      if (shotInputModeRef.current === "video") {
+        setVideoHudState(session.getVideoCoachHudState());
+      }
+      return outcome;
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (shotInputMode !== "video") return;
+    const refresh = () => {
+      const session = sessionRef.current;
+      if (session) setVideoHudState(session.getVideoCoachHudState());
+    };
+    refresh();
+    const interval = setInterval(refresh, 500);
+    return () => clearInterval(interval);
+  }, [shotInputMode]);
+
   const startSession = useCallback(async () => {
-    if (!dayId || !overlayOpenRef.current || limitBlockedRef.current) {
+    if (
+      !connectionAllowedFor(
+        connectionEnabledRef.current,
+        shotInputModeRef.current,
+      ) ||
+      !dayId ||
+      !overlayOpenRef.current ||
+      limitBlockedRef.current
+    ) {
       return;
     }
     if (connectingRef.current) return;
 
-    const budget = (await refreshDailyBudget()) ?? dailyBudget;
-    if (budget?.exhausted || limitBlockedRef.current) {
-      return;
-    }
-
     connectingRef.current = true;
+    liveAudioEnabledRef.current = true;
+    const intent = connectionIntentRef.current;
+    const ownsConnection = () =>
+      connectionIntentRef.current === intent &&
+      overlayOpenRef.current &&
+      !limitBlockedRef.current;
+
+    setStatus("connecting");
+    try {
+      const budget = await resolveWithin(
+        refreshDailyBudget(),
+        STARTUP_BUDGET_TIMEOUT_MS,
+        dailyBudget,
+      );
+      if (!ownsConnection() || budget?.exhausted) return;
+
     setError(null);
     if (coachTranscriptTimerRef.current) clearTimeout(coachTranscriptTimerRef.current);
     if (coachTypingTimerRef.current) clearTimeout(coachTypingTimerRef.current);
@@ -393,35 +516,32 @@ export function useCoach(dayId: string | null): UseCoachResult {
     setProviderFallbackReason(null);
 
     await teardownRef.current;
-    if (!overlayOpenRef.current || !dayId || limitBlockedRef.current) {
-      connectingRef.current = false;
-      return;
-    }
+    if (!ownsConnection() || !dayId) return;
     if (!conversationSummaryRef.current) {
       const savedConversation = await AsyncStorage.getItem(
         coachConversationKey(dayId),
       ).catch(() => null);
       if (
         savedConversation &&
-        overlayOpenRef.current &&
+        ownsConnection() &&
         conversationDayIdRef.current === dayId
       ) {
         conversationSummaryRef.current = savedConversation.slice(-1_200);
       }
     }
+    if (!ownsConnection()) return;
     const session = ensureSession();
-    try {
       await session.connect(
         dayId,
         getTimerState(),
         conversationSummaryRef.current,
         {
           onStatus: (next) => {
-            if (!mountedRef.current || limitBlockedRef.current) return;
+            if (!mountedRef.current || !ownsConnection()) return;
             setStatus(next);
           },
           onError: (msg) => {
-            if (!mountedRef.current) return;
+            if (!mountedRef.current || !ownsConnection()) return;
             if (isCoachLimitMessage(msg)) {
               markLimitReached(msg);
               return;
@@ -432,11 +552,11 @@ export function useCoach(dayId: string | null): UseCoachResult {
           onTimerAction: applyTimerAction,
           getTimerState,
           onAudioLevel: (source, level) => {
-            if (!mountedRef.current) return;
+            if (!mountedRef.current || !ownsConnection()) return;
             setAudioLevels((current) => ({ ...current, [source]: level }));
           },
           onUserTranscript: (text) => {
-            if (!mountedRef.current) return;
+            if (!mountedRef.current || !ownsConnection()) return;
             transcriptGenerationRef.current += 1;
             const isContinuation =
               userTranscriptRef.current.length > 0 &&
@@ -453,11 +573,19 @@ export function useCoach(dayId: string | null): UseCoachResult {
             userTranscriptRef.current = text;
             setUserTranscript(text);
           },
-          onCoachTranscript: (text) => {
-            if (!mountedRef.current) return;
+          onCoachTranscript: (text, mode = "stream") => {
+            if (!mountedRef.current || !ownsConnection()) return;
             transcriptGenerationRef.current += 1;
             if (coachTranscriptTimerRef.current) clearTimeout(coachTranscriptTimerRef.current);
             setCoachTranscriptFadeVersion(0);
+            if (mode === "replace") {
+              if (coachTypingTimerRef.current) {
+                clearTimeout(coachTypingTimerRef.current);
+                coachTypingTimerRef.current = null;
+              }
+              coachTranscriptShownWordCountRef.current = 0;
+              setCoachTranscript("");
+            }
             coachTranscriptTargetRef.current = text;
             if (coachTypingTimerRef.current) return;
             const revealNextWord = () => {
@@ -475,7 +603,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
             revealNextWord();
           },
           onCoachPlaybackFinished: () => {
-            if (!mountedRef.current) return;
+            if (!mountedRef.current || !ownsConnection()) return;
             const playbackGeneration = transcriptGenerationRef.current;
             if (coachTranscriptTimerRef.current) clearTimeout(coachTranscriptTimerRef.current);
             coachTranscriptTimerRef.current = setTimeout(() => {
@@ -508,7 +636,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
             });
           },
           onUsage: (totals) => {
-            if (!mountedRef.current) return;
+            if (!mountedRef.current || !ownsConnection()) return;
             setLastUsage(totals);
           },
           onBudgetUpdate: (spentUsd, budgetUsd) => {
@@ -521,15 +649,19 @@ export function useCoach(dayId: string | null): UseCoachResult {
             }
           },
           onSessionEnded: (reason) => {
-            if (!mountedRef.current || !overlayOpenRef.current || limitBlockedRef.current) return;
+            if (
+              !mountedRef.current ||
+              !overlayOpenRef.current ||
+              !liveAudioEnabledRef.current ||
+              !ownsConnection()
+            ) return;
             if (
               reason === "daily_budget" ||
-              reason === "connect_failed" ||
               reason === "response_limit"
             ) {
               return;
             }
-            if (reason === "connection_lost") {
+            if (reason === "connection_lost" || reason === "connect_failed") {
               reconnectAttemptsRef.current += 1;
               if (reconnectAttemptsRef.current > MAX_AUTOMATIC_RECONNECT_ATTEMPTS) {
                 setStatus("error");
@@ -547,13 +679,13 @@ export function useCoach(dayId: string | null): UseCoachResult {
             }
           },
           onProviderConnected: (provider) => {
-            if (mountedRef.current) setConnectedProvider(provider);
+            if (mountedRef.current && ownsConnection()) setConnectedProvider(provider);
           },
           onSttProviderConnected: (provider) => {
-            if (mountedRef.current) setSttProvider(provider);
+            if (mountedRef.current && ownsConnection()) setSttProvider(provider);
           },
           onConnectionEstablished: () => {
-            if (!mountedRef.current) return;
+            if (!mountedRef.current || !ownsConnection()) return;
             // Socket readiness can precede the first TTS audio on a weak
             // network. Reset retries only after greeting playback proves the
             // whole voice path is usable; otherwise every failed startup
@@ -562,7 +694,7 @@ export function useCoach(dayId: string | null): UseCoachResult {
             setError(null);
           },
           onProviderFallback: (reason) => {
-            if (mountedRef.current) setProviderFallbackReason(reason);
+            if (mountedRef.current && ownsConnection()) setProviderFallbackReason(reason);
           },
         },
         {
@@ -570,11 +702,17 @@ export function useCoach(dayId: string | null): UseCoachResult {
           dailyBudgetUsd: budget?.budgetUsd,
         }
       );
+      if (!ownsConnection()) {
+        await session.disconnect("mode_transition");
+        return;
+      }
       if (muted) session.mute();
     } catch {
       // onError already surfaced the message.
     } finally {
-      connectingRef.current = false;
+      if (connectionIntentRef.current === intent) {
+        connectingRef.current = false;
+      }
     }
   }, [
     dayId,
@@ -591,8 +729,26 @@ export function useCoach(dayId: string | null): UseCoachResult {
     startSessionRef.current = startSession;
   }, [startSession]);
 
+  useEffect(() => {
+    connectionEnabledRef.current = connectionEnabled;
+    if (!connectionAllowedFor(connectionEnabled, shotInputModeRef.current)) {
+      liveAudioEnabledRef.current = false;
+      return;
+    }
+    if (
+      dayId &&
+      overlayOpenRef.current &&
+      shotInputModeRef.current !== "video" &&
+      !limitBlockedRef.current
+    ) {
+      void startSessionRef.current();
+    }
+  }, [connectionEnabled, dayId]);
+
   const stopSession = useCallback(async () => {
     overlayOpenRef.current = false;
+    liveAudioEnabledRef.current = false;
+    connectionIntentRef.current += 1;
     connectingRef.current = false;
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     reconnectTimerRef.current = null;
@@ -605,6 +761,26 @@ export function useCoach(dayId: string | null): UseCoachResult {
     emitWorkoutUpdated("coach_progress");
     await refreshDailyBudget();
   }, [refreshDailyBudget]);
+
+  // Video Coach waits for UIKit to finish rotating before it reconnects. Keep
+  // the durable workout and conversation state, but stop live mic/TTS work.
+  const suspendSessionForModeTransition = useCallback(async () => {
+    liveAudioEnabledRef.current = false;
+    connectionIntentRef.current += 1;
+    connectingRef.current = false;
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+    const session = sessionRef.current;
+    sessionRef.current = null;
+    teardownRef.current =
+      session?.disconnect("mode_transition") ?? Promise.resolve();
+    await teardownRef.current;
+    if (mountedRef.current && overlayOpenRef.current) {
+      setStatus("idle");
+      setConnectedProvider(null);
+      setSttProvider(null);
+    }
+  }, []);
 
   const toggleMute = useCallback(() => {
     const session = sessionRef.current;
@@ -627,10 +803,22 @@ export function useCoach(dayId: string | null): UseCoachResult {
     }
     overlayOpenRef.current = true;
     limitBlockedRef.current = false;
-    void startSessionRef.current();
+    liveAudioEnabledRef.current =
+      shotInputModeRef.current !== "video" &&
+      connectionAllowedFor(connectionEnabledRef.current, shotInputModeRef.current);
+    // Video Coach waits to create the live audio connection until the phone is
+    // in landscape and its camera can be configured safely.
+    if (
+      shotInputModeRef.current !== "video" &&
+      connectionAllowedFor(connectionEnabledRef.current, shotInputModeRef.current)
+    ) {
+      void startSessionRef.current();
+    }
 
     return () => {
       overlayOpenRef.current = false;
+      liveAudioEnabledRef.current = false;
+      connectionIntentRef.current += 1;
       connectingRef.current = false;
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
@@ -680,12 +868,22 @@ export function useCoach(dayId: string | null): UseCoachResult {
       // certain audio-route dialogs are visible. Disconnecting there tears
       // down WebRTC before the first connection can finish on a new build.
       if (next === "background") {
+        connectionIntentRef.current += 1;
+        connectingRef.current = false;
+        if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
         const session = sessionRef.current;
         sessionRef.current = null;
         teardownRef.current = session?.disconnect("background") ?? Promise.resolve();
         return;
       }
-      if (next === "active" && dayId && overlayOpenRef.current && !limitBlockedRef.current) {
+      if (
+        next === "active" &&
+        dayId &&
+        overlayOpenRef.current &&
+        liveAudioEnabledRef.current &&
+        !limitBlockedRef.current
+      ) {
         void flushPendingTimedSetCompletions();
         void startSessionRef.current();
       }
@@ -710,9 +908,14 @@ export function useCoach(dayId: string | null): UseCoachResult {
     sttProvider,
     providerFallbackReason,
     audioLevels,
+    shotInputMode,
+    videoHudState,
     startSession,
     stopSession,
+    suspendSessionForModeTransition,
     toggleMute,
     toggleTimer,
+    setShotInputMode,
+    recordShotResult,
   };
 };

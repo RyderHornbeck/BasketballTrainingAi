@@ -10,7 +10,7 @@ export const EXERCISE_CATALOG_METADATA: Record<
   },
   "1 Step Inside Hand": {
     description:
-      "Start on the right block with the ball in both hands in an athletic stance. Step 1: Take one step toward the basket with your left foot (outside foot). Step 2: Gather the ball and jump off that left foot. Step 3: Finish with your right hand (inside hand) high off the backboard. Do 5 reps from the right block, then move to the left block and finish with your left hand for 5 reps.",
+      "Start on the right wing with the ball in your right hand in an athletic stance. Step 1: Drive toward the basket, dribbling the ball with your right hand. Step 2: Gather the ball and jump off your left foot. Step 3: Finish with your left hand, on the right side of the basket, high off the backboard.",
     coaching_notes: "Step with the outside foot, protect the ball with your body, finish high.",
     requires_both_sides: true,
   },
@@ -18,12 +18,6 @@ export const EXERCISE_CATALOG_METADATA: Record<
     description:
       "Start at the free-throw line with a ball, facing the basket in an athletic stance. Step 1: Toss the ball to yourself or have a partner pass it. Step 2: Step with your right foot first, then your left foot (1-2 step) as you catch. Step 3: Rise straight up and shoot. Next rep, lead with your left foot instead. Alternate which foot steps first for 10 reps per side.",
     coaching_notes: "Land on two feet square, dip into your hips, rise straight through the shot.",
-    requires_both_sides: true,
-  },
-  "1-2 Footwork Shooting Lateral": {
-    description:
-      "Start on the right wing behind the three-point line with the ball. Step 1: Shuffle two steps toward the baseline while staying behind the arc. Step 2: Stop on balance with a right-left 1-2 step. Step 3: Shoot the right-wing three. Complete the right-side set, then mirror every step from the left wing.",
-    coaching_notes: "Chop your feet on the stop, gather 1-2, eyes on the rim before you lift.",
     requires_both_sides: true,
   },
   "3 Lift Shot": {
@@ -214,7 +208,7 @@ export const EXERCISE_CATALOG_METADATA: Record<
   },
   "Form Shooting": {
     description:
-      "Start 3 feet in front of the basket facing the hoop, ball in your shooting hand. Step 1: Set your feet shoulder-width apart with knees slightly bent. Step 2: Place the ball in your shooting pocket (near your hip and chest) with your elbow under the ball. Step 3: Shoot slowly — balance, eyes on target, elbow in, follow through until the ball drops. Make 10 swishes in a row before moving back a step.",
+      "Start 3 feet in front of the basket facing the hoop, ball in your shooting hand. Step 1: Set your feet shoulder-width apart with knees slightly bent. Step 2: Place the ball in your shooting pocket with your elbow under the ball. Step 3: Shoot slowly — balance, eyes on target, elbow in, follow through until the ball drops. Make 10 swishes in a row before moving back a step.",
     coaching_notes: "Balance, eyes on target, elbow in, follow through until the ball drops.",
     requires_both_sides: false,
   },
@@ -330,7 +324,7 @@ export const EXERCISE_CATALOG_METADATA: Record<
     description:
       "Start at the baseline with the ball in your right hand. Step 1: Begin a light jog down the court. Step 2: Dribble at hip height while keeping your head up. Step 3: Change hands every few steps with a crossover or between-the-legs. Jog the full court dribbling with your right hand, jog back with your left hand, and repeat 3 times.",
     coaching_notes: "Head up, relaxed dribble at hip height, smooth hand changes.",
-    requires_both_sides: true,
+    requires_both_sides: false,
   },
   "Killer 3s": {
     description:
@@ -348,13 +342,13 @@ export const EXERCISE_CATALOG_METADATA: Record<
     description:
       "Start at the top of the key with the ball in your right hand in a low stance. Step 1: Shuffle two steps to your right while dribbling. Step 2: Push the ball through your legs to your left hand. Step 3: Shuffle two steps left and push it back through your legs. Keep shuffling and going through your legs for 20 reps, then switch starting direction.",
     coaching_notes: "Stay low in the lateral slide, push the ball through hard, recover quickly.",
-    requires_both_sides: true,
+    requires_both_sides: false,
   },
   "Lateral Dribbles": {
     description:
       "Start at half court with the ball in your right hand in a defensive-style stance. Step 1: Slide two steps to your right while pounding the dribble — don't cross your feet. Step 2: Switch to your left hand and slide two steps left. Step 3: Keep sliding back and forth at waist height with your eyes up. Do 10 slides to the right leading, then 10 to the left leading.",
     coaching_notes: "Don't cross feet on defense-style slides, pound at waist height, eyes up.",
-    requires_both_sides: true,
+    requires_both_sides: false,
   },
   "Lateral Skates": {
     description:

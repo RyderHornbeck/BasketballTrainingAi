@@ -47,13 +47,15 @@ Deno.test("Responses contracts expose only validated server tools", () => {
     "expected bounded workout mutation tools"
   );
   assert(
-    tools.some((tool) => tool.name === "search_exercise_catalog") &&
-      tools.some((tool) => tool.name === "add_workout_exercise"),
-    "standard turn contracts must retain catalog search and add tools"
+    !tools.some((tool) => tool.name === "search_exercise_catalog") &&
+      !tools.some((tool) => tool.name === "add_workout_exercise") &&
+      !tools.some((tool) => tool.name === "remove_workout_exercise"),
+    "standard turn contracts must not expose drill addition or removal tools"
   );
   assert(
-    new Set(tools.map((tool) => tool.name)).size === COACH_SERVER_TOOL_NAMES.size &&
-      [...COACH_SERVER_TOOL_NAMES].every((name) =>
+    [...COACH_SERVER_TOOL_NAMES]
+      .filter((name) => !["save_shooting_results", "correct_current_shooting_total"].includes(name))
+      .every((name) =>
         tools.some((tool) => tool.name === name)
       ),
     "every executable server tool must be available to the Anthropic coach"

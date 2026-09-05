@@ -1,9 +1,12 @@
 import {
+  addedExercisePlacement,
   buildCoachTurnDynamicContext,
   buildCompactContextSummary,
+  buildCurrentDrillExplanationSpeech,
   buildRealtimeModelContext,
   buildRealtimeNavigationUpdate,
   buildRealtimeSessionConfig,
+  buildRequestedDrillExplanationSpeech,
   buildWorkoutDrillListSummary,
   buildWorkoutNavigation,
   COACH_SYSTEM_PROMPT,
@@ -56,7 +59,7 @@ function contextWithPartialShootingSet(): WorkoutContext {
         target_makes: 8,
         target_attempts: 12,
         log_type: "makes_attempts",
-        set_side_labels: ["left side", "right side"],
+        set_side_labels: ["right side", "left side"],
       },
       {
         id: "warmup",
@@ -98,6 +101,86 @@ function contextWithPartialShootingSet(): WorkoutContext {
     ]) as any,
   };
 }
+
+Deno.test("current drill speech preserves the complete stored instructions", () => {
+  const context = contextWithPartialShootingSet();
+  context.day.active_exercise_id = "shoot";
+  context.exercises[1].instructions =
+    "Setup: Face the basket. 1. Load your hips. 2. Raise the ball smoothly. 3. Hold your follow-through.";
+  context.exercises[1].video_clip = {
+    coaching_notes: "Keep your eyes on the rim.",
+  } as any;
+
+  const speech = buildCurrentDrillExplanationSpeech(context);
+
+  assert(
+    speech.startsWith("Shooting. Setup:"),
+    "speech should identify the drill",
+  );
+  assert(
+    speech.includes("1. Load your hips."),
+    "speech should include step one",
+  );
+  assert(
+    speech.includes("2. Raise the ball smoothly."),
+    "speech should include step two",
+  );
+  assert(
+    speech.includes("3. Hold your follow-through."),
+    "speech should include the final step",
+  );
+  assert(
+    !speech.includes("Coaching note:"),
+    "explicit drill directions should not mix in optional coaching notes",
+  );
+  assert(
+    buildRequestedDrillExplanationSpeech(
+      context,
+      "Explain this drill.",
+    ) === speech,
+    "the exact local explanation command should use the full stored explanation",
+  );
+  assert(
+    buildRequestedDrillExplanationSpeech(
+      context,
+      "Explain this drill to me",
+    ) === speech,
+    "the alternate exact local explanation command should use the full stored explanation",
+  );
+  assert(
+    buildRequestedDrillExplanationSpeech(
+      context,
+      "Could you explain me the drill?",
+    ) === "",
+    "non-exact explanation phrasing should be routed to Haiku",
+  );
+});
+
+Deno.test("drill speech prefers the current canonical catalog instructions", () => {
+  const context = contextWithPartialShootingSet();
+  context.day.active_exercise_id = "shoot";
+  context.exercises[1].instructions = "Old copied instruction.";
+  context.exercises[1].video_clip = {
+    description:
+      "Setup: Start square to the hoop. 1. Load your hips. 2. Raise the ball smoothly. 3. Hold your follow-through.",
+    coaching_notes: "Keep your eyes on the rim.",
+  } as any;
+
+  const speech = buildCurrentDrillExplanationSpeech(context);
+
+  assert(
+    speech.includes("Setup: Start square to the hoop."),
+    "canonical catalog setup should replace stale copied instructions",
+  );
+  assert(
+    speech.includes("3. Hold your follow-through."),
+    "all canonical catalog steps should be included",
+  );
+  assert(
+    !speech.includes("Old copied instruction."),
+    "stale copied instructions should not be narrated",
+  );
+});
 
 Deno.test("coach navigation uses the grouped Workouts order and the next unfinished set", () => {
   const navigation = buildWorkoutNavigation(contextWithPartialShootingSet());
@@ -146,6 +229,63 @@ Deno.test("coach navigation uses the grouped Workouts order and the next unfinis
     navigation.next_exercise_after_current?.name === "Finishing",
     "the following drill should be separate from the next work item",
   );
+});
+
+Deno.test("adding outside the current category goes before its first unfinished drill", () => {
+  const ctx = contextWithPartialShootingSet();
+  const shooting = ctx.exercises.find((exercise) => exercise.id === "shoot")!;
+  ctx.exercises.push(
+    { ...shooting, id: "shoot-complete", name: "Completed shooting", order_index: 2 },
+    { ...shooting, id: "shoot-later", name: "Later shooting", order_index: 3 },
+  );
+  ctx.logs.set("shoot-complete", {
+    exercise_id: "shoot-complete",
+    completed: true,
+    makes: null,
+    attempts: null,
+    duration_seconds: null,
+    notes: null,
+  } as any);
+  ctx.day.active_exercise_id = "warmup";
+
+  const placement = addedExercisePlacement(ctx, "shooting");
+  assert(placement.insertAt === 1, "addition belongs after completed shooting work");
+  assert(!placement.activateAddedExercise, "a different-category addition must not move the athlete");
+});
+
+Deno.test("adding after the current same-category drill activates it immediately", () => {
+  const ctx = contextWithPartialShootingSet();
+  ctx.day.active_exercise_id = "shoot";
+  const shooting = ctx.exercises.find((exercise) => exercise.id === "shoot")!;
+  ctx.exercises.push({
+    ...shooting,
+    id: "shoot-later",
+    name: "Later shooting",
+    order_index: 6,
+  });
+
+  const placement = addedExercisePlacement(ctx, "shooting");
+  assert(placement.insertAt === 1, "addition belongs directly after the current drill");
+  assert(placement.activateAddedExercise, "same-category addition should become current");
+});
+
+Deno.test("adding to a completed category appends after its completed drills", () => {
+  const ctx = contextWithPartialShootingSet();
+  const shooting = ctx.exercises.find((exercise) => exercise.id === "shoot")!;
+  ctx.exercises.push({ ...shooting, id: "shoot-two", name: "Second shooting", order_index: 6 });
+  for (const id of ["shoot", "shoot-two"]) {
+    ctx.logs.set(id, {
+      exercise_id: id,
+      completed: true,
+      makes: null,
+      attempts: null,
+      duration_seconds: null,
+      notes: null,
+    } as any);
+  }
+
+  const placement = addedExercisePlacement(ctx, "shooting");
+  assert(placement.insertAt === 2, "addition belongs last when every category drill is complete");
 });
 
 Deno.test("persisted manual completion skips a stale completed active set", () => {
@@ -296,18 +436,19 @@ function successfulSupabaseMock() {
   ) => Promise.resolve({ error: null, data: null }).then(resolve, reject);
   return {
     from: () => query,
-    rpc: (_name: string, args: Record<string, unknown>) => Promise.resolve({
-      data: [{
-        status: "applied",
-        active_exercise_id: args.p_exercise_id,
-        active_set_number: args.p_set_number,
-        saved_set_completed: false,
-        saved_set_makes: args.p_makes,
-        saved_set_attempts: args.p_attempts,
-        state_version: 1,
-      }],
-      error: null,
-    }),
+    rpc: (_name: string, args: Record<string, unknown>) =>
+      Promise.resolve({
+        data: [{
+          status: "applied",
+          active_exercise_id: args.p_exercise_id,
+          active_set_number: args.p_set_number,
+          saved_set_completed: false,
+          saved_set_makes: args.p_makes,
+          saved_set_attempts: args.p_attempts,
+          state_version: 1,
+        }],
+        error: null,
+      }),
   } as any;
 }
 
@@ -326,18 +467,19 @@ function capturingSupabaseMock(rows: Record<string, unknown>[]) {
   ) => Promise.resolve({ error: null, data: null }).then(resolve, reject);
   return {
     from: () => query,
-    rpc: (_name: string, args: Record<string, unknown>) => Promise.resolve({
-      data: [{
-        status: "applied",
-        active_exercise_id: args.p_exercise_id,
-        active_set_number: args.p_set_number,
-        saved_set_completed: false,
-        saved_set_makes: args.p_makes,
-        saved_set_attempts: args.p_attempts,
-        state_version: 1,
-      }],
-      error: null,
-    }),
+    rpc: (_name: string, args: Record<string, unknown>) =>
+      Promise.resolve({
+        data: [{
+          status: "applied",
+          active_exercise_id: args.p_exercise_id,
+          active_set_number: args.p_set_number,
+          saved_set_completed: false,
+          saved_set_makes: args.p_makes,
+          saved_set_attempts: args.p_attempts,
+          state_version: 1,
+        }],
+        error: null,
+      }),
   } as any;
 }
 
@@ -533,10 +675,15 @@ Deno.test("incomplete finishing completion requires confirmation before marking 
     },
   );
 
-  assert(!firstOutcome.dbChanged, "incomplete shooting work must not complete immediately");
+  assert(
+    !firstOutcome.dbChanged,
+    "incomplete shooting work must not complete immediately",
+  );
   assert(rows.length === 0, "the confirmation prompt must not write a result");
   assert(
-    firstOutcome.result.includes("Would you like to start this set or mark it complete as is?"),
+    firstOutcome.result.includes(
+      "Would you like to start this set or mark it complete as is?",
+    ),
     "Coach should offer the athlete an explicit completion choice",
   );
 
@@ -556,8 +703,14 @@ Deno.test("incomplete finishing completion requires confirmation before marking 
   );
   const meta = decodeExerciseLogMeta(String(rows[0]?.notes ?? ""));
   const completed = meta.set_logs?.find((set) => set.set_number === 1);
-  assert(outcome.dbChanged, "the confirmed completion request must complete the set");
-  assert(completed?.completed === true, "the selected set must be marked complete");
+  assert(
+    outcome.dbChanged,
+    "the confirmed completion request must complete the set",
+  );
+  assert(
+    completed?.completed === true,
+    "the selected set must be marked complete",
+  );
 });
 
 Deno.test("reopening a whole drill preserves every recorded result", async () => {
@@ -713,7 +866,8 @@ Deno.test("shooting sets cannot start timers", async () => {
 
   assert(
     outcome.clientAction == null &&
-      outcome.result === "That set does not use timed sets, so I won't start a timer.",
+      outcome.result ===
+        "That set does not use timed sets, so I won't start a timer.",
     "shooting sets must reject timer starts even when a duration is requested",
   );
 });
@@ -910,7 +1064,10 @@ Deno.test("extending a completed shooting set reopens and activates it", async (
   const meta = decodeExerciseLogMeta(String(rows[0]?.notes ?? ""));
   const extended = meta.set_logs?.find((set) => set.set_number === 1);
   assert(outcome.dbChanged, "an extension should persist");
-  assert(extended?.completed === false, "the extended completed set must reopen");
+  assert(
+    extended?.completed === false,
+    "the extended completed set must reopen",
+  );
   assert(
     extended?.makes === 8 && extended.attempts === 10,
     "extending a set must retain its recorded score",
@@ -1078,7 +1235,7 @@ Deno.test("normalized realtime context preserves coach knowledge with less dupli
     "compact state must preserve actual attempts",
   );
   assert(
-    shooting.set_results[0].side_label === "left side",
+    shooting.set_results[0].side_label === "right side",
     "set sides must be preserved",
   );
   assert(

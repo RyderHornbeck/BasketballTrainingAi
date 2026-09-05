@@ -1,0 +1,20 @@
+{
+  "$schema": "https://nitro.margelo.com/nitro.schema.json",
+  "cxxNamespace": ["shottracker"],
+  "ios": {
+    "iosModuleName": "ReactNativeShotTracker"
+  },
+  "android": {
+    "androidNamespace": ["shottracker"],
+    "androidCxxLibName": "ReactNativeShotTracker"
+  },
+  "autolinking": {
+    "ShotTracker": {
+      "ios": {
+        "language": "swift",
+        "implementationClassName": "HybridShotTracker"
+      }
+    }
+  },
+  "ignorePaths": ["**/node_modules"]
+}

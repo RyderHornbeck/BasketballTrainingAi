@@ -71,7 +71,7 @@ clips.push(
     coaching_notes: null,
     requires_both_sides: index > 0,
   })),
-  ...["Basic Corner 3 Spot-Up", "Wing 3 Point", "Top Three Point"].map((name, index) => ({
+  ...["Corner 3 Spot-Up", "Wing 3 Point", "Top Three Point"].map((name, index) => ({
     id: `required-three-${index}`,
     exercise_name: name,
     category: "shooting",
@@ -224,8 +224,8 @@ assert(
   longWorkout.days
     .flatMap((day) => day.exercises)
     .filter((exercise) => exercise.category === "ball_handling")
-    .every((exercise) => exercise.duration === "2 min"),
-  "60-minute workouts use two-minute ball-handling sets"
+    .every((exercise) => exercise.duration === "1 min"),
+  "60-minute workouts still start with one-minute ball-handling sets"
 );
 assert(
   initialExercises

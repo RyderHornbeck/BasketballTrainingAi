@@ -435,7 +435,6 @@ export function usesOptimisticToolPreamble(toolName: string): boolean {
     "uncomplete_drill",
     "start_timer",
     "pause_timer",
-    "resume_timer",
     "stop_timer",
     "add_workout_exercise",
     "remove_workout_exercise",

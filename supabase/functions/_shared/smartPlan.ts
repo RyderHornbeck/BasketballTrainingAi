@@ -441,9 +441,7 @@ function buildExercise(
   const log_type = categoryLogType(clip.category);
   const perSetMinutesForDrill =
     clip.category === "ball_handling"
-      ? context.composition.minutes >= 60
-        ? 2
-        : 1
+      ? 1
       : clip.category === "defense" || clip.category === "conditioning"
       ? Math.max(1, Math.min(perSetMinutes, 3))
       : perSetMinutes;

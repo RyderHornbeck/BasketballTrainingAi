@@ -15,6 +15,7 @@ import {
   useFonts,
 } from "@expo-google-fonts/poppins";
 import { Stack, ThemeProvider as NavigationThemeProvider } from "expo-router";
+import * as ScreenOrientation from "expo-screen-orientation";
 import * as SplashScreen from "expo-splash-screen";
 import * as SystemUI from "expo-system-ui";
 import { StatusBar } from "expo-status-bar";
@@ -30,6 +31,14 @@ function RootNavigator() {
   const { profile } = useAuth();
   const syncedFromProfile = useRef(false);
   const navTheme = useMemo(() => buildNavigationTheme(scheme, colors), [scheme, colors]);
+
+  useEffect(() => {
+    // Portrait owns the entire app. Video Coach temporarily replaces this
+    // lock with landscape and restores portrait when it closes.
+    void ScreenOrientation.lockAsync(
+      ScreenOrientation.OrientationLock.PORTRAIT_UP,
+    ).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     SystemUI.setBackgroundColorAsync(colors.background).catch(() => {});

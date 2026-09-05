@@ -57,6 +57,20 @@ export function preloadLikelyNextShotProgressAudio(
   ]).catch(() => undefined);
 }
 
+export function preloadShotProgressAudio(
+  persona: string,
+  reply: ShotProgressReply,
+): void {
+  if (!(persona in SHOT_PROGRESS_AUDIO)) return;
+  const clips = SHOT_PROGRESS_AUDIO[persona as ShotProgressPersona];
+  const prefix = clips.prefixes[`${reply.makes}-${reply.attempts}`];
+  const remaining = clips.remaining[reply.shotsLeft];
+  if (prefix == null || remaining == null) return;
+  void Promise.all([resolveAssetUri(prefix), resolveAssetUri(remaining)]).catch(
+    () => undefined,
+  );
+}
+
 export function parseShotProgressReply(text: string): ShotProgressReply | null {
   const match = text.trim().match(
     /^You're\s+(\d+)\s+for\s+(\d+),\s+(\d+)\s+shots?\s+left\.?$/i,

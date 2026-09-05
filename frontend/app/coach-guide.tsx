@@ -52,7 +52,7 @@ const GUIDE_SECTIONS = [
       "Ask Coach to add another set when you want more work on a drill.",
     examples: [
       '"I want to do more Form Shooting."',
-      '"Can I do another set of Pound Dribbles?"',
+      '"Can I do another set of left side low Dribbles?"',
       '"Can you add another finishing set to this drill?"',
     ],
   },

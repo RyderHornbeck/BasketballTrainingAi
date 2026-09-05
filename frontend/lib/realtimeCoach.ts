@@ -20,6 +20,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { isLikelyNetworkError, reportNetworkFailure } from "@/lib/connectivity";
 import {
+  isTimerStartConfirmationAffirmative,
   parseCoachSpeechIntent,
   parseSpeechControlIntent,
   normalizeCoachSpeech,
@@ -34,9 +35,21 @@ import {
 import { bindShotToCursor, cursorMatches } from "@/lib/shotCursor";
 import { parseSafePlaybackShotIntent } from "@/lib/playbackShotIntent";
 import {
+  gateShotEvent,
+  type ShotEventSource,
+  type ShotInputMode,
+  type ShotResult,
+} from "@/lib/shotEventSeam";
+export type {
+  ShotEventSource,
+  ShotInputMode,
+  ShotResult,
+} from "@/lib/shotEventSeam";
+import {
   parseShotProgressReply,
   playShotProgressAudio,
   preloadLikelyNextShotProgressAudio,
+  preloadShotProgressAudio,
 } from "@/lib/shotProgressAudio";
 import { getCoachPersonaId } from "@/lib/coachProfiles";
 import {
@@ -81,6 +94,7 @@ import {
   type CoachTurnStreamEvent,
   type LocalShotSessionContext,
 } from "@/lib/coachTurnStream";
+import type { ShotMapLogEntry } from "@/lib/shotMap";
 import {
   inferVoiceAudioProfile,
   startVoiceCallAudio,
@@ -227,7 +241,10 @@ export interface RealtimeCoachCallbacks {
   onTimerAction: (action: ClientTimerAction) => void;
   onCommandHeard?: (event: RecognizedCoachCommand) => void;
   onUserTranscript?: (text: string) => void;
-  onCoachTranscript?: (text: string) => void;
+  onCoachTranscript?: (
+    text: string,
+    mode?: "stream" | "replace",
+  ) => void;
   onAudioLevel?: (source: "microphone" | "tts", level: number) => void;
   onCoachPlaybackFinished?: () => void;
   onConversationSummary?: (summary: string) => void;
@@ -242,10 +259,37 @@ export interface RealtimeCoachCallbacks {
 
 export type CoachSttProvider = "assemblyai" | "deepgram";
 
+export interface VideoCoachHudState {
+  exerciseId: string | null;
+  exerciseName: string;
+  setNumber: number | null;
+  sideLabel: string | null;
+  makes: number;
+  attempts: number;
+  targetAttempts: number | null;
+  targetMinutes: number | null;
+  shotMapLogs: ShotMapLogEntry[];
+  shootingPercentage: number;
+  isTimed: boolean;
+}
+
 export interface RecognizedCoachCommand {
   turnId: string;
   label: string;
   state: "recognized" | "failed";
+}
+
+export interface ShotEventRecordOutcome {
+  status: "recorded" | "ignored" | "duplicate" | "rejected";
+  reason?:
+    | "voice_disabled"
+    | "video_disabled"
+    | "duplicate_event"
+    | "invalid_event_id"
+    | "session_inactive"
+    | "non_shooting_exercise"
+    | "timed_exercise";
+  output?: string;
 }
 
 interface FunctionCallItem {
@@ -330,6 +374,11 @@ interface PendingAddExerciseSet {
   drillName: string | null;
 }
 
+interface PendingCatalogExerciseAdd {
+  query: string;
+  originalTranscript: string;
+}
+
 interface PendingStartupOffer {
   kind: "start" | "continue";
   readyForConfirmation: boolean;
@@ -368,6 +417,8 @@ interface RealtimeDrillState {
   exercise_id: string;
   name: string | null;
   category?: string | null;
+  instructions?: string | null;
+  drill_description?: string | null;
   status?: "complete" | "in_progress" | "not_started";
   target: {
     makes: number | null;
@@ -444,37 +495,19 @@ interface ShotUndoEntry {
   exerciseId: string;
   drillName: string;
   setNumber: number;
+  result: ShotResult;
   makes: number;
   attempts: number;
 }
 
-const TIMER_ENCOURAGEMENT_LEADS = [
-  "Stay sharp",
-  "Keep pushing",
-  "Nice pace",
-  "Lock in",
-  "Stay smooth",
-  "Keep working",
-  "Strong effort",
-  "Keep moving",
-  "Great rhythm",
-  "Stay focused",
+const TIMER_MILESTONE_ENCOURAGEMENTS = [
+  "Keep going.",
+  "Stay locked in.",
+  "Keep your pace.",
+  "Finish strong.",
+  "You've got this.",
+  "Stay focused.",
 ] as const;
-const TIMER_ENCOURAGEMENT_FINISHES = [
-  "Own this rep",
-  "Keep your form clean",
-  "Finish strong",
-  "One rep at a time",
-  "Keep that energy",
-  "Stay controlled",
-  "You've got this",
-  "Keep the pace",
-  "Make every second count",
-  "Keep competing",
-] as const;
-const TIMER_ENCOURAGEMENTS = TIMER_ENCOURAGEMENT_LEADS.flatMap((lead) =>
-  TIMER_ENCOURAGEMENT_FINISHES.map((finish) => `${lead}. ${finish}.`)
-);
 
 const START_WORKOUT_GREETINGS = [
   "Hey {name}, are you ready to start your workout?",
@@ -561,6 +594,22 @@ function normalizeDrillReference(value: unknown): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+function categoryForDrillReference(value: string): string | null {
+  const query = normalizeDrillReference(value);
+  if (/^(?:finishing|finish|layup|layups|rim finish(?:es)?)$/.test(query)) {
+    return "finishing";
+  }
+  if (/^(?:shooting|shoot)$/.test(query)) {
+    return "shooting";
+  }
+  if (/^(?:ball handling|ballhandling|handles|dribbling|dribble)$/.test(query)) {
+    return "ball_handling";
+  }
+  if (/^(?:defense|defence|defensive)$/.test(query)) return "defense";
+  if (/^(?:conditioning|conditioning drills|fitness)$/.test(query)) return "conditioning";
+  return null;
 }
 
 const MIC_CONSTRAINTS = {
@@ -767,6 +816,7 @@ export class RealtimeCoachSession {
   private pendingTimerDurationChange: PendingTimerDurationChange | null = null;
   private pendingShootingTargetChange: PendingShootingTargetChange | null = null;
   private pendingAddExerciseSet: PendingAddExerciseSet | null = null;
+  private pendingCatalogExerciseAdd: PendingCatalogExerciseAdd | null = null;
   private deferredTimerOfferConfirmation: {
     transcript: string;
     generation: number;
@@ -928,6 +978,8 @@ export class RealtimeCoachSession {
   private pendingCartesiaUsage: ProviderUsageDelta | null = null;
   private pendingAssemblyInworldUsage: ProviderUsageDelta | null = null;
   private shotUndoStack: ShotUndoEntry[] = [];
+  private shotInputMode: ShotInputMode = "voice";
+  private seenVideoShotEventIds = new Set<string>();
   private preferredName: string | null = null;
   private startupGreetingActive = false;
   private startupGreetingPlaybackStarted = false;
@@ -940,6 +992,93 @@ export class RealtimeCoachSession {
 
   getSessionKey(): string | null {
     return this.sessionKey;
+  }
+
+  setShotInputMode(mode: ShotInputMode): void {
+    this.shotInputMode = mode;
+  }
+
+  getShotInputMode(): ShotInputMode {
+    return this.shotInputMode;
+  }
+
+  getVideoCoachHudState(): VideoCoachHudState {
+    const drill = this.currentDrill();
+    const current = this.currentSetState();
+    const currentSet = drill?.set_results.find(
+      (set) => set.set_number === current?.set_number,
+    );
+    const makes = current?.progress.makes ?? 0;
+    const attempts = current?.progress.attempts ?? 0;
+    const shotMapLogs = (this.workoutState?.sequence?.drills ?? []).flatMap(
+      (entry): ShotMapLogEntry[] => {
+        const setLogs = entry.set_results
+          .map((set) => {
+            const makes = set.progress?.makes ?? set.makes ?? 0;
+            const attempts = set.progress?.attempts ?? set.attempts ?? 0;
+            return attempts > 0
+              ? {
+                set_number: set.set_number,
+                makes,
+                attempts,
+                minutes: null,
+                completed: set.completed,
+              }
+              : null;
+          })
+          .filter(
+            (
+              set,
+            ): set is {
+              set_number: number;
+              makes: number;
+              attempts: number;
+              minutes: null;
+              completed: boolean;
+            } => set != null,
+          );
+        if (!setLogs.length) return [];
+        return [{
+          created_at: new Date().toISOString(),
+          completed: entry.status === "complete",
+          makes: null,
+          attempts: null,
+          notes: `__hoop_set_logs__:${JSON.stringify({ set_logs: setLogs })}`,
+          workout_exercises: {
+            category: entry.category ?? null,
+            name: entry.name,
+            instructions: null,
+            set_side_labels: entry.set_results.map((set) => set.side_label ?? ""),
+          },
+        }];
+      },
+    );
+    return {
+      exerciseId: current?.exercise_id ?? drill?.exercise_id ?? null,
+      exerciseName:
+        current?.drill_name?.trim() ||
+        drill?.name?.trim() ||
+        "Current exercise",
+      setNumber: current?.set_number ?? null,
+      sideLabel:
+        current?.side_label?.trim() || currentSet?.side_label?.trim() || null,
+      makes,
+      attempts,
+      targetAttempts: current?.target.attempts ?? null,
+      targetMinutes: current?.target.minutes ?? null,
+      shotMapLogs,
+      shootingPercentage:
+        attempts > 0 ? Math.round((makes / attempts) * 100) : 0,
+      isTimed: drill ? this.currentExerciseIsTimed(drill) : false,
+    };
+  }
+
+  async recordShotResult(
+    result: ShotResult,
+    source: ShotEventSource,
+    eventId: string,
+  ): Promise<ShotEventRecordOutcome> {
+    return this.recordShotResultThroughSeam(result, source, eventId, true);
   }
 
   async connect(
@@ -991,6 +1130,7 @@ export class RealtimeCoachSession {
     this.pendingTimerDurationChange = null;
     this.pendingShootingTargetChange = null;
     this.pendingAddExerciseSet = null;
+    this.pendingCatalogExerciseAdd = null;
     this.pendingStartupOffer = null;
     this.pendingIncompleteShotCompletion = null;
     this.pendingIncompleteSetContinuation = null;
@@ -1705,6 +1845,7 @@ export class RealtimeCoachSession {
         if (
           this.playbackActive ||
           this.generationActive ||
+          this.inworldContextId ||
           Date.now() < this.assemblyEchoGuardUntil
         ) {
           // Wait for transcript evidence before treating an Assembly detection
@@ -2051,7 +2192,11 @@ export class RealtimeCoachSession {
       duplexAudio.addPlaybackStateListener((event) => {
         if (generation !== this.connectionGeneration) return;
         this.playbackActive = event.state === "playing";
-        if (event.state === "playing" && this.startupGreetingActive) {
+        const currentInworldPlaybackStarted =
+          event.state === "playing" &&
+          this.inworldSpeech?.firstAudioReceived === true &&
+          this.inworldSpeech.contextId === this.inworldContextId;
+        if (currentInworldPlaybackStarted && this.startupGreetingActive) {
           this.startupGreetingPlaybackStarted = true;
           this.markStartupConnectionEstablished();
         }
@@ -2059,11 +2204,15 @@ export class RealtimeCoachSession {
         // first-playback watchdog armed would clear healthy audio 2.5 seconds
         // later and force an unnecessary retry, eventually appearing as a
         // silent Coach session.
-        if (event.state === "playing" && this.inworldPlaybackStartWatchdog) {
+        if (currentInworldPlaybackStarted && this.inworldPlaybackStartWatchdog) {
           clearTimeout(this.inworldPlaybackStartWatchdog);
           this.inworldPlaybackStartWatchdog = null;
         }
-        if (event.reason === "completed" && !this.generationActive) {
+        if (
+          event.reason === "completed" &&
+          !this.generationActive &&
+          !this.inworldContextId
+        ) {
           // The native queue is empty, but far-field microphone capture can
           // still receive the speaker's final syllables. Hold speech-start
           // handling until Assembly provides a transcript we can compare.
@@ -2400,6 +2549,20 @@ export class RealtimeCoachSession {
           this.inworldSpeech = null;
           this.generationActive = false;
           this.updateStatus();
+          // Native playback can empty just before Inworld acknowledges the
+          // final flush. The playback listener cannot finish the greeting
+          // while this context still exists, so finish it here once both
+          // sides are idle.
+          if (
+            this.startupGreetingActive &&
+            this.startupGreetingPlaybackStarted &&
+            !this.playbackActive
+          ) {
+            this.callbacks?.onCoachPlaybackFinished?.();
+            this.handleDeterministicPlaybackCompleted();
+            this.flushPendingContextRefresh();
+            this.flushQueuedResponse();
+          }
         });
       },
       onBilledCharacters: (count) => {
@@ -2777,7 +2940,7 @@ export class RealtimeCoachSession {
     // anything; only the very next athlete turn after an explicit final offer
     // is eligible.
     if (
-      !/(?:would you like|do you want)[^.?!]{0,120}\bstart\b[^.?!]*\btimer\?\s*$/i.test(
+      !/(?:would you like|do you want)[^.?!]{0,120}\bstart\b[^.?!]*\btimer\b[^.?!]*\?\s*$/i.test(
         text.trim(),
       )
     ) {
@@ -2972,7 +3135,7 @@ export class RealtimeCoachSession {
     completedExerciseId: string,
     completedSetNumber: number,
   ): Promise<void> {
-    if (!this.active || !this.assemblyInworldActive) return;
+    if (!this.active) return;
     const current = this.currentDrill();
     const currentSet = this.currentSetState();
     const hasAuthoritativeNextSet =
@@ -3026,10 +3189,12 @@ export class RealtimeCoachSession {
       reply,
     );
     this.callbacks?.onConversationSummary?.(this.conversationSummary);
+    const speechEpoch = this.interruptForPriorityTimerAnnouncement();
+    if (speechEpoch == null) return;
     await this.speakDeterministic(
       reply,
       `timed-set-complete:${completedExerciseId}:${completedSetNumber}`,
-      this.speechEpoch,
+      speechEpoch,
     );
   }
 
@@ -3119,6 +3284,7 @@ export class RealtimeCoachSession {
         }
         this.workoutState = parsed;
         this.reapplyPendingShotSetsToWorkoutState();
+        this.preloadActiveShotProgressAudio();
         if (typeof snapshotVersion === "number") {
           this.workoutStateVersion = snapshotVersion;
           if (
@@ -3138,6 +3304,29 @@ export class RealtimeCoachSession {
     for (const entry of this.pendingShotSets.values()) {
       this.updateBufferedSetInWorkoutState(entry);
     }
+  }
+
+  private preloadActiveShotProgressAudio(): void {
+    const drill = this.currentDrill();
+    const current = this.currentSetState();
+    if (!drill || !current || !this.acceptsShotResults(drill)) return;
+    const attempts = current.progress.attempts;
+    const makes = current.progress.makes;
+    const targetAttempts = current.target.attempts;
+    if (
+      attempts < 0 ||
+      attempts > 20 ||
+      makes < 0 ||
+      makes > attempts ||
+      targetAttempts == null
+    ) {
+      return;
+    }
+    const shotsLeft = Math.max(0, targetAttempts - attempts);
+    if (shotsLeft > 20) return;
+    const reply = { makes, attempts, shotsLeft };
+    preloadShotProgressAudio(this.voicePersona, reply);
+    preloadLikelyNextShotProgressAudio(this.voicePersona, reply);
   }
 
   private reconcileShootingTargetChange(args: Record<string, unknown>): void {
@@ -3223,6 +3412,22 @@ export class RealtimeCoachSession {
       if (partial.length === 1) return partial[0];
     }
     return this.workoutState?.navigation?.next_work_item ?? null;
+  }
+
+  private findWorkoutDrillByName(query: string): RealtimeDrillState | null {
+    const normalizedQuery = normalizeDrillReference(query);
+    if (!normalizedQuery) return null;
+    const drills = this.orderedDrills();
+    const matches = drills.filter(
+      (drill) => normalizeDrillReference(drill.name) === normalizedQuery,
+    );
+    if (matches.length === 1) return matches[0];
+    const category = categoryForDrillReference(query);
+    return category
+      ? drills.find((drill) => drill.category === category && drill.status !== "complete") ??
+        drills.find((drill) => drill.category === category) ??
+        null
+      : null;
   }
 
   private updateBufferedSetInWorkoutState(entry: PendingShotSet): void {
@@ -3877,6 +4082,7 @@ export class RealtimeCoachSession {
         exerciseId: entry.exerciseId,
         drillName: entry.drillName,
         setNumber: entry.setNumber,
+        result: args.makes === 1 ? "make" : "miss",
         makes: reportedMakes,
         attempts: reportedAttempts,
       });
@@ -3938,6 +4144,135 @@ export class RealtimeCoachSession {
     return drill?.category === "shooting" || drill?.category === "finishing";
   }
 
+  private hasActiveShootingSet(): boolean {
+    const drill = this.currentDrill();
+    const set = this.currentSetState();
+    return Boolean(drill && set && !set.completed && this.acceptsShotResults(drill));
+  }
+
+  private currentExerciseIsTimed(drill: RealtimeDrillState): boolean {
+    const current = this.currentSetState();
+    const set = drill.set_results.find(
+      (candidate) => candidate.set_number === current?.set_number,
+    );
+    const minutes =
+      current?.target.minutes ?? set?.target?.minutes ?? drill.target.minutes;
+    return (minutes != null && minutes > 0) || this.isTimedSet(drill, set);
+  }
+
+  private interruptForShotEvent(): void {
+    const generation = this.connectionGeneration;
+    if (this.assemblyInworldActive) {
+      this.handleAssemblySpeechStart(generation);
+      return;
+    }
+    if (this.cartesiaActive) {
+      this.handleCartesiaSpeechStart(generation);
+      return;
+    }
+    if (!this.active) return;
+    this.latestUserTranscript = null;
+    this.speechEpoch += 1;
+    this.responseQueue = [];
+    if (this.generationActive || this.responseCreatePending) {
+      this.sendEvent({ type: "response.cancel" }, false);
+    }
+    if (this.playbackActive) {
+      this.sendEvent({ type: "output_audio_buffer.clear" }, false);
+    }
+    this.generationActive = false;
+    this.playbackActive = false;
+    this.callbacks?.onStatus(this.muted ? "muted" : "listening");
+  }
+
+  private async recordShotResultThroughSeam(
+    result: ShotResult,
+    source: ShotEventSource,
+    eventId: string,
+    interruptAndSpeak: boolean,
+  ): Promise<ShotEventRecordOutcome> {
+    const normalizedEventId = eventId.trim();
+    if (!normalizedEventId) {
+      return { status: "rejected", reason: "invalid_event_id" };
+    }
+    const gate = gateShotEvent(
+      this.shotInputMode,
+      source,
+      normalizedEventId,
+      this.seenVideoShotEventIds,
+    );
+    if (gate.status !== "accepted") {
+      return { status: gate.status, reason: gate.reason };
+    }
+    if (!this.active) {
+      if (source === "video") this.seenVideoShotEventIds.delete(normalizedEventId);
+      return { status: "rejected", reason: "session_inactive" };
+    }
+    const drill = this.currentDrill();
+    if (!this.acceptsShotResults(drill)) {
+      return {
+        status: "rejected",
+        reason: "non_shooting_exercise",
+        output: this.nonShootingShotReply(drill),
+      };
+    }
+    if (source === "video" && drill && this.currentExerciseIsTimed(drill)) {
+      return {
+        status: "rejected",
+        reason: "timed_exercise",
+        output: "Video shot tracking is unavailable for timed exercises.",
+      };
+    }
+
+    if (interruptAndSpeak) this.interruptForShotEvent();
+    const speechEpoch = this.speechEpoch;
+    const current = this.currentSetState();
+    const buffered = await this.bufferShootingResult({
+      makes: result === "make" ? 1 : 0,
+      attempts: 1,
+      mode: "increment",
+      exercise_id: current?.exercise_id,
+      drill_name: current?.drill_name,
+      set_number: current?.set_number,
+      completed: false,
+      client_request_id: normalizedEventId,
+    });
+    if (
+      buffered.kind !== "buffered_shot" &&
+      buffered.kind !== "completed_shot"
+    ) {
+      return {
+        status: "rejected",
+        reason: "non_shooting_exercise",
+        output: buffered.output,
+      };
+    }
+
+    if (interruptAndSpeak) {
+      const sourceLabel =
+        source === "video"
+          ? `Camera recorded ${result === "make" ? "a make" : "a miss"}.`
+          : result;
+      this.conversationSummary = appendConversationTurn(
+        this.conversationSummary,
+        sourceLabel,
+        buffered.output,
+      );
+      this.lastLocalShotTurn = {
+        userTranscript: sourceLabel,
+        coachReply: buffered.output,
+      };
+      this.lastDeterministicReply = buffered.output;
+      this.callbacks?.onConversationSummary?.(this.conversationSummary);
+      await this.speakDeterministic(
+        buffered.output,
+        normalizedEventId,
+        speechEpoch,
+      );
+    }
+    return { status: "recorded", output: buffered.output };
+  }
+
   private nonShootingShotReply(drill: RealtimeDrillState | null): string {
     const minutes =
       drill && this.currentSetState()?.exercise_id === drill.exercise_id
@@ -3985,6 +4320,11 @@ export class RealtimeCoachSession {
       client_request_id: requestId,
     });
     return result.output;
+  }
+
+  private latestRecordedShotResult(): ShotResult | null {
+    const latest = this.shotUndoStack.at(-1);
+    return latest?.result ?? null;
   }
 
   private stageCoachLastShotCorrection(
@@ -4158,7 +4498,13 @@ export class RealtimeCoachSession {
     const matches = drills.filter(
       (drill) => normalizeDrillReference(drill.name) === normalizedName
     );
-    return matches.length === 1 ? matches[0] : null;
+    if (matches.length === 1) return matches[0];
+    const category = categoryForDrillReference(target.name);
+    return category
+      ? drills.find((drill) => drill.category === category && drill.status !== "complete") ??
+        drills.find((drill) => drill.category === category) ??
+        null
+      : null;
   }
 
   private isTimedSet(
@@ -4443,6 +4789,48 @@ export class RealtimeCoachSession {
     return null;
   }
 
+  private resumeOrStartCurrentTimedSet(): {
+    action: ClientTimerAction | null;
+    reply: string;
+  } {
+    const timer = this.currentTimerSnapshot();
+    if (timer.running) {
+      return { action: null, reply: "The timer is already running." };
+    }
+    if (timer.elapsed_seconds > 0) {
+      return { action: { type: "resume_timer" }, reply: "Timer resumed." };
+    }
+    const current = this.currentSetState();
+    const drill = this.currentDrill();
+    const isTimedSet = Boolean(
+      current &&
+      drill &&
+      (
+        (current.target.minutes ?? drill.target.minutes ?? 0) > 0 ||
+        ["ball_handling", "defense", "conditioning"].includes(drill.category ?? "")
+      )
+    );
+    if (!isTimedSet) {
+      return { action: null, reply: "This drill isn't a timed drill." };
+    }
+    const minutes = current?.target.minutes ?? drill?.target.minutes;
+    const durationSeconds = minutes != null && minutes > 0
+      ? Math.round(minutes * 60)
+      : null;
+    if (durationSeconds == null) {
+      return { action: null, reply: "This timed set does not have a duration yet." };
+    }
+    return {
+      action: {
+        type: "start_timer",
+        duration_seconds: durationSeconds,
+        timer_exercise_id: current?.exercise_id ?? null,
+        timer_set_number: current?.set_number ?? null,
+      },
+      reply: this.timerStartedReply(durationSeconds),
+    };
+  }
+
   private rejectUnavailableBackendTimerAction(
     action: ClientTimerAction,
     turnId: string,
@@ -4499,6 +4887,38 @@ export class RealtimeCoachSession {
     return `${minutes}-minute ${remainder}-second`;
   }
 
+  private setOrdinal(setNumber: number): string {
+    const remainder100 = setNumber % 100;
+    if (remainder100 >= 11 && remainder100 <= 13) return `${setNumber}th`;
+    const suffix = setNumber % 10 === 1
+      ? "st"
+      : setNumber % 10 === 2
+        ? "nd"
+        : setNumber % 10 === 3
+          ? "rd"
+          : "th";
+    return `${setNumber}${suffix}`;
+  }
+
+  private currentDrillExplanationReply(): string {
+    const drill = this.currentDrill();
+    const currentSet = this.currentSetState();
+    if (!drill) return "There isn't a current drill to explain.";
+    const directions = (drill.instructions || drill.drill_description || "").trim();
+    const introduction = `You're on ${drill.name ?? "the current drill"}.`;
+    const explanation = directions
+      ? `${introduction} ${directions}`
+      : `${introduction} I don't have instructions saved for this drill.`;
+    if (!currentSet || this.currentTimerSnapshot().running) return explanation;
+    const set = drill.set_results.find(
+      (candidate) => candidate.set_number === currentSet.set_number,
+    );
+    if (!this.isTimedSet(drill, set)) return explanation;
+    return `${explanation} Would you like me to start the timer for your ${this.setOrdinal(
+      currentSet.set_number,
+    )} set?`;
+  }
+
   private authoritativeTurnInstructions(): string {
     const currentSet = this.currentSetState();
     const currentDrill = this.currentDrill();
@@ -4527,6 +4947,26 @@ export class RealtimeCoachSession {
       // timer controls, so "stop talking" can never pause the workout timer.
       this.handleCartesiaSpeechStart(this.connectionGeneration);
       return "";
+    }
+    if (command.kind === "drill_explanation") {
+      return this.currentDrillExplanationReply();
+    }
+    if (command.kind === "drill_request") {
+      const existing = this.findWorkoutDrillByName(command.args.query);
+      if (command.args.action === "move_or_add" && existing) {
+        await this.flushPendingShotSets();
+        const result = await this.invokeCoachTool("set_current_position", {
+          exercise_id: existing.exercise_id,
+          drill_name: existing.name,
+          ...requestArgs,
+        });
+        return this.navigationArrivalReply(result);
+      }
+      this.pendingCatalogExerciseAdd = {
+        query: command.args.query,
+        originalTranscript: turn.transcript,
+      };
+      return `${command.args.query} isn't in this workout. Would you like me to add it?`;
     }
     if (command.kind === "startup_confirmation") {
       const pending = this.pendingStartupOffer;
@@ -4633,11 +5073,50 @@ export class RealtimeCoachSession {
     }
 
     if (command.kind === "correct_last_shot") {
+      if ("action" in command.args) {
+        const latest = this.latestRecordedShotResult();
+        if (!latest) return "There isn't a clear latest shot result to correct.";
+        return this.correctLastShot(
+          latest,
+          latest === "make" ? "miss" : "make",
+          turn.requestId,
+        );
+      }
       return this.correctLastShot(
         command.args.from,
         command.args.to,
         turn.requestId,
       );
+    }
+    if (command.kind === "correct_shot_misses") {
+      const current = this.currentSetState();
+      const drill = this.resolveRealtimeDrill({
+        exercise_id: current?.exercise_id,
+        drill_name: current?.drill_name,
+      });
+      const setNumber = current?.set_number ?? drill?.sets.next_unfinished ?? 1;
+      const pending = drill
+        ? this.pendingShotSets.get(this.pendingShotKey(drill.exercise_id, setNumber))
+        : null;
+      const saved = drill?.set_results.find((set) => set.set_number === setNumber);
+      const attempts = pending?.attempts ?? saved?.attempts ?? current?.progress.attempts ?? 0;
+      const makes = attempts - command.args.misses;
+      if (!drill || attempts < 1 || attempts > 500 || makes < 0) {
+        return "I need the current shooting total before I can apply that correction.";
+      }
+      const result = await this.bufferShootingResult({
+        exercise_id: drill.exercise_id,
+        drill_name: drill.name,
+        set_number: setNumber,
+        makes,
+        attempts,
+        mode: "replace",
+        completed: false,
+        defer_persist: true,
+        persist_session_progress: true,
+        ...requestArgs,
+      });
+      return result.output;
     }
     if (command.kind === "continuation_confirmation") {
       const pending = this.pendingIncompleteSetContinuation;
@@ -4667,6 +5146,25 @@ export class RealtimeCoachSession {
       const activeDrill = this.currentDrill();
       if (!this.acceptsShotResults(activeDrill)) {
         return this.nonShootingShotReply(activeDrill);
+      }
+      if (
+        command.args.mode === "replace" &&
+        command.args.makes > command.args.attempts
+      ) {
+        return `You can't be ${command.args.makes} for ${command.args.attempts}. Makes can't be greater than attempts.`;
+      }
+      if (
+        command.args.mode === "increment" &&
+        command.args.attempts === 1 &&
+        (command.args.makes === 0 || command.args.makes === 1)
+      ) {
+        const recorded = await this.recordShotResultThroughSeam(
+          command.args.makes === 1 ? "make" : "miss",
+          "voice",
+          turn.requestId,
+          false,
+        );
+        return recorded.output ?? "";
       }
       const current = this.currentSetState();
       const result = await this.bufferShootingResult({
@@ -4709,12 +5207,9 @@ export class RealtimeCoachSession {
         return wasRunning ? "Timer paused." : "The timer is already paused.";
       }
       if (action === "resume") {
-        const canResume = !this.timer.running && this.timer.elapsed_seconds > 0;
-        if (!canResume && !this.hasTimer()) {
-          return `You can't resume the timer because ${this.noTimerReply().toLowerCase()}`;
-        }
-        if (canResume) this.callbacks?.onTimerAction({ type: "resume_timer" });
-        return canResume ? "Timer resumed." : "There isn't a paused timer.";
+        const resume = this.resumeOrStartCurrentTimedSet();
+        if (resume.action) this.callbacks?.onTimerAction(resume.action);
+        return resume.reply;
       }
       if (action === "stop" || action === "reset") {
         this.callbacks?.onTimerAction({ type: "stop_timer" });
@@ -4817,6 +5312,12 @@ export class RealtimeCoachSession {
         return "I couldn't find that set in the current drill.";
       }
       if (command.args.durationSeconds != null) {
+        const targetSet = current.set_results.find(
+          (setResult) => setResult.set_number === setNumber,
+        );
+        if (!this.isTimedSet(current, targetSet)) {
+          return "You are not on a timed drill.";
+        }
         const result = await this.invokeCoachTool("set_timed_set_duration", {
             exercise_id: current.exercise_id,
             drill_name: current.name,
@@ -4824,7 +5325,9 @@ export class RealtimeCoachSession {
             duration_seconds: command.args.durationSeconds,
             ...requestArgs,
           });
-        if (result.result.startsWith("Error:")) return result.result;
+        if (!result.db_changed) {
+          return result.result || "I couldn't change that set timer.";
+        }
         const restart = this.timer.running;
         this.pendingTimerDurationChange = {
           exerciseId: current.exercise_id,
@@ -4845,15 +5348,26 @@ export class RealtimeCoachSession {
         (setResult) => setResult.set_number === setNumber,
       );
       const targetAttempts = currentSet?.target?.attempts ?? current.target.attempts ?? 0;
+      const recordedMakes = currentSet?.progress?.makes ?? currentSet?.makes ?? 0;
+      const recordedAttempts = currentSet?.progress?.attempts ?? currentSet?.attempts ?? 0;
       const requestedAttempts = command.args.targetAttempts == null
-        ? undefined
+        ? command.args.attemptAdjustment == null
+          ? undefined
+          : targetAttempts + command.args.attemptAdjustment
+        : command.args.remainingAttempts
+          ? recordedAttempts + command.args.targetAttempts
         : command.args.additionalAttempts
           ? targetAttempts + command.args.targetAttempts
           : command.args.targetAttempts;
-      const recordedMakes = currentSet?.progress?.makes ?? currentSet?.makes ?? 0;
-      const recordedAttempts = currentSet?.progress?.attempts ?? currentSet?.attempts ?? 0;
-      if (requestedAttempts != null && requestedAttempts < recordedMakes) {
-        return `I can't make attempts smaller than your current makes. Choose at least ${recordedMakes} attempts because you already made ${recordedMakes} shots.`;
+      if (
+        requestedAttempts != null &&
+        (!Number.isInteger(requestedAttempts) || requestedAttempts < 1 || requestedAttempts > 500)
+      ) {
+        return "The attempt target must be a whole number from 1 to 500.";
+      }
+      const minimumAttempts = Math.max(recordedMakes, recordedAttempts);
+      if (requestedAttempts != null && requestedAttempts < minimumAttempts) {
+        return `I can't make the target smaller than your recorded attempts. Choose at least ${minimumAttempts} because you're already ${recordedMakes} for ${recordedAttempts}.`;
       }
       const result = await this.invokeCoachTool("set_shooting_set_targets", {
         exercise_id: current.exercise_id,
@@ -4953,7 +5467,9 @@ export class RealtimeCoachSession {
         return this.navigationArrivalReply(result);
       }
       const target = this.resolveNavigationTarget(command.args.target);
-      if (!target) return null;
+      if (!target) {
+        return null;
+      }
       await this.flushPendingShotSets();
       const result = await this.invokeCoachTool("set_current_position", {
         exercise_id: target.exercise_id,
@@ -5048,21 +5564,6 @@ export class RealtimeCoachSession {
         })
       ).result;
     }
-    if (command.kind === "remove_drill") {
-      const normalized = normalizeDrillReference(command.args.name);
-      const matches = this.orderedDrills().filter(
-        (drill) => normalizeDrillReference(drill.name) === normalized
-      );
-      if (matches.length !== 1) return null;
-      await this.flushPendingShotSets();
-      return (
-        await this.invokeCoachTool("remove_workout_exercise", {
-          exercise_id: matches[0].exercise_id,
-          drill_name: matches[0].name,
-          ...requestArgs,
-        })
-      ).result;
-    }
     return null;
   }
 
@@ -5084,13 +5585,12 @@ export class RealtimeCoachSession {
       ? parseSpeechControlIntent(normalized)
       : null;
     if (stop) return stop;
+    if (this.shotInputMode === "video") return null;
     return parseSafePlaybackShotIntent(normalized, coachSpeech);
   }
 
   private isTimerOfferAffirmative(transcript: string): boolean {
-    return /^(?:yes|yeah|yep|sure|absolutely|definitely|of course|for sure|certainly|go ahead|please|i(?:'| a)m ready|ready|ok|okay|sounds good|do it|start it|lets start|let's start)\b/.test(
-      normalizeCoachSpeech(transcript),
-    );
+    return isTimerStartConfirmationAffirmative(transcript);
   }
 
   private isStartupOfferAffirmative(transcript: string): boolean {
@@ -5171,7 +5671,16 @@ export class RealtimeCoachSession {
     };
     this.speechStoppedAtByItem.delete(turnId);
     this.routedTurns.set(turnId, turn);
-    if (this.playbackActive || this.generationActive || this.inworldContextId) {
+    // One Coach turn owns the response lifecycle at a time. Without this
+    // guard, a second transcript can queue a model turn while a deterministic
+    // command is still writing workout state, replacing its pending reply.
+    if (
+      this.playbackActive ||
+      this.generationActive ||
+      this.responseCreatePending ||
+      this.toolBusy ||
+      this.inworldContextId
+    ) {
       if (
         this.pendingTimerDurationChange?.startAfterConfirmation &&
         this.pendingTimerDurationChange.readyForConfirmation === false &&
@@ -5212,6 +5721,47 @@ export class RealtimeCoachSession {
     // consumes the command before it reaches Haiku.
     this.callbacks?.onUserTranscript?.(transcript);
     const normalizedReply = normalizeCoachSpeech(transcript);
+    const pendingCatalogAdd = this.pendingCatalogExerciseAdd;
+    if (pendingCatalogAdd) {
+      const accepted = isTimerStartConfirmationAffirmative(transcript);
+      const declined = /^(?:no|nope|nah|not now|not yet|never mind|cancel)$/i.test(
+        normalizedReply,
+      );
+      if (accepted || declined) {
+        this.pendingCatalogExerciseAdd = null;
+        if (declined) {
+          await this.speakDeterministic(
+            "Okay, I won't add it.",
+            `catalog-add-declined:${turn.requestId}`,
+            turn.speechEpoch,
+          );
+          return;
+        }
+        const handoff =
+          `The athlete asked to add "${pendingCatalogAdd.query}" to this workout and ` +
+          `just confirmed they want to add it. Search the exercise catalog for the best ` +
+          `matching drill or category and add the exact result now. Do not ask another ` +
+          `confirmation question. Original request: "${pendingCatalogAdd.originalTranscript}".`;
+        turn.routeDecidedAt = Date.now();
+        this.fallbackTurnCount += 1;
+        this.logVoiceMetric(turn, "route_decision");
+        this.latestUserTranscript = handoff;
+        if (this.cartesiaActive) {
+          await this.requestCartesiaModelTurn(handoff, turn);
+        } else if (this.assemblyInworldActive) {
+          await this.requestAssemblyModelTurn(handoff, turn);
+        } else {
+          this.requestResponse(
+            this.authoritativeTurnInstructions(),
+            false,
+            null,
+            handoff,
+          );
+        }
+        return;
+      }
+      this.pendingCatalogExerciseAdd = null;
+    }
     const startupOfferAffirmative =
       this.pendingStartupOffer?.readyForConfirmation === true &&
       this.isStartupOfferAffirmative(transcript);
@@ -5378,27 +5928,56 @@ export class RealtimeCoachSession {
               heardLabel: "Shooting target extension confirmed",
               safeToDelete: true,
             }
-        : parseCoachSpeechIntent(transcript) ??
+        : parseCoachSpeechIntent(transcript, {
+            activeShootingSet: this.hasActiveShootingSet(),
+          }) ??
           this.parsePlaybackStopCommand(transcript);
-    const coachAddressed = /^(?:hey\s+)?coach\b/i.test(transcript.trim());
-    if (
-      coachAddressed &&
-      (
-        command?.kind === "correct_last_shot" ||
-        (command?.kind === "shot" && command.args.mode === "replace")
-      )
-    ) {
-      // Coach-addressed score corrections must use the current local session
-      // context and the single absolute-total tool, rather than taking a
-      // separate deterministic correction path.
-      if (command.kind === "correct_last_shot") {
-        this.stageCoachLastShotCorrection(
-          turn.requestId,
-          command.args.from,
-          command.args.to,
-        );
+    const isScoreCorrection =
+      command?.kind === "correct_last_shot" ||
+      command?.kind === "correct_shot_misses" ||
+      command?.kind === "undo_shot" ||
+      (command?.kind === "shot" && command.args.mode === "replace");
+    const isRawVoiceShot =
+      command?.kind === "shot" && command.args.mode === "increment";
+
+    if (this.shotInputMode === "video" && isRawVoiceShot) {
+      // Camera mode owns new make/miss events. A spoken raw shot must not
+      // mutate the count, but score-correction commands below remain enabled.
+      this.latestUserTranscript = null;
+      if (speculation) speculation.controller.abort();
+      if (itemId && command.safeToDelete) {
+        this.sendEvent({
+          type: "conversation.item.delete",
+          item_id: itemId,
+        });
       }
-      command = null;
+      this.callbacks?.onCommandHeard?.({
+        turnId,
+        label: command.heardLabel,
+        state: "recognized",
+      });
+      this.updateStatus();
+      return;
+    }
+    if (this.shotInputMode === "voice" && isScoreCorrection) {
+      // Score corrections belong exclusively to Video Coach. Voice Coach
+      // continues to accept ordinary spoken makes and misses, but never
+      // applies a local correction or forwards one to the model.
+      this.latestUserTranscript = null;
+      if (speculation) speculation.controller.abort();
+      if (itemId && command?.safeToDelete) {
+        this.sendEvent({
+          type: "conversation.item.delete",
+          item_id: itemId,
+        });
+      }
+      this.callbacks?.onCommandHeard?.({
+        turnId,
+        label: command?.heardLabel ?? "Voice score correction ignored",
+        state: "recognized",
+      });
+      this.updateStatus();
+      return;
     }
     if (
       this.pendingStartupOffer?.readyForConfirmation &&
@@ -5536,6 +6115,7 @@ export class RealtimeCoachSession {
       if (
         command.kind === "shot" ||
         command.kind === "correct_last_shot" ||
+        command.kind === "correct_shot_misses" ||
         command.kind === "undo_shot"
       ) {
         this.lastLocalShotTurn = {
@@ -5976,7 +6556,7 @@ export class RealtimeCoachSession {
     const position = this.setLocation(
       current.name,
       currentSet.set_number,
-      currentSet.side_label,
+      currentSet.side_label ?? set?.side_label,
     );
     // A greeting confirmation starts the active work immediately. For shooting
     // sets, include the live score only once shots have actually been logged;
@@ -6019,36 +6599,37 @@ export class RealtimeCoachSession {
     );
   }
 
-  announceTimerEncouragement(): boolean {
-    if (
-      !this.active ||
-      !this.assemblyInworldActive ||
-      this.startupGreetingActive ||
-      this.generationActive ||
-      this.playbackActive ||
-      this.inworldContextId
-    ) {
-      return false;
-    }
+  private interruptForPriorityTimerAnnouncement(): number | null {
+    if (!this.active) return null;
+    this.interruptForShotEvent();
+    return this.speechEpoch;
+  }
+
+  announceTimerMilestone(remainingSeconds: number): boolean {
+    const speechEpoch = this.interruptForPriorityTimerAnnouncement();
+    if (speechEpoch == null) return false;
     let encouragementIndex = Math.floor(
-      Math.random() * TIMER_ENCOURAGEMENTS.length,
+      Math.random() * TIMER_MILESTONE_ENCOURAGEMENTS.length,
     );
     if (
-      TIMER_ENCOURAGEMENTS.length > 1 &&
+      TIMER_MILESTONE_ENCOURAGEMENTS.length > 1 &&
       encouragementIndex === this.lastTimerEncouragementIndex
     ) {
-      encouragementIndex = (encouragementIndex + 1) % TIMER_ENCOURAGEMENTS.length;
+      encouragementIndex = (encouragementIndex + 1) %
+        TIMER_MILESTONE_ENCOURAGEMENTS.length;
     }
     this.lastTimerEncouragementIndex = encouragementIndex;
     this.timerEncouragementSequence += 1;
-    const encouragement = TIMER_ENCOURAGEMENTS[encouragementIndex];
-    const speechEpoch = this.speechEpoch;
+    const encouragement = TIMER_MILESTONE_ENCOURAGEMENTS[encouragementIndex];
+    const announcement = remainingSeconds === 10
+      ? "There's 10 seconds left."
+      : `There's ${remainingSeconds} seconds left. ${encouragement}`;
     void this.speakDeterministic(
-      encouragement,
-      `timer-encouragement:${this.timerEncouragementSequence}`,
+      announcement,
+      `timer-milestone:${this.timerEncouragementSequence}`,
       speechEpoch,
     ).catch((error) => {
-      console.warn("Could not play timer encouragement:", error);
+      console.warn("Could not play timer milestone:", error);
     });
     return true;
   }
@@ -6440,7 +7021,13 @@ export class RealtimeCoachSession {
           setNumber: pending.set_number,
         };
       }
-      const action = event.client_action as ClientTimerAction | null;
+      let action = event.client_action as ClientTimerAction | null;
+      let resumeReply: string | null = null;
+      if (action?.type === "resume_timer") {
+        const resume = this.resumeOrStartCurrentTimedSet();
+        action = resume.action;
+        resumeReply = resume.reply;
+      }
       if (
         action &&
         this.rejectUnavailableBackendTimerAction(action, event.turn_id)
@@ -6448,6 +7035,7 @@ export class RealtimeCoachSession {
         return;
       }
       if (action?.type === "set_shooting_total") {
+        if (this.shotInputMode === "video") return;
         void this.applyCoachShootingTotal(
           action,
           event.turn_id,
@@ -6468,6 +7056,10 @@ export class RealtimeCoachSession {
       }
       if (action && ["start_timer", "pause_timer", "resume_timer", "stop_timer"].includes(action.type)) {
         this.callbacks?.onTimerAction(action);
+      }
+      if (resumeReply) {
+        this.lastDeterministicReply = resumeReply;
+        void this.speakDeterministic(resumeReply, event.turn_id, speechEpoch);
       }
       const timerPositionBeforeNavigation =
         ["navigate_workout", "set_current_position"].includes(event.name)
@@ -6827,6 +7419,7 @@ export class RealtimeCoachSession {
           return;
         }
         if (action.type === "set_shooting_total") {
+          if (this.shotInputMode === "video") return;
           void this.applyCoachShootingTotal(
             action,
             event.turn_id,
@@ -7259,34 +7852,37 @@ export class RealtimeCoachSession {
     // Deterministic speech includes startup, timer milestones, completion
     // prompts, and local shot-set transitions. Unlike streamed LLM deltas it
     // has no text_delta event, so publish it here in one authoritative place.
-    this.callbacks?.onCoachTranscript?.(text);
-    if (this.assemblyInworldActive) {
-      const progress = parseShotProgressReply(text);
-      const persona = this.voicePersona;
-      if (progress && persona) {
-        await (this.stopLocalShotPlayback?.() ?? Promise.resolve());
-        this.stopLocalShotPlayback = null;
-        if (speechEpoch !== this.speechEpoch || !this.active) return;
-        this.generationActive = false;
-        this.playbackActive = true;
+    this.callbacks?.onCoachTranscript?.(text, "replace");
+    // Packaged score clips are the lowest-latency path and work with every
+    // transport. Never send an exact X-for-Y progress reply to a live TTS
+    // provider while a matching local clip exists.
+    const progress = parseShotProgressReply(text);
+    const persona = this.voicePersona;
+    if (progress && persona) {
+      await (this.stopLocalShotPlayback?.() ?? Promise.resolve());
+      this.stopLocalShotPlayback = null;
+      if (speechEpoch !== this.speechEpoch || !this.active) return;
+      this.generationActive = false;
+      this.playbackActive = true;
+      if (this.assemblyInworldActive) {
         this.lastAssemblyCoachSpeech = text;
         this.assemblyClient?.updateAgentContext(text);
-        this.updateStatus();
-        const stop = playShotProgressAudio(persona, progress, () => {
-          if (speechEpoch !== this.speechEpoch) return;
-          this.stopLocalShotPlayback = null;
-          this.playbackActive = false;
-          this.assemblyEchoGuardUntil = 0;
-          this.callbacks?.onCoachPlaybackFinished?.();
-          this.updateStatus();
-        });
-        if (stop) {
-          this.stopLocalShotPlayback = stop;
-          preloadLikelyNextShotProgressAudio(persona, progress);
-          return;
-        }
-        this.playbackActive = false;
       }
+      this.updateStatus();
+      const stop = playShotProgressAudio(persona, progress, () => {
+        if (speechEpoch !== this.speechEpoch) return;
+        this.stopLocalShotPlayback = null;
+        this.playbackActive = false;
+        this.assemblyEchoGuardUntil = 0;
+        this.callbacks?.onCoachPlaybackFinished?.();
+        this.updateStatus();
+      });
+      if (stop) {
+        this.stopLocalShotPlayback = stop;
+        preloadLikelyNextShotProgressAudio(persona, progress);
+        return;
+      }
+      this.playbackActive = false;
     }
     if (this.cartesiaActive) {
       const speechGate = gateCoachSpeechText(text, true);
@@ -7587,6 +8183,25 @@ export class RealtimeCoachSession {
         this.flushQueuedResponse();
         return;
       }
+      if (
+        this.shotInputMode === "video" &&
+        functionCalls.every((call) => LOCAL_SHOT_TOOLS.has(call.name))
+      ) {
+        for (const call of functionCalls) {
+          this.handledToolCalls.add(call.call_id);
+          this.sendEvent({
+            type: "conversation.item.create",
+            item: {
+              type: "function_call_output",
+              call_id: call.call_id,
+              output: "Voice shot result ignored because video tracking is active.",
+            },
+          });
+        }
+        this.updateStatus();
+        this.flushQueuedResponse();
+        return;
+      }
       this.toolBusy = true;
       this.updateStatus();
       let strongestResult: ToolExecutionKind = "read_only";
@@ -7595,6 +8210,21 @@ export class RealtimeCoachSession {
       try {
         for (const call of functionCalls) {
           let effectiveCall = call;
+          if (
+            this.shotInputMode === "video" &&
+            LOCAL_SHOT_TOOLS.has(call.name)
+          ) {
+            this.handledToolCalls.add(call.call_id);
+            this.sendEvent({
+              type: "conversation.item.create",
+              item: {
+                type: "function_call_output",
+                call_id: call.call_id,
+                output: "Voice shot result ignored because video tracking is active.",
+              },
+            });
+            continue;
+          }
           if (transcriptShot && LOCAL_SHOT_TOOLS.has(call.name)) {
             if (transcriptShotHandled) {
               this.sendEvent({
@@ -7722,6 +8352,7 @@ export class RealtimeCoachSession {
       let output: string;
       let summary: string;
       if (LOCAL_SHOT_TOOLS.has(call.name)) {
+        if (this.shotInputMode === "video") return "read_only";
         const buffered = await this.bufferShootingResult(
           this.bindOrdinaryShotToCurrentCursor(
             this.normalizedShotArguments(call.name, args),

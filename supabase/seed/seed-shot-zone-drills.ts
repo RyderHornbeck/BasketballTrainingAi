@@ -16,6 +16,10 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const CATALOG_VIDEO_ID = "hoopplan-catalog";
 const SOURCE_SECTION = "shot-zone-catalog";
 
+function legacyTieredName(name: string): string {
+  return `Basic ${name}`;
+}
+
 function slugify(name: string): string {
   return name
     .toLowerCase()
@@ -50,7 +54,7 @@ async function main() {
       requires_both_sides: drill.requires_both_sides,
       equipment: ["Basketball"],
       positions: ["Guard", "Wing", "Big"],
-      skill_levels: [drill.difficulty_level],
+      skill_levels: ["beginner", "intermediate", "advanced", "elite"],
       source_section: SOURCE_SECTION,
       source_order: index + 1,
       active: true,
@@ -59,16 +63,20 @@ async function main() {
     const { data: existing, error: lookupError } = await supabase
       .from("exercise_video_clips")
       .select("id")
-      .eq("exercise_name", drill.exercise_name)
       .eq("source_section", SOURCE_SECTION)
-      .maybeSingle();
+      .eq("active", true)
+      .in("exercise_name", [drill.exercise_name, legacyTieredName(drill.exercise_name)]);
     if (lookupError) throw lookupError;
+    if ((existing?.length ?? 0) > 1) {
+      throw new Error(`Multiple active canonical rows found for ${drill.exercise_name}.`);
+    }
+    const existingRow = existing?.[0];
 
-    if (existing?.id) {
+    if (existingRow?.id) {
       const { error } = await supabase
         .from("exercise_video_clips")
         .update(row)
-        .eq("id", existing.id);
+        .eq("id", existingRow.id);
       if (error) throw error;
       updated += 1;
     } else {

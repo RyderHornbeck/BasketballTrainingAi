@@ -33,9 +33,12 @@ const VOICES = {
   maya: "Sarah",
   ava: "Zadie",
 };
-// Maya's clips stay available for the native build, but are excluded from OTA
-// bundles to remain below Expo Update's 1,000-asset limit.
-const BUNDLED_PERSONAS = ["devin", "tyler", "ava"];
+const BUNDLED_PERSONAS = (
+  process.env.SHOT_PROGRESS_BUNDLED_PERSONAS ?? "devin,tyler,maya,ava"
+)
+  .split(",")
+  .map((persona) => persona.trim().toLowerCase())
+  .filter((persona) => persona in VOICES);
 const manifestOnly = process.argv.includes("--manifest-only");
 
 const requestedVoices = (process.env.SHOT_PROGRESS_VOICES ?? Object.keys(VOICES).join(","))

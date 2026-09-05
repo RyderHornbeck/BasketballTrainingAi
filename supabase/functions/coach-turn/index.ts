@@ -1,10 +1,11 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import {
-  buildWorkoutNavigation,
   buildCoachTurnDynamicContext,
-  buildCurrentDrillExplanationContext,
   buildCompactContextSummary,
+  buildCurrentDrillExplanationContext,
+  buildRequestedDrillExplanationSpeech,
+  buildWorkoutNavigation,
   COACH_TURN_STABLE_SYSTEM_PROMPT,
   loadWorkoutContext,
 } from "../_shared/coachCore.ts";
@@ -23,16 +24,19 @@ import {
   type ResponsesFunctionCall,
   sanitizeCoachConversationSummary,
   selectCoachResponseModel,
+  shouldForceCoachTool,
   successfulCoachToolConfirmation,
   usesOptimisticToolPreamble,
-  shouldForceCoachTool,
   validateCoachTurnRequest,
 } from "../_shared/coachResponse.ts";
 import {
   generatedResponseTools,
   validateCoachToolArguments,
 } from "../_shared/generated/coachTools.ts";
-import { COACH_LIMITS, estimateAnthropicCostUsd } from "../_shared/coachUsage.ts";
+import {
+  COACH_LIMITS,
+  estimateAnthropicCostUsd,
+} from "../_shared/coachUsage.ts";
 import {
   aiDataConsentRequiredBody,
   hasCurrentAIDataConsent,
@@ -63,7 +67,11 @@ async function sha256(value: unknown): Promise<string> {
 
 function guardTimerControl(
   toolName: string,
-  timer: { running: boolean; elapsed_seconds: number; duration_seconds?: number | null } | undefined,
+  timer: {
+    running: boolean;
+    elapsed_seconds: number;
+    duration_seconds?: number | null;
+  } | undefined,
 ) {
   const pausesTimer = toolName === "pause_timer" || toolName === "stop_timer";
   if ((!pausesTimer && toolName !== "resume_timer") || !timer) {
@@ -71,7 +79,11 @@ function guardTimerControl(
   }
   const hasTimer = timer.running || timer.elapsed_seconds > 0 ||
     timer.duration_seconds != null;
-  const result = !hasTimer
+  // A resume with no live timer can validly start the current timed set. The
+  // device has the complete active-set prescription needed to make that call.
+  const result = !hasTimer && toolName === "resume_timer"
+    ? null
+    : !hasTimer
     ? pausesTimer
       ? "You can't pause the timer because no timer is running."
       : "You can't resume the timer because no timer is running."
@@ -80,15 +92,13 @@ function guardTimerControl(
     : toolName === "resume_timer" && timer.running
     ? "The timer is already running."
     : null;
-  return result == null
-    ? null
-    : {
-      result,
-      db_changed: false,
-      client_action: null,
-      continuation: "speak_exact",
-      say: result,
-    };
+  return result == null ? null : {
+    result,
+    db_changed: false,
+    client_action: null,
+    continuation: "speak_exact",
+    say: result,
+  };
 }
 
 Deno.serve(async (req: Request) => {
@@ -217,27 +227,35 @@ Deno.serve(async (req: Request) => {
   // retain tools. Speculative requests are always tool-free as well.
   const toolFreeTurn = speculativeReadOnly || confidentlyToolFree;
   const localShotContext = turn.localShotSessionContext;
-  const authoritativeCurrentSet = buildWorkoutNavigation(initialContext).current_set_state;
-  const localShotContextMatchesCurrentSet =
-    localShotContext != null &&
+  const authoritativeCurrentSet =
+    buildWorkoutNavigation(initialContext).current_set_state;
+  const localShotContextMatchesCurrentSet = localShotContext != null &&
     authoritativeCurrentSet?.exercise_id === localShotContext.exerciseId &&
     authoritativeCurrentSet.set_number === localShotContext.setNumber;
   const currentDrillExplanationRequested =
     /\b(?:explain|describe|walk me through|show me how to do)\b[\s\S]*\b(?:current|this|(?:drill|exercise)\s+i(?:'| a)?m\s+on)\b/i
       .test(turn.transcript);
-  const dynamicContext = `${buildCoachTurnDynamicContext(
+  const currentDrillExplanationSpeech = buildRequestedDrillExplanationSpeech(
     initialContext,
-    { ...(answers ?? {}), preferred_name: profile?.preferred_name ?? null },
-    undefined,
-    coachName,
-    undefined,
-    speculativeReadOnly,
-    !speculativeReadOnly,
-  )}${
+    turn.transcript,
+  );
+  const dynamicContext = `${
+    buildCoachTurnDynamicContext(
+      initialContext,
+      { ...(answers ?? {}), preferred_name: profile?.preferred_name ?? null },
+      undefined,
+      coachName,
+      undefined,
+      speculativeReadOnly,
+      !speculativeReadOnly,
+    )
+  }${
     localShotContextMatchesCurrentSet
-      ? `\n\nLIVE DEVICE SHOOTING STATE: The athlete device has newer local progress for the current set. This overrides persisted makes and attempts only for this turn. Current set: ${JSON.stringify(
-        localShotContext,
-      )}. Use these exact totals for any correction.`
+      ? `\n\nLIVE DEVICE SHOOTING STATE: The athlete device has newer local progress for the current set. This overrides persisted makes and attempts only for this turn. Current set: ${
+        JSON.stringify(
+          localShotContext,
+        )
+      }. Use these exact totals for any correction.`
       : ""
   }${
     currentDrillExplanationRequested
@@ -280,262 +298,286 @@ Deno.serve(async (req: Request) => {
         state_version: nextStateVersion,
         state_fingerprint: initialFingerprint,
       });
-      for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
-        const toolsEnabled = !toolFreeTurn && round < MAX_TOOL_ROUNDS;
-        // Give the model one chance to clarify an ambiguous request. If it
-        // answers an action request without a native tool block, retry with a
-        // required tool rather than letting it merely claim the action.
-        const requestNeedsTool = round === 0 &&
-          shouldForceCoachTool(
-            turn.transcript,
-            safeConversationSummary,
+      if (currentDrillExplanationSpeech) {
+        outputCharacters = currentDrillExplanationSpeech.length;
+        emittedSpeech = true;
+        await send({
+          type: "text_delta",
+          turn_id: turn.turnId,
+          state_version: nextStateVersion,
+          delta: currentDrillExplanationSpeech,
+        });
+      } else {
+        for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
+          const toolsEnabled = !toolFreeTurn && round < MAX_TOOL_ROUNDS;
+          // Give the model one chance to clarify an ambiguous request. If it
+          // answers an action request without a native tool block, retry with a
+          // required tool rather than letting it merely claim the action.
+          const requestNeedsTool = round === 0 &&
+            shouldForceCoachTool(
+              turn.transcript,
+              safeConversationSummary,
+            );
+          const forceShootingTotalCorrection = round === 0 &&
+            isCurrentShootingCorrectionRequest(turn.transcript);
+          if (!(await hasCurrentAIDataConsent(supabase, userId))) {
+            throw new Error(
+              "AI data processing permission was withdrawn during this turn.",
+            );
+          }
+          const providerDeadline = createAbortTimeout(
+            req.signal,
+            ANTHROPIC_TIMEOUT_MS,
           );
-        const forceShootingTotalCorrection = round === 0 &&
-          isCurrentShootingCorrectionRequest(turn.transcript);
-        if (!(await hasCurrentAIDataConsent(supabase, userId))) {
-          throw new Error(
-            "AI data processing permission was withdrawn during this turn.",
-          );
-        }
-        const providerDeadline = createAbortTimeout(
-          req.signal,
-          ANTHROPIC_TIMEOUT_MS,
-        );
-        let calls: ResponsesFunctionCall[] = [];
-        let roundText = "";
-        let completedResponseId: string | null = null;
-        let roundStopReason: string | null = null;
-        try {
-          for (
-            let formatAttempt = 0;
-            formatAttempt <= MAX_PROVIDER_FORMAT_RETRIES;
-            formatAttempt += 1
-          ) {
-            calls = [];
-            roundText = "";
-            completedResponseId = null;
-            roundStopReason = null;
-            try {
-              const retryInstruction = formatAttempt === 0
-                ? ""
-                : "\nThe prior response had an invalid output format. Return only natural athlete-facing speech or a native tool_use block. Never write or imitate tool syntax in text.";
-              const anthropicResponse = await fetch(
-                "https://api.anthropic.com/v1/messages",
-                {
-                  method: "POST",
-                  signal: providerDeadline.signal,
-                  headers: {
-                    "x-api-key": ANTHROPIC_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "anthropic-beta": "prompt-caching-2024-07-31",
-                    "Content-Type": "application/json",
+          let calls: ResponsesFunctionCall[] = [];
+          let roundText = "";
+          let completedResponseId: string | null = null;
+          let roundStopReason: string | null = null;
+          try {
+            for (
+              let formatAttempt = 0;
+              formatAttempt <= MAX_PROVIDER_FORMAT_RETRIES;
+              formatAttempt += 1
+            ) {
+              calls = [];
+              roundText = "";
+              completedResponseId = null;
+              roundStopReason = null;
+              try {
+                const retryInstruction = formatAttempt === 0
+                  ? ""
+                  : "\nThe prior response had an invalid output format. Return only natural athlete-facing speech or a native tool_use block. Never write or imitate tool syntax in text.";
+                const anthropicResponse = await fetch(
+                  "https://api.anthropic.com/v1/messages",
+                  {
+                    method: "POST",
+                    signal: providerDeadline.signal,
+                    headers: {
+                      "x-api-key": ANTHROPIC_API_KEY,
+                      "anthropic-version": "2023-06-01",
+                      "anthropic-beta": "prompt-caching-2024-07-31",
+                      "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                      model,
+                      system: buildAnthropicSystemBlocks(
+                        COACH_TURN_STABLE_SYSTEM_PROMPT,
+                        `${dynamicContext}${retryInstruction}`,
+                      ),
+                      messages,
+                      ...(toolsEnabled
+                        ? {
+                          tools: anthropicTools,
+                          tool_choice: {
+                            type: forceShootingTotalCorrection
+                              ? "tool"
+                              : formatAttempt > 0 && requestNeedsTool
+                              ? "any"
+                              : "auto",
+                            ...(forceShootingTotalCorrection
+                              ? { name: "correct_current_shooting_total" }
+                              : {}),
+                            disable_parallel_tool_use: true,
+                          },
+                        }
+                        : {}),
+                      stream: true,
+                      max_tokens: 300,
+                      service_tier: "auto",
+                    }),
                   },
-                  body: JSON.stringify({
-                    model,
-                    system: buildAnthropicSystemBlocks(
-                      COACH_TURN_STABLE_SYSTEM_PROMPT,
-                      `${dynamicContext}${retryInstruction}`,
-                    ),
-                    messages,
-                    ...(toolsEnabled
-                      ? {
-                        tools: anthropicTools,
-                        tool_choice: {
-                          type: forceShootingTotalCorrection
-                            ? "tool"
-                            : formatAttempt > 0 && requestNeedsTool
-                            ? "any"
-                            : "auto",
-                          ...(forceShootingTotalCorrection
-                            ? { name: "correct_current_shooting_total" }
-                            : {}),
-                          disable_parallel_tool_use: true,
-                        },
-                      }
-                      : {}),
-                    stream: true,
-                    max_tokens: 300,
-                    service_tier: "auto",
-                  }),
-                },
-              );
-              if (!anthropicResponse.ok || !anthropicResponse.body) {
-                const detail = await anthropicResponse.text();
-                throw new Error(
-                  `Anthropic Messages API failed (${anthropicResponse.status}): ${
-                    detail.slice(0, 300)
-                  }`,
                 );
+                if (!anthropicResponse.ok || !anthropicResponse.body) {
+                  const detail = await anthropicResponse.text();
+                  throw new Error(
+                    `Anthropic Messages API failed (${anthropicResponse.status}): ${
+                      detail.slice(0, 300)
+                    }`,
+                  );
+                }
+                await consumeAnthropicSse(anthropicResponse.body, {
+                  onTextDelta: (delta) => {
+                    roundText += delta;
+                  },
+                  onFunctionCall: (call) => {
+                    calls.push(call);
+                  },
+                  onCompleted: (responseId, usage) => {
+                    completedResponseId = responseId;
+                    roundStopReason = typeof usage?.stop_reason === "string"
+                      ? usage.stop_reason
+                      : null;
+                    if (usage) {
+                      usageEvents.push(usage);
+                      console.info("Anthropic prompt cache usage", {
+                        input_tokens: Number(usage.input_tokens ?? 0),
+                        cache_creation_input_tokens: Number(
+                          usage.cache_creation_input_tokens ?? 0,
+                        ),
+                        cache_read_input_tokens: Number(
+                          usage.cache_read_input_tokens ?? 0,
+                        ),
+                      });
+                    }
+                  },
+                });
+              } catch (error) {
+                if (providerDeadline.didTimeout()) {
+                  console.error("Anthropic provider timeout:", error);
+                  throw new Error("Anthropic provider request timed out.");
+                }
+                throw error;
               }
-              await consumeAnthropicSse(anthropicResponse.body, {
-                onTextDelta: (delta) => {
-                  roundText += delta;
-                },
-                onFunctionCall: (call) => {
-                  calls.push(call);
-                },
-                onCompleted: (responseId, usage) => {
-                  completedResponseId = responseId;
-                  roundStopReason = typeof usage?.stop_reason === "string"
-                    ? usage.stop_reason
-                    : null;
-                  if (usage) {
-                    usageEvents.push(usage);
-                    console.info("Anthropic prompt cache usage", {
-                      input_tokens: Number(usage.input_tokens ?? 0),
-                      cache_creation_input_tokens: Number(
-                        usage.cache_creation_input_tokens ?? 0,
-                      ),
-                      cache_read_input_tokens: Number(
-                        usage.cache_read_input_tokens ?? 0,
-                      ),
-                    });
-                  }
-                },
-              });
-            } catch (error) {
-              if (providerDeadline.didTimeout()) {
-                console.error("Anthropic provider timeout:", error);
-                throw new Error("Anthropic provider request timed out.");
-              }
-              throw error;
-            }
 
-            let formatError: string | null = null;
-            if (calls.length) {
-              if (roundStopReason !== "tool_use") {
-                formatError = "native tool blocks had a non-tool stop reason";
-              } else {
-                for (const call of calls) {
-                  try {
-                    const input = JSON.parse(call.argumentsJson);
-                    const validated = validateCoachToolArguments(
-                      call.name,
-                      input,
-                    );
-                    if (!call.callId || !validated.ok) {
-                      formatError = "native tool call was malformed";
+              let formatError: string | null = null;
+              if (calls.length) {
+                if (roundStopReason !== "tool_use") {
+                  formatError = "native tool blocks had a non-tool stop reason";
+                } else {
+                  for (const call of calls) {
+                    try {
+                      const input = JSON.parse(call.argumentsJson);
+                      const validated = validateCoachToolArguments(
+                        call.name,
+                        input,
+                      );
+                      if (!call.callId || !validated.ok) {
+                        formatError = "native tool call was malformed";
+                        break;
+                      }
+                    } catch {
+                      formatError = "native tool JSON was malformed";
                       break;
                     }
-                  } catch {
-                    formatError = "native tool JSON was malformed";
-                    break;
                   }
                 }
-              }
-            } else if (roundStopReason === "tool_use") {
-              formatError =
-                "tool use was required but no native tool block arrived";
-            } else {
-              const speech = assessCoachSpeech(roundText);
-              if (speech.ok) {
-                roundText = speech.text;
-                if (requestNeedsTool) {
-                  formatError =
-                    "an action request received text without a native tool block";
-                }
+              } else if (roundStopReason === "tool_use") {
+                formatError =
+                  "tool use was required but no native tool block arrived";
               } else {
-                formatError = `text was unsafe for speech (${speech.reason})`;
+                const speech = assessCoachSpeech(roundText);
+                if (speech.ok) {
+                  roundText = speech.text;
+                  if (requestNeedsTool) {
+                    formatError =
+                      "an action request received text without a native tool block";
+                  }
+                } else {
+                  formatError = `text was unsafe for speech (${speech.reason})`;
+                }
+              }
+              if (!formatError) break;
+              if (formatAttempt === MAX_PROVIDER_FORMAT_RETRIES) {
+                throw new Error(
+                  `Anthropic response format rejected: ${formatError}.`,
+                );
               }
             }
-            if (!formatError) break;
-            if (formatAttempt === MAX_PROVIDER_FORMAT_RETRIES) {
-              throw new Error(
-                `Anthropic response format rejected: ${formatError}.`,
-              );
-            }
+          } finally {
+            providerDeadline.dispose();
           }
-        } finally {
-          providerDeadline.dispose();
-        }
-        previousResponseId = completedResponseId ?? previousResponseId;
-        if (roundStopReason === "max_tokens") {
-          throw new Error("Coach response reached its output limit.");
-        }
-        if (calls.length === 0) {
-          if (roundText.trim()) {
-            outputCharacters += roundText.length;
-            emittedSpeech = true;
-            await send({
-              type: "text_delta",
-              turn_id: turn.turnId,
-              state_version: nextStateVersion,
-              delta: roundText,
-            });
+          previousResponseId = completedResponseId ?? previousResponseId;
+          if (roundStopReason === "max_tokens") {
+            throw new Error("Coach response reached its output limit.");
           }
-          break;
-        }
-        if (!toolsEnabled) {
-          throw new Error("Coach emitted a tool call during final synthesis.");
-        }
-        totalToolCalls += calls.length;
-        if (totalToolCalls > MAX_TOOL_CALLS) {
-          throw new Error("Coach tool-call limit exceeded.");
-        }
-
-        const outputs: Array<Record<string, unknown>> = [];
-        const assistantToolUses: Array<Record<string, unknown>> = [];
-        const exactSpeech = new Set<string>();
-        let continueWithModel = false;
-        let modelResponseSkipped = false;
-        for (const call of calls) {
-          let toolArgs: unknown;
-          try {
-            toolArgs = JSON.parse(call.argumentsJson);
-          } catch {
-            throw new Error(`Invalid JSON arguments for ${call.name}.`);
-          }
-          const validated = validateCoachToolArguments(call.name, toolArgs);
-          if (!validated.ok) throw new Error(validated.error);
-          assistantToolUses.push({
-            type: "tool_use",
-            id: call.callId,
-            name: call.name,
-            input: validated.value,
-          });
-          let toolResult = guardTimerControl(call.name, turn.timer);
-          let optimisticPreambleSpoken = false;
-          if (!toolResult) {
-            const preamble = coachToolPreamble(call.name, validated.value);
-            if (preamble && !announcedPreambles.has(preamble)) {
-              announcedPreambles.add(preamble);
-              optimisticPreambleSpoken = usesOptimisticToolPreamble(call.name);
+          if (calls.length === 0) {
+            if (roundText.trim()) {
+              outputCharacters += roundText.length;
               emittedSpeech = true;
-              outputCharacters += preamble.length;
               await send({
                 type: "text_delta",
                 turn_id: turn.turnId,
                 state_version: nextStateVersion,
-                delta: `${preamble} `,
+                delta: roundText,
               });
             }
-            const clientRequestId = `${turn.turnId}:${
-              call.callId || crypto.randomUUID()
-            }`.slice(0, 200);
+            break;
+          }
+          if (!toolsEnabled) {
+            throw new Error(
+              "Coach emitted a tool call during final synthesis.",
+            );
+          }
+          totalToolCalls += calls.length;
+          if (totalToolCalls > MAX_TOOL_CALLS) {
+            throw new Error("Coach tool-call limit exceeded.");
+          }
+
+          const outputs: Array<Record<string, unknown>> = [];
+          const assistantToolUses: Array<Record<string, unknown>> = [];
+          const exactSpeech = new Set<string>();
+          let continueWithModel = false;
+          let modelResponseSkipped = false;
+          for (const call of calls) {
+            let toolArgs: unknown;
             try {
-              const toolResponse = await fetch(
-                `${SUPABASE_URL}/functions/v1/coach-tools`,
-                {
-                  method: "POST",
-                  signal: req.signal,
-                  headers: {
-                    Authorization: authHeader,
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify({
-                    day_id: turn.dayId,
-                    session_key: turn.sessionKey,
-                    tool_name: call.name,
-                    arguments: {
-                      ...validated.value,
-                      client_request_id: clientRequestId,
+              toolArgs = JSON.parse(call.argumentsJson);
+            } catch {
+              throw new Error(`Invalid JSON arguments for ${call.name}.`);
+            }
+            const validated = validateCoachToolArguments(call.name, toolArgs);
+            if (!validated.ok) throw new Error(validated.error);
+            assistantToolUses.push({
+              type: "tool_use",
+              id: call.callId,
+              name: call.name,
+              input: validated.value,
+            });
+            let toolResult = guardTimerControl(call.name, turn.timer);
+            let optimisticPreambleSpoken = false;
+            if (!toolResult) {
+              const preamble = coachToolPreamble(call.name, validated.value);
+              if (preamble && !announcedPreambles.has(preamble)) {
+                announcedPreambles.add(preamble);
+                optimisticPreambleSpoken = usesOptimisticToolPreamble(
+                  call.name,
+                );
+                emittedSpeech = true;
+                outputCharacters += preamble.length;
+                await send({
+                  type: "text_delta",
+                  turn_id: turn.turnId,
+                  state_version: nextStateVersion,
+                  delta: `${preamble} `,
+                });
+              }
+              const clientRequestId = `${turn.turnId}:${
+                call.callId || crypto.randomUUID()
+              }`.slice(0, 200);
+              try {
+                const toolResponse = await fetch(
+                  `${SUPABASE_URL}/functions/v1/coach-tools`,
+                  {
+                    method: "POST",
+                    signal: req.signal,
+                    headers: {
+                      Authorization: authHeader,
+                      "Content-Type": "application/json",
                     },
-                    refresh_context: true,
-                  }),
-                },
-              );
-              toolResult = await toolResponse.json().catch(() => ({}));
-              if (!toolResponse.ok) {
+                    body: JSON.stringify({
+                      day_id: turn.dayId,
+                      session_key: turn.sessionKey,
+                      tool_name: call.name,
+                      arguments: {
+                        ...validated.value,
+                        client_request_id: clientRequestId,
+                      },
+                      refresh_context: true,
+                    }),
+                  },
+                );
+                toolResult = await toolResponse.json().catch(() => ({}));
+                if (!toolResponse.ok) {
+                  toolResult = {
+                    result: coachToolFailureSpeech(call.name),
+                    db_changed: false,
+                    client_action: null,
+                    continuation: "speak_exact",
+                    say: coachToolFailureSpeech(call.name),
+                  };
+                }
+              } catch (error) {
+                if (req.signal.aborted) throw error;
                 toolResult = {
                   result: coachToolFailureSpeech(call.name),
                   db_changed: false,
@@ -544,120 +586,111 @@ Deno.serve(async (req: Request) => {
                   say: coachToolFailureSpeech(call.name),
                 };
               }
-            } catch (error) {
-              if (req.signal.aborted) throw error;
-              toolResult = {
-                result: coachToolFailureSpeech(call.name),
-                db_changed: false,
-                client_action: null,
-                continuation: "speak_exact",
-                say: coachToolFailureSpeech(call.name),
-              };
             }
-          }
-          mutationApplied = mutationApplied ||
-            Boolean(toolResult.db_changed || toolResult.client_action);
-          const toolApplied = Boolean(
-            toolResult.db_changed || toolResult.client_action,
-          );
-          if (toolApplied) {
-            const confirmation = successfulCoachToolConfirmation(toolResult);
-            if (confirmation && !optimisticPreambleSpoken) {
-              lastSuccessfulToolConfirmation = confirmation;
-              lastSuccessfulToolName = call.name;
+            mutationApplied = mutationApplied ||
+              Boolean(toolResult.db_changed || toolResult.client_action);
+            const toolApplied = Boolean(
+              toolResult.db_changed || toolResult.client_action,
+            );
+            if (toolApplied) {
+              const confirmation = successfulCoachToolConfirmation(toolResult);
+              if (confirmation && !optimisticPreambleSpoken) {
+                lastSuccessfulToolConfirmation = confirmation;
+                lastSuccessfulToolName = call.name;
+              }
+              console.info("coach-turn tool succeeded", {
+                turn_id: turn.turnId,
+                tool_name: call.name,
+                db_changed: Boolean(toolResult.db_changed),
+                has_client_action: Boolean(toolResult.client_action),
+              });
             }
-            console.info("coach-turn tool succeeded", {
-              turn_id: turn.turnId,
-              tool_name: call.name,
-              db_changed: Boolean(toolResult.db_changed),
-              has_client_action: Boolean(toolResult.client_action),
-            });
-          }
-          const continuation = resolveCoachToolContinuation(toolResult);
-          if (optimisticPreambleSpoken && toolApplied) {
-            // The action is already being spoken while this request runs.
-            // Suppress a redundant model/result confirmation after success.
-            modelResponseSkipped = true;
-          } else if (
-            optimisticPreambleSpoken &&
-            continuation.type === "model" &&
-            typeof toolResult.result === "string"
-          ) {
-            // The mutation was rejected without a transport error (for
-            // example, a timer requested for a shooting set). State its
-            // authoritative reason directly instead of asking the model to
-            // narrate a second, potentially stale response.
-            const speech = assessCoachSpeech(toolResult.result);
-            if (speech.ok) {
-              exactSpeech.add(speech.text);
+            const continuation = resolveCoachToolContinuation(toolResult);
+            if (optimisticPreambleSpoken && toolApplied) {
+              // The action is already being spoken while this request runs.
+              // Suppress a redundant model/result confirmation after success.
               modelResponseSkipped = true;
+            } else if (
+              optimisticPreambleSpoken &&
+              continuation.type === "model" &&
+              typeof toolResult.result === "string"
+            ) {
+              // The mutation was rejected without a transport error (for
+              // example, a timer requested for a shooting set). State its
+              // authoritative reason directly instead of asking the model to
+              // narrate a second, potentially stale response.
+              const speech = assessCoachSpeech(toolResult.result);
+              if (speech.ok) {
+                exactSpeech.add(speech.text);
+                modelResponseSkipped = true;
+              } else {
+                continueWithModel = true;
+              }
+            } else if (continuation.type === "none") {
+              modelResponseSkipped = true;
+            } else if (continuation.type === "speak_exact") {
+              exactSpeech.add(continuation.speech);
             } else {
+              // Unknown or absent continuation values retain the safer model path.
               continueWithModel = true;
             }
-          } else if (continuation.type === "none") {
-            modelResponseSkipped = true;
-          } else if (continuation.type === "speak_exact") {
-            exactSpeech.add(continuation.speech);
-          } else {
-            // Unknown or absent continuation values retain the safer model path.
-            continueWithModel = true;
-          }
-          if (typeof toolResult.state_version === "number") {
-            nextStateVersion = Math.max(
-              nextStateVersion,
-              toolResult.state_version,
-            );
-          } else if (toolResult.db_changed) {
-            nextStateVersion += 1;
-          }
-          await send({
-            type: "tool_result",
-            turn_id: turn.turnId,
-            call_id: call.callId,
-            name: call.name,
-            state_version: nextStateVersion,
-            db_changed: Boolean(toolResult.db_changed),
-            client_action: toolResult.client_action ?? null,
-            workout_context: toolResult.client_workout_context ?? null,
-            incomplete_completion_confirmation:
-              toolResult.incomplete_completion_confirmation ?? null,
-          });
-          if (typeof toolResult.client_workout_context === "string") {
-            lastToolWorkoutContext = toolResult.client_workout_context;
-          }
-          outputs.push({
-            type: "tool_result",
-            tool_use_id: call.callId,
-            content: JSON.stringify({
-              result: toolResult.result,
-              state_version: nextStateVersion,
-              workout: toolResult.updated_context ?? null,
-            }),
-          });
-        }
-        if (!continueWithModel) {
-          if (exactSpeech.size) {
-            const speech = [...exactSpeech].join(" ");
-            outputCharacters += speech.length;
-            emittedSpeech = true;
+            if (typeof toolResult.state_version === "number") {
+              nextStateVersion = Math.max(
+                nextStateVersion,
+                toolResult.state_version,
+              );
+            } else if (toolResult.db_changed) {
+              nextStateVersion += 1;
+            }
             await send({
-              type: "text_delta",
+              type: "tool_result",
               turn_id: turn.turnId,
+              call_id: call.callId,
+              name: call.name,
               state_version: nextStateVersion,
-              delta: speech,
+              db_changed: Boolean(toolResult.db_changed),
+              client_action: toolResult.client_action ?? null,
+              workout_context: toolResult.client_workout_context ?? null,
+              incomplete_completion_confirmation:
+                toolResult.incomplete_completion_confirmation ?? null,
             });
-          } else if (modelResponseSkipped) {
-            // The tool/client owns any local confirmation for continuation=none.
-            emittedSpeech = true;
+            if (typeof toolResult.client_workout_context === "string") {
+              lastToolWorkoutContext = toolResult.client_workout_context;
+            }
+            outputs.push({
+              type: "tool_result",
+              tool_use_id: call.callId,
+              content: JSON.stringify({
+                result: toolResult.result,
+                state_version: nextStateVersion,
+                workout: toolResult.updated_context ?? null,
+              }),
+            });
           }
-          break;
+          if (!continueWithModel) {
+            if (exactSpeech.size) {
+              const speech = [...exactSpeech].join(" ");
+              outputCharacters += speech.length;
+              emittedSpeech = true;
+              await send({
+                type: "text_delta",
+                turn_id: turn.turnId,
+                state_version: nextStateVersion,
+                delta: speech,
+              });
+            } else if (modelResponseSkipped) {
+              // The tool/client owns any local confirmation for continuation=none.
+              emittedSpeech = true;
+            }
+            break;
+          }
+          // Pre-tool model prose is hidden from the athlete and omitted from the
+          // next round so internal query narration cannot leak into speech.
+          const assistantContent: Array<Record<string, unknown>> =
+            assistantToolUses;
+          messages.push({ role: "assistant", content: assistantContent });
+          messages.push({ role: "user", content: outputs });
         }
-        // Pre-tool model prose is hidden from the athlete and omitted from the
-        // next round so internal query narration cannot leak into speech.
-        const assistantContent: Array<Record<string, unknown>> =
-          assistantToolUses;
-        messages.push({ role: "assistant", content: assistantContent });
-        messages.push({ role: "user", content: outputs });
       }
 
       if (!emittedSpeech) {
@@ -711,41 +744,46 @@ Deno.serve(async (req: Request) => {
           const cacheReadInputTokens = Number(
             usage.cache_read_input_tokens ?? 0,
           );
-          const { data, error } = await supabase.rpc("record_coach_provider_metric", {
-            p_user_id: userId,
-            p_session_id: session.id,
-            p_day_id: turn.dayId,
-            p_turn_id: claimedTurn.id,
-            p_provider: "anthropic",
-            p_provider_request_id: `${turn.turnId}:messages:${index}`,
-            p_metric: "messages_tokens",
-            p_quantity: Math.max(
-              0,
-              inputTokens +
-                outputTokens +
-                cacheCreationInputTokens +
+          const { data, error } = await supabase.rpc(
+            "record_coach_provider_metric",
+            {
+              p_user_id: userId,
+              p_session_id: session.id,
+              p_day_id: turn.dayId,
+              p_turn_id: claimedTurn.id,
+              p_provider: "anthropic",
+              p_provider_request_id: `${turn.turnId}:messages:${index}`,
+              p_metric: "messages_tokens",
+              p_quantity: Math.max(
+                0,
+                inputTokens +
+                  outputTokens +
+                  cacheCreationInputTokens +
+                  cacheReadInputTokens,
+              ),
+              p_unit: "tokens",
+              p_estimated_cost_usd: estimateAnthropicCostUsd({
+                model,
+                inputTokens,
+                outputTokens,
+                cacheCreationInputTokens,
                 cacheReadInputTokens,
-            ),
-            p_unit: "tokens",
-            p_estimated_cost_usd: estimateAnthropicCostUsd({
-              model,
-              inputTokens,
-              outputTokens,
-              cacheCreationInputTokens,
-              cacheReadInputTokens,
-            }),
-            p_metadata: {
-              ...usage,
-              prompt_cache_ttl: "5m",
-              stable_prefix_cache_breakpoint: true,
+              }),
+              p_metadata: {
+                ...usage,
+                prompt_cache_ttl: "5m",
+                stable_prefix_cache_breakpoint: true,
+              },
             },
-          });
+          );
           if (error) throw error;
           const usageRow = Array.isArray(data) ? data[0] : data;
           if (usageRow) {
             dailyUsage = {
               spent_usd: Number(usageRow.spent_usd ?? 0),
-              budget_usd: Number(usageRow.budget_usd ?? COACH_LIMITS.maxDailyCostUsd),
+              budget_usd: Number(
+                usageRow.budget_usd ?? COACH_LIMITS.maxDailyCostUsd,
+              ),
               remaining_usd: Number(usageRow.remaining_usd ?? 0),
             };
           }
