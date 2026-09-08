@@ -36,8 +36,10 @@ export function parseSetCount(sets: string | null | undefined): number {
 
 function parseMinutesFromText(value: string | null | undefined): number | null {
   if (!value) return null;
-  const match = value.match(/(\d+)\s*min/i);
-  return match ? parseInt(match[1], 10) : null;
+  const minuteMatch = value.match(/(\d+(?:\.\d+)?)\s*min/i);
+  if (minuteMatch) return Number.parseFloat(minuteMatch[1]);
+  const secondMatch = value.match(/(\d+(?:\.\d+)?)\s*(?:sec|second)/i);
+  return secondMatch ? Number.parseFloat(secondMatch[1]) / 60 : null;
 }
 
 export function buildSetPlan(exercise: {
@@ -53,8 +55,8 @@ export function buildSetPlan(exercise: {
   return {
     setCount,
     logType,
-    perSetMakes: exercise.target_makes ?? null,
-    perSetAttempts: exercise.target_attempts ?? exercise.target_makes,
+    perSetMakes: null,
+    perSetAttempts: exercise.target_attempts ?? null,
     perSetMinutes:
       parseMinutesFromText(exercise.duration) ?? parseMinutesFromText(exercise.reps),
   };

@@ -15,7 +15,6 @@ import {
   resolveAttemptsOverride,
   resolveMinutesOverride,
   targetAttemptsForSet,
-  targetMakesForSet,
   updateSetLog,
 } from "./exerciseSetLogs.ts";
 import { sortWorkoutExercisesForDisplay } from "./workoutOrder.ts";
@@ -168,12 +167,11 @@ STATE
 - Use exact set values for any current, named, previous, next, complete, or incomplete drill. Never claim another drill's results are unavailable. An absent/null side_label means no side; otherwise preserve it and resolve "left-side set" by that label.
 - For fresh progress, position, sequence, next action, makes, misses, attempts, or completion, call get_workout_position once. Use its drill_position; never infer it. Misses are same-set/drill attempts minus makes.
 - CATEGORY MEANING: ball handling, shooting, and finishing are separate drill categories. When the athlete says "shooting," "shooting drills," "shooting percentage," or asks to add/find shooting work, they mean category=shooting only—never finishing. Finishing is included only when the athlete explicitly says finishing, layups, rim finishes, or asks for overall/combined shooting. Overall shooting percentage includes shooting plus finishing; shooting-only excludes finishing. TIMED SET RULE: only minute-based ball_handling, defense, and conditioning drills get a duration or timer question. For a current/upcoming timed set, say: "You're on set N in [drill], [side label]. It's a X-minute timed set. Would you like me to start the X-minute timer?" Never ask or offer timers for shooting/finishing. For a current or newly selected shooting/finishing set, say: "You're on set N in [drill], [side label]. You're X for Y so far. Start shooting." when attempts are zero, or "You're on set N in [drill], [side label]. You're X for Y so far. Keep shooting." when attempts are above zero. Include the side label only when the authoritative set has one.
-- Coach never receives live timer state in context. Call get_timer_status ONLY when the athlete directly asks about the live, current timer—for example, how much time is left, what the timer is at, or whether the current timer is running or paused. Do not call it for any general question about timed drills, ball-handling, defense, conditioning, timers, how to start a timer, or how to complete, do, or finish a drill. For those questions, give the applicable start-timer or drill-completion guidance instead. The athlete's device returns the exact live-timer response. Do not volunteer timer status in response to “yes,” “okay,” “sure,” or unrelated speech.
 - TIMER STATE SAFETY: Never say or imply that a timer is paused, and never offer to resume one, unless get_timer_status returned a paused timer in this turn or the athlete directly asked to pause it. Never infer timer state from the current drill, set, or past conversation. When arriving at a timed set without verified paused-timer state, offer only to start that set's timer.
 - POSITION-ONLY RULE: Treat every natural-language request for current work—“what drill am I on?”, “what are we doing?”, “where are we?”, “remind me what I’m on”, “what set is this?”, “what’s going on?”, or equivalent—as drill/set only. Call get_workout_position if its position is not already authoritative, then state only the drill and set. Never offer to start a timer, never imply whether a timer is running, and never mention timer state in a position-only reply. Mention timer state only when the athlete directly asks about the timer and get_timer_status was called in that same turn.
 
 COACHING AND RECOMMENDATIONS
-- Judge shooting against its makes target. Below target needs work; never agree that a below-target result is good. At/below half is significantly low. Be candid.
+- Judge shooting from actual makes and attempts only. Be candid about poor shooting percentages.
 - Recommend from completed sets only; one is enough. Match the exact weakness/category and avoid duplicates. An offer is not add permission. After acceptance, search that category. If all met target suggest another focus; if none are complete say evidence is insufficient.
 
 NAVIGATION AND EDITS
@@ -185,12 +183,12 @@ NAVIGATION AND EDITS
 - NEW DRILL SET PRIORITY: When moving to a different drill, select set 1 whenever it is incomplete or unstarted; select another set only when the athlete explicitly requests that set or set 1 is already complete.
 - Put natural references in drill_name: first/last, number, next/previous, go back, or Nth from end. Omit exercise_id unless state supplies it; never discuss IDs. Resolve this/that/current/it to current; ask only for ambiguous matches.
 - Multi-action requests require all tools in dependency order, awaiting each result. Example: navigate to "last drill," then set each requested shooting set. Use each returned state silently; do not re-fetch unless asked for a fresh check or state is ambiguous.
-- List with list_workout_drills; save notes with save_note. Coach may add sets only through add_exercise_set for a drill already in the workout.
+- List with list_workout_drills. Coach may add sets only through add_exercise_set for a drill already in the workout.
 
 SHOT TRACKING
 - If the athlete asks how to track shots, how Coach knows what happens after a shot, or an equivalent question, say: "Say make or miss, and I'll track each shot."
 - If the athlete asks how to complete a drill or how drill completion works, say: "For shooting drills, log makes and misses for each set. For timed drills, say start the set timer and I'll start it. When the timer finishes, that set is marked complete."
-- set_shooting_set_targets changes one set's shot targets, never results. Any clear request to change shooting amount MUST call this tool immediately: "I want to shoot 30 shots," "I want to shoot 8 more," "I want to shoot fewer shots," "I want to shoot less," "I want to shoot more," "can we shoot 50," "make this 50 shots," or equivalent. If the athlete gives an added amount, calculate the new total from the current target plus that amount. If they ask for fewer/more without stating a number, ask for the exact total attempts. Preserve target_makes when the athlete did not name a new makes target. Never answer with only current progress or shots left when the athlete requested an amount change.
+- set_shooting_set_targets changes one set's target attempts, never results. Any clear request to change shooting amount MUST call this tool immediately: "I want to shoot 30 shots," "I want to shoot 8 more," "I want to shoot fewer shots," "I want to shoot less," "I want to shoot more," "can we shoot 50," "make this 50 shots," or equivalent. If the athlete gives an added amount, calculate the new total from the current target plus that amount. If they ask for fewer/more without stating a number, ask for the exact total attempts. Never answer with only current progress or shots left when the athlete requested an amount change.
 - For more work on an incomplete shooting or finishing drill, call set_shooting_set_targets with the requested new total. A higher target reopens and activates that existing set without changing its score. If no total is supplied, ask for the exact total attempts.
 - Going back to extend an existing shooting/finishing set is normal and allowed. Use set_shooting_set_targets only when the athlete identifies an existing set to extend; do not use it to create another set.
 - COMPLETED DRILL REOPENING: Every drill and set can be reopened. Never tell an athlete that a completed drill cannot be reopened, and never redirect them to a different drill merely because the named drill is complete. When every set of a named shooting/finishing drill is complete and the athlete says “I want to do more Form Shooting,” ask: “Would you like me to add another Form Shooting set?” On yes, call add_exercise_set—never set_shooting_set_targets. For a completed timed drill, use set_set_completion with completed=false to reopen the requested set, or uncomplete_drill to reopen the whole requested drill.
@@ -313,22 +311,6 @@ const REALTIME_TOOL_DEFS = [
     },
   },
   {
-    name: "save_note",
-    description:
-      "Save a note on a specific drill when the athlete wants to remember something.",
-    parameters: {
-      type: "object",
-      properties: {
-        ...DRILL_REFERENCE_PROPERTIES,
-        note: {
-          type: "string",
-          description: "Short note to attach to this drill.",
-        },
-      },
-      required: ["note"],
-    },
-  },
-  {
     name: "list_workout_drills",
     description:
       "List drills in today's workout. Use when the athlete asks what drills they have, e.g. all shooting drills.",
@@ -414,7 +396,7 @@ const REALTIME_TOOL_DEFS = [
   {
     name: "set_shooting_set_targets",
     description:
-      "Change one shooting/finishing set's prescribed makes or attempts without changing its results. Use immediately for any clear request to change the number of shots, attempts, or shooting target. Increasing attempts beyond a completed set's recorded attempts reopens and activates that set.",
+      "Change one shooting/finishing set's prescribed attempts without changing its results. Use immediately for any clear request to change the number of shots or attempts. Increasing attempts beyond a completed set's recorded attempts reopens and activates that set.",
     parameters: {
       type: "object",
       properties: {
@@ -423,13 +405,9 @@ const REALTIME_TOOL_DEFS = [
           type: "number",
           description: "Set; defaults to current.",
         },
-        target_makes: {
-          type: "number",
-          description: "Optional prescribed makes.",
-        },
         target_attempts: {
           type: "number",
-          description: "Optional prescribed attempts.",
+          description: "Prescribed attempts.",
         },
       },
     },
@@ -506,19 +484,6 @@ const TOOL_DEFS = [
     },
   },
   {
-    name: "save_note",
-    description:
-      "Attach a note to a drill when the user says something worth remembering.",
-    parameters: {
-      type: "object",
-      properties: {
-        ...DRILL_REFERENCE_PROPERTIES,
-        note: { type: "string" },
-      },
-      required: ["note"],
-    },
-  },
-  {
     name: "start_timer",
     description:
       "ONLY for a direct request to start or restart a timer now, or confirmation of the immediately preceding timer-start offer. Never use for a how-to, explanatory, or general timer/set question. For an explicit restart/reset/start-over request, start a fresh countdown from the saved set duration rather than resuming elapsed time. Start a countdown bound to the named set or active timed set, preserving units.",
@@ -544,7 +509,7 @@ const TOOL_DEFS = [
   {
     name: "set_shooting_set_targets",
     description:
-      "Change one shooting/finishing set's prescribed makes or attempts.",
+      "Change one shooting/finishing set's prescribed attempts.",
     parameters: {
       type: "object",
       properties: {
@@ -553,13 +518,9 @@ const TOOL_DEFS = [
           type: "number",
           description: "Set; defaults to current.",
         },
-        target_makes: {
-          type: "number",
-          description: "Optional prescribed makes.",
-        },
         target_attempts: {
           type: "number",
-          description: "Optional prescribed attempts.",
+          description: "Prescribed attempts.",
         },
       },
     },
@@ -595,7 +556,6 @@ const REALTIME_TOOL_DESCRIPTIONS: Record<string, string> = {
   set_set_completion: "Complete or reopen one set.",
   complete_drill: "Complete all drill sets.",
   uncomplete_drill: "Reopen a drill and its sets.",
-  save_note: "Save a drill note.",
   search_exercise_catalog:
     "Search drills; IDs are internal and only names are spoken.",
   list_workout_drills: "List drills, optionally by category.",
@@ -623,7 +583,6 @@ const REALTIME_PARAMETER_DESCRIPTIONS: Record<string, string> = {
   attempts: "Actual attempts.",
   completed: "Complete or reopen.",
   reason: "Short reason.",
-  note: "Short note.",
   query: "Skill, shot, or weakness.",
   category: "Category filter.",
   minutes: "Minutes.",
@@ -781,11 +740,9 @@ export function buildContextSummary(
       sets: ex.sets,
       reps: ex.reps,
       duration: isTimedExercise(ex) ? ex.duration : null,
-      target_makes: ex.target_makes,
       target_attempts: ex.target_attempts,
       log_type: ex.log_type,
       sets_total: plan.setCount,
-      per_set_target_makes: plan.perSetMakes,
       per_set_target_attempts: plan.perSetAttempts,
       per_set_minutes: isTimedExercise(ex) ? plan.perSetMinutes : null,
       per_set_minutes_override: isTimedExercise(ex)
@@ -800,7 +757,6 @@ export function buildContextSummary(
         const hasProgress = set.makes != null || set.completed;
         const progressMakes = hasProgress ? set.makes ?? 0 : 0;
         const progressAttempts = hasProgress ? set.attempts ?? 0 : 0;
-        const targetMakes = targetMakesForSet(set, plan);
         const targetAttempts = targetAttemptsForSet(set, plan);
         return {
           set_number: set.set_number,
@@ -812,7 +768,6 @@ export function buildContextSummary(
             misses: Math.max(0, progressAttempts - progressMakes),
           },
           target: {
-            makes: targetMakes,
             attempts: targetAttempts,
             minutes: set.duration_seconds_override != null
               ? set.duration_seconds_override / 60
@@ -821,9 +776,6 @@ export function buildContextSummary(
               : null,
           },
           remaining: {
-            makes: targetMakes == null
-              ? null
-              : Math.max(0, targetMakes - progressMakes),
             attempts: targetAttempts == null
               ? null
               : Math.max(0, targetAttempts - progressAttempts),
@@ -862,7 +814,6 @@ export function buildContextSummary(
         current_set: current.current_set,
         current_set_side_label: current.current_set_side_label,
         sets_total: current.sets_total,
-        per_set_target_makes: current.per_set_target_makes,
         per_set_target_attempts: current.per_set_target_attempts,
         current_set_state: current.set_logs.find((set) =>
           set.set_number === current.current_set
@@ -888,7 +839,6 @@ function drillPlanFields(ex: ExerciseRow, log?: LogRow) {
   const instructions = drillInstructionContext(ex);
   return {
     sets_total: plan.setCount,
-    per_set_target_makes: plan.perSetMakes,
     per_set_target_attempts: plan.perSetAttempts,
     per_set_minutes: isTimedExercise(ex) ? plan.perSetMinutes : null,
     log_type: ex.log_type,
@@ -907,7 +857,6 @@ function summarizeDrill(
   makes: number | null;
   attempts: number | null;
   completed: boolean;
-  target_makes: number | null;
   target_attempts: number | null;
   per_set_minutes: number | null;
   log_type: string | null;
@@ -926,7 +875,6 @@ function summarizeDrill(
     makes: totals.makes,
     attempts: totals.attempts,
     completed: totals.completed,
-    target_makes: plan.perSetMakes,
     target_attempts: plan.perSetAttempts,
     per_set_minutes: isTimedExercise(ex) ? plan.perSetMinutes : null,
     log_type: ex.log_type,
@@ -1086,7 +1034,6 @@ function drillContext(state: OrderedDrillState) {
       const hasProgress = set.makes != null || set.completed;
       const progressMakes = hasProgress ? set.makes ?? 0 : 0;
       const progressAttempts = hasProgress ? set.attempts ?? 0 : 0;
-      const targetMakes = targetMakesForSet(set, plan);
       const targetAttempts = targetAttemptsForSet(set, plan);
       return {
         set_number: set.set_number,
@@ -1101,7 +1048,6 @@ function drillContext(state: OrderedDrillState) {
           misses: Math.max(0, progressAttempts - progressMakes),
         },
         target: {
-          makes: targetMakes,
           attempts: targetAttempts,
           minutes: set.duration_seconds_override != null
             ? set.duration_seconds_override / 60
@@ -1110,28 +1056,11 @@ function drillContext(state: OrderedDrillState) {
             : null,
         },
         remaining: {
-          makes: targetMakes == null
-            ? null
-            : Math.max(0, targetMakes - progressMakes),
           attempts: targetAttempts == null
             ? null
             : Math.max(0, targetAttempts - progressAttempts),
         },
         minutes: set.minutes,
-        target_comparison:
-          set.makes == null || targetMakes == null || targetMakes <= 0
-            ? null
-            : {
-              status: set.makes >= targetMakes
-                ? "target_met"
-                : set.makes <= targetMakes / 2
-                ? "significantly_below_target"
-                : "below_target",
-              makes_below_target: Math.max(0, targetMakes - set.makes),
-              percent_of_makes_target: Math.round(
-                (set.makes / targetMakes) * 100,
-              ),
-            },
       };
     }),
     logged_totals: {
@@ -1142,7 +1071,6 @@ function drillContext(state: OrderedDrillState) {
         : null,
     },
     target: {
-      makes: plan.perSetMakes,
       attempts: plan.perSetAttempts,
       minutes: isTimedExercise(exercise) ? plan.perSetMinutes : null,
     },
@@ -1332,12 +1260,11 @@ function weakestScoringFocus(
           (set) =>
             set.completed &&
             set.makes != null &&
-            drill.target.makes != null &&
-            drill.target.makes > 0 &&
-            set.makes < drill.target.makes,
+            set.attempts != null &&
+            set.attempts > 0,
         )
         .map((set) => ({
-          ratio: (set.makes ?? 0) / (drill.target.makes ?? 1),
+          ratio: (set.makes ?? 0) / (set.attempts ?? 1),
           text: `${drill.name ?? ""} ${drill.category ?? ""} ${
             drill.instructions ?? ""
           } ${drill.drill_description ?? ""}`,
@@ -1566,8 +1493,6 @@ function compactRealtimeDrill(drill: RealtimeDrill) {
       attempts: set.attempts,
       misses: set.misses,
       minutes: set.minutes ?? undefined,
-      target_status: set.target_comparison?.status,
-      makes_below_target: set.target_comparison?.makes_below_target,
     })),
     logged_totals: drill.logged_totals,
     target_per_set: drill.target,
@@ -1853,12 +1778,10 @@ export function buildWorkoutPositionSummary(ctx: WorkoutContext): string {
 
   const state = navigation.current_set_state;
   const shootingState =
-    state?.target.makes != null || state?.target.attempts != null
+    state?.target.attempts != null
       ? ` Actual progress: ${state.progress.makes} makes in ${state.progress.attempts} attempts. Prescribed whole-set target: ${
-        state.target.makes ?? "none"
-      } makes in ${state.target.attempts ?? "none"} attempts. Remaining: ${
-        state.remaining.makes ?? "unknown"
-      } makes and ${state.remaining.attempts ?? "unknown"} attempts.`
+        state.target.attempts ?? "none"
+      } attempts. Remaining: ${state.remaining.attempts ?? "unknown"} attempts.`
       : "";
   const timedTarget = workItem.target.minutes != null
     ? ` Target: ${workItem.target.minutes} minute${
@@ -2277,23 +2200,12 @@ export async function executeCoachTool(
         ctx.day.active_exercise_id = nextWork?.exercise_id ?? null;
         ctx.day.active_set_number = nextWork?.set_number ?? null;
       }
-      const selectedTargetMakes = selectedSet
-        ? targetMakesForSet(selectedSet, plan)
-        : plan.perSetMakes;
       const selectedTargetAttempts = selectedSet
         ? targetAttemptsForSet(selectedSet, plan)
         : plan.perSetAttempts;
-      const targetResult = selectedTargetMakes == null
+      const targetResult = selectedTargetAttempts == null
         ? ""
-        : ` Target: ${selectedTargetMakes}${
-          selectedTargetAttempts == null ? "" : ` for ${selectedTargetAttempts}`
-        }; ${
-          makes >= selectedTargetMakes
-            ? "target met"
-            : makes <= selectedTargetMakes / 2
-            ? "significantly below target and needs work"
-            : "below target and needs work"
-        }.`;
+        : ` Target: ${selectedTargetAttempts} attempts.`;
       const nextSetNumber = getCurrentSetNumber(totals.set_logs, plan);
       const nextSetResult = nextSetNumber == null
         ? ""
@@ -3016,51 +2928,6 @@ export async function executeCoachTool(
       };
     }
 
-    case "save_note": {
-      const exerciseId = validExercise(args.exercise_id, args.drill_name);
-      if (!exerciseId) {
-        return {
-          result: "I couldn't uniquely match that workout drill.",
-          dbChanged: false,
-        };
-      }
-      const existing = ctx.logs.get(exerciseId);
-      const ex = ctx.exercises.find((e) => e.id === exerciseId);
-      if (!ex) return { result: "Error: exercise not found", dbChanged: false };
-
-      const meta = decodeExerciseLogMeta(existing?.notes ?? null);
-      const note = String(args.note ?? "").trim().slice(0, 500);
-      if (!note) return { result: "Error: note required", dbChanged: false };
-
-      const userNotes = meta.user_notes?.trim()
-        ? `${meta.user_notes}\n${note}`
-        : note;
-      const { error } = await supabase.from("exercise_logs").upsert(
-        {
-          exercise_id: exerciseId,
-          day_id: dayId,
-          user_id: userId,
-          completed: existing?.completed ?? false,
-          makes: existing?.makes ?? null,
-          attempts: existing?.attempts ?? null,
-          minutes_completed: existing?.minutes_completed ?? null,
-          difficulty: existing?.difficulty ?? null,
-          notes: encodeExerciseLogMeta({
-            set_logs: meta.set_logs,
-            user_notes: userNotes,
-            per_set_attempts_override: meta.per_set_attempts_override ?? null,
-            per_set_minutes_override: meta.per_set_minutes_override ?? null,
-          }),
-        },
-        { onConflict: "exercise_id" },
-      );
-      if (error) return { result: `Error: ${error.message}`, dbChanged: false };
-      return {
-        result: `Note saved on ${ex.name ?? "drill"}.`,
-        dbChanged: true,
-      };
-    }
-
     case "set_shooting_set_targets": {
       const exerciseId = validExercise(args.exercise_id, args.drill_name);
       if (!exerciseId) {
@@ -3098,37 +2965,22 @@ export async function executeCoachTool(
 
       const currentSet = setLogs.find((set) => set.set_number === setNumber)!;
       const requestedAttempts = Number(args.target_attempts);
-      const requestedMakes = Number(args.target_makes);
       const hasAttempts = args.target_attempts != null &&
         Number.isInteger(requestedAttempts);
-      const hasMakes = args.target_makes != null &&
-        Number.isInteger(requestedMakes);
-      if (!hasAttempts && !hasMakes) {
+      if (!hasAttempts) {
         return {
-          result: "Tell me the new target makes, attempts, or both.",
+          result: "Tell me the new target attempts.",
           dbChanged: false,
         };
       }
-      const currentAttempts = targetAttemptsForSet(currentSet, plan);
-      const currentMakes = targetMakesForSet(currentSet, plan);
-      const nextAttempts = hasAttempts ? requestedAttempts : currentAttempts;
-      const nextMakes = hasMakes
-        ? requestedMakes
-        : hasAttempts && currentAttempts != null && currentAttempts > 0 &&
-            currentMakes != null
-        ? Math.round((currentMakes / currentAttempts) * requestedAttempts)
-        : currentMakes;
+      const nextAttempts = requestedAttempts;
       if (
         nextAttempts == null ||
-        nextMakes == null ||
         nextAttempts < 1 ||
-        nextAttempts > 500 ||
-        nextMakes < 0 ||
-        nextMakes > nextAttempts
+        nextAttempts > 500
       ) {
         return {
-          result:
-            "Targets require 1–500 attempts and makes between 0 and attempts.",
+          result: "Target attempts must be between 1 and 500.",
           dbChanged: false,
         };
       }
@@ -3137,7 +2989,6 @@ export async function executeCoachTool(
         nextAttempts > recordedAttempts;
 
       setLogs = updateSetLog(setLogs, plan, setNumber, {
-        target_makes_override: nextMakes,
         target_attempts_override: nextAttempts,
         attempts: currentSet.makes == null && !currentSet.completed
           ? null
@@ -3200,7 +3051,7 @@ export async function executeCoachTool(
         ? "Keep shooting."
         : "Start shooting.";
       const targetSummary =
-        `Okay, you're ${recordedMakes} for ${recordedAttempts}, and you have a target of ${nextMakes} makes in ${nextAttempts} attempts. ${shootingFollowUp}`;
+        `Okay, you're ${recordedMakes} for ${recordedAttempts}, and your target is ${nextAttempts} attempts. ${shootingFollowUp}`;
       return {
         result: reopensCompletedSet
           ? `${targetSummary} That set is now reopened.`

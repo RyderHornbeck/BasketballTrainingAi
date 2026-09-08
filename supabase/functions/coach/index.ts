@@ -354,22 +354,6 @@ const TOOLS = [
   {
     type: "function",
     function: {
-      name: "save_note",
-      description:
-        "Attach a note to a drill when the user says something worth remembering.",
-      parameters: {
-        type: "object",
-        properties: {
-          exercise_id: { type: "string" },
-          note: { type: "string" },
-        },
-        required: ["exercise_id", "note"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "start_timer",
       description: "Start the workout timer.",
       parameters: { type: "object", properties: {} },
@@ -424,8 +408,8 @@ async function executeTool(
       const ex = ctx.exercises.find((e) => e.id === exerciseId);
       const completed = typeof args.completed === "boolean"
         ? args.completed
-        : ex?.target_makes != null
-        ? makes >= ex.target_makes
+        : ex?.target_attempts != null
+        ? attempts >= ex.target_attempts
         : false;
 
       const { error } = await supabase.from("exercise_logs").upsert(
@@ -534,32 +518,6 @@ async function executeTool(
         }" as not complete. You can run it again.`,
         dbChanged: true,
       };
-    }
-
-    case "save_note": {
-      const exerciseId = validExercise(args.exercise_id);
-      if (!exerciseId) {
-        return { result: "Error: unknown exercise_id", dbChanged: false };
-      }
-      const existing = ctx.logs.get(exerciseId);
-      const note = String(args.note ?? "").slice(0, 500);
-      const merged = existing?.notes ? `${existing.notes}\n${note}` : note;
-      const { error } = await supabase.from("exercise_logs").upsert(
-        {
-          exercise_id: exerciseId,
-          day_id: dayId,
-          user_id: userId,
-          completed: existing?.completed ?? false,
-          makes: existing?.makes ?? null,
-          attempts: existing?.attempts ?? null,
-          minutes_completed: existing?.minutes_completed ?? null,
-          difficulty: existing?.difficulty ?? null,
-          notes: merged,
-        },
-        { onConflict: "exercise_id" },
-      );
-      if (error) return { result: `Error: ${error.message}`, dbChanged: false };
-      return { result: "Note saved.", dbChanged: true };
     }
 
     case "start_timer":

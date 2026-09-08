@@ -38,6 +38,7 @@ import {
 
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL") ?? "gpt-5";
+const GENERATED_WORKOUT_CATEGORIES = new Set(["ball_handling", "shooting", "finishing"]);
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
@@ -261,16 +262,17 @@ function buildClipPool(
   const difficultyOk = (c: VideoClip) =>
     !c.difficulty_level || allowedDifficulties.includes(c.difficulty_level);
 
-  const strict = clips.filter((c) =>
+  const supportedClips = clips.filter((clip) => GENERATED_WORKOUT_CATEGORIES.has(clip.category));
+  const strict = supportedClips.filter((c) =>
     difficultyOk(c) && clipEquipmentCompatible(c, answers)
   );
   // Never let equipment filtering starve the pool.
-  let pool = strict.length >= 20 ? strict : clips.filter(difficultyOk);
+  let pool = strict.length >= 20 ? strict : supportedClips.filter(difficultyOk);
   // Core warm-up/progression drills are structural requirements, so retain
   // them even when their catalog difficulty differs from the athlete's tier.
   pool = dedupeClips([
     ...pool,
-    ...clips.filter((clip) =>
+    ...supportedClips.filter((clip) =>
       isRequiredWorkoutCoreClip(clip, Boolean(answers.has_court_access))
     ),
   ]);
@@ -283,18 +285,18 @@ function buildClipPool(
   ) {
     pool = dedupeClips([
       ...pool,
-      ...clips.filter((clip) =>
+      ...supportedClips.filter((clip) =>
         clip.category === "shooting" && difficultyOk(clip)
       ),
     ]);
   }
 
   // Restore core categories only from the athlete's allowed difficulty range.
-  for (const category of ["ball_handling", "finishing", "defense"] as const) {
+  for (const category of ["ball_handling", "finishing"] as const) {
     if (!pool.some((clip) => clip.category === category)) {
       pool = dedupeClips([
         ...pool,
-        ...clips.filter((clip) =>
+        ...supportedClips.filter((clip) =>
           clip.category === category && difficultyOk(clip)
         ),
       ]);

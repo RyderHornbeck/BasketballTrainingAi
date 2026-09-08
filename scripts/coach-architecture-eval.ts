@@ -17,7 +17,6 @@ const replayCases = [
   { phrase: "what's my target and attempts", deterministic: "progress", capabilities: ["reads", "shots"] },
   { phrase: "go to the fifth drill", deterministic: "navigation", capabilities: ["reads", "navigation"] },
   { phrase: "reopen the current workout", deterministic: "completion", capabilities: ["reads", "completion"] },
-  { phrase: "save note my left hand felt weak", deterministic: "save_note", capabilities: ["reads", "notes"] },
   { phrase: "change this set to 30 seconds", deterministic: "set_prescription", capabilities: ["reads", "navigation", "edits"] },
   { phrase: "set this set target to 8 makes in 12 attempts", deterministic: "set_prescription", capabilities: ["reads", "shots", "navigation"] },
   { phrase: "complete set two", deterministic: "completion", capabilities: ["reads", "navigation", "completion"] },
@@ -25,7 +24,7 @@ const replayCases = [
   {
     phrase: "help me adjust this",
     deterministic: null,
-    capabilities: ["reads", "shots", "navigation", "timers", "completion", "edits", "recommendations", "notes"],
+    capabilities: ["reads", "shots", "navigation", "timers", "completion", "edits", "recommendations"],
   },
 ] as const;
 

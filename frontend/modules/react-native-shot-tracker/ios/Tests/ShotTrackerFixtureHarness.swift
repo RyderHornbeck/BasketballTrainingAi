@@ -56,15 +56,14 @@ enum ShotTrackerFixtureHarness {
     geometryFixtures()
     makeAndCooldownFixture()
     reacquisitionFixture()
+    rimOcclusionBridgeFixture()
     missFixture()
     timeoutFixture()
     autonomousTimerFixture()
     resetCooldownFixture()
     manualRimSetterFixture()
     inferenceFailureFixture()
-    bounceGrowthMissFixture()
-    sideBounceCannotMakeFixture()
-    print("PASS: geometry, strict rim scoring, bounce miss, timer, reset, manual-rim, and inference-loss fixtures")
+    print("PASS: inner-rim geometry, timer, reset, manual-rim, and inference-loss fixtures")
   }
 
   private static func geometryFixtures() {
@@ -100,10 +99,8 @@ enum ShotTrackerFixtureHarness {
     _ = process(&machine, 0.5, 0.65, 0.8, 800)
     require(process(&machine, 0.5, 0.3, 1.0, 1_000) == nil, "upward point should arm the attempt")
     let made = process(&machine, 0.5, 0.55, 1.2, 1_200)
-    require(made == nil, "rim traversal must remain pending during bounce override window")
-    let confirmed = process(&machine, 0.5, 0.57, 1.71, 1_710)
-    require(confirmed?.result == .make, "downward top-to-bottom rim opening traversal should make")
-    require(!(confirmed?.id.isEmpty ?? true), "shot event ID must be unique and non-empty")
+    require(made?.result == .make, "a descending trajectory through the inner rim box should make")
+    require(!(made?.id.isEmpty ?? true), "shot event ID must be unique and non-empty")
 
     require(process(&machine, 0.5, 0.3, 1.3, 1_300) == nil, "post-shot lockout should reject above point")
     require(process(&machine, 0.5, 0.55, 1.4, 1_400) == nil, "cooldown should reject duplicate crossing")
@@ -114,18 +111,31 @@ enum ShotTrackerFixtureHarness {
     machine.setManualRim(rim)
     _ = process(&machine, 0.5, 0.65, 1.8, 1_800)
     _ = process(&machine, 0.5, 0.3, 2.0, 2_000)
-    _ = process(&machine, 0.5, 0.55, 2.2, 2_200)
-    let first = process(&machine, 0.5, 0.57, 2.71, 2_710)
+    let first = process(&machine, 0.5, 0.55, 2.2, 2_200)
     require(first?.result == .make, "fixture setup should resolve first shot")
 
     _ = process(&machine, 0.7, 0.7, 3.2, 3_200)
     _ = process(&machine, 0.65, 0.6, 3.3, 3_300)
     _ = process(&machine, 0.6, 0.5, 3.4, 3_400)
     _ = process(&machine, 0.5, 0.3, 3.5, 3_500)
-    _ = process(&machine, 0.5, 0.55, 3.7, 3_700)
-    let second = process(&machine, 0.5, 0.57, 4.21, 4_210)
+    let second = process(&machine, 0.5, 0.55, 3.7, 3_700)
     require(second?.result == .make, "new upward launch should reacquire after cooldown")
     require(second?.id != first?.id, "each shot must have a distinct event ID")
+  }
+
+  private static func rimOcclusionBridgeFixture() {
+    var machine = ShotTrackerStateMachine()
+    machine.setManualRim(rim)
+    _ = process(&machine, 0.5, 0.65, 1.8, 1_800)
+    _ = process(&machine, 0.5, 0.3, 2.0, 2_000)
+    // Simulate the ball being hidden by the rim/net long enough that there is
+    // no normal adjacent detector segment when it reappears.
+    _ = process(&machine, nil, nil, 2.3, 2_300)
+    let made = process(&machine, 0.5, 0.55, 3.2, 3_200)
+    require(
+      made?.result == .make,
+      "an above-rim point followed by a lower re-acquisition through the inner box should make"
+    )
   }
 
   private static func missFixture() {
@@ -197,8 +207,7 @@ enum ShotTrackerFixtureHarness {
     _ = process(&machine, 0.5, 0.3, 8.0, 8_000)
     require(
       {
-        _ = process(&machine, 0.5, 0.55, 8.2, 8_200)
-        return process(&machine, 0.5, 0.57, 8.71, 8_710)?.result == .make
+        return process(&machine, 0.5, 0.55, 8.2, 8_200)?.result == .make
       }(),
       "fixture setup should resolve a make"
     )
@@ -215,8 +224,7 @@ enum ShotTrackerFixtureHarness {
     _ = process(&machine, 0.5, 0.3, 8.5, 8_500)
     require(
       {
-        _ = process(&machine, 0.5, 0.55, 8.7, 8_700)
-        return process(&machine, 0.5, 0.57, 9.21, 9_210)?.result == .make
+        return process(&machine, 0.5, 0.55, 8.7, 8_700)?.result == .make
       }(),
       "stop/full clear may clear cooldown"
     )

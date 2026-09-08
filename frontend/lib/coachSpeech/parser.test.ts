@@ -933,20 +933,11 @@ test("parses targets, totals, and remaining-work queries", () => {
   for (const [phrase, args] of cases) expectIntent(phrase, { kind: "progress", args });
 });
 
-test("parses repeat and prefixed notes without exposing drill removal", () => {
+test("parses repeat without exposing notes or drill removal", () => {
   expectIntent("say that again", { kind: "repeat", args: {} });
-  expectIntent("save note: my elbow is flaring out", {
-    kind: "save_note",
-    args: { note: "my elbow is flaring out" },
-  });
-  expectIntent("save a note that my legs feel tired", {
-    kind: "save_note",
-    args: { note: "my legs feel tired" },
-  });
-  expectIntent("save note keep my guide hand quiet", {
-    kind: "save_note",
-    args: { note: "keep my guide hand quiet" },
-  });
+  assert.equal(parseCoachSpeechIntent("save note: my elbow is flaring out"), null);
+  assert.equal(parseCoachSpeechIntent("save a note that my legs feel tired"), null);
+  assert.equal(parseCoachSpeechIntent("save note keep my guide hand quiet"), null);
   assert.equal(parseCoachSpeechIntent("remove the drill named form shooting"), null);
   assert.equal(parseCoachSpeechIntent("delete exercise attack retreat threes"), null);
 });
@@ -994,10 +985,10 @@ test("parses explicit set duration and shooting target edits", () => {
     kind: "set_prescription",
     args: { setNumber: 2, durationSeconds: 45 },
   });
-  expectIntent("set this set target to 8 makes in 12 attempts", {
-    kind: "set_prescription",
-    args: { targetMakes: 8, targetAttempts: 12 },
-  });
+  assert.equal(
+    parseCoachSpeechIntent("set this set target to 8 makes in 12 attempts"),
+    null,
+  );
   expectIntent("change my attempts to 20", {
     kind: "set_prescription",
     args: { targetAttempts: 20 },
@@ -1014,10 +1005,7 @@ test("parses explicit set duration and shooting target edits", () => {
     kind: "set_prescription",
     args: { targetAttempts: 8, additionalAttempts: true },
   });
-  expectIntent("set target makes to eight", {
-    kind: "set_prescription",
-    args: { targetMakes: 8 },
-  });
+  assert.equal(parseCoachSpeechIntent("set target makes to eight"), null);
 });
 
 test("parses bounded natural shooting attempt-target changes", () => {

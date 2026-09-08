@@ -364,6 +364,20 @@ export async function removeExerciseFromWorkout(
   emitWorkoutUpdated();
 }
 
+export async function swapCatalogExerciseInWorkout(
+  dayId: string,
+  exerciseId: string,
+  catalogExerciseId: string
+): Promise<void> {
+  const { error } = await supabase.rpc("swap_my_workout_exercise", {
+    p_day_id: dayId,
+    p_exercise_id: exerciseId,
+    p_catalog_exercise_id: catalogExerciseId,
+  });
+  if (error) throw new Error(error.message);
+  emitWorkoutUpdated();
+}
+
 /** Full adaptive plan length shown in the day selector strip (200 five-day blocks). */
 export const PLAN_TOTAL_DAYS = 1_000;
 

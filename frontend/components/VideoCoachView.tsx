@@ -122,13 +122,13 @@ function TrackingOverlay({
   width: number;
   height: number;
 }) {
-  // Visual feedback should show a confident current detection immediately.
-  // The native state machine still uses activeRim (five stable detections)
-  // internally before it can score a shot.
-  const rim =
+  // Keep both visible rim boxes aligned with the same stabilized rectangle
+  // used by native make/miss geometry.
+  const rim = update?.activeRim ?? (
     update?.rim && update.rim.confidence >= OVERLAY_CONFIDENCE_THRESHOLD
       ? update.rim
-      : undefined;
+      : undefined
+  );
   const ball =
     update?.ball && update.ball.confidence >= OVERLAY_CONFIDENCE_THRESHOLD
       ? update.ball
@@ -144,18 +144,32 @@ function TrackingOverlay({
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>
       {rim ? (
-        <View
-          style={[
-            styles.trackingBox,
-            {
-              borderColor: "#2F8CFF",
-              left: rim.x * width,
-              top: rim.y * height,
-              width: rim.width * width,
-              height: rim.height * height,
-            },
-          ]}
-        />
+        <>
+          <View
+            style={[
+              styles.trackingBox,
+              {
+                borderColor: "#2F8CFF",
+                left: rim.x * width,
+                top: rim.y * height,
+                width: rim.width * width,
+                height: rim.height * height,
+              },
+            ]}
+          />
+          <View
+            style={[
+              styles.trackingBox,
+              {
+                borderColor: "#B86BFF",
+                left: (rim.x + rim.width / 5) * width,
+                top: (rim.y + rim.height / 6) * height,
+                width: (rim.width * 3 / 5) * width,
+                height: (rim.height * 2 / 3) * height,
+              },
+            ]}
+          />
+        </>
       ) : null}
       {ball ? (
         <View

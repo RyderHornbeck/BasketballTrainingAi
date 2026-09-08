@@ -334,27 +334,34 @@ final class LocalCoreMLCameraView: UIView, AVCaptureVideoDataOutputSampleBufferD
     else { return }
     lastEventTimestamp = snapshot.timestamp
     sequence &+= 1
-    var event: [String: Any] = [
-      "sequence": Double(sequence),
-      "timestamp": snapshot.timestamp,
-      "state": snapshot.state.rawValue,
-      "reason": snapshot.reason,
-      "ball": snapshot.ball.map(eventDetection) ?? NSNull(),
-      "rim": snapshot.detectedRim.map(eventDetection) ?? NSNull(),
-      "activeRim": snapshot.activeRim.map(eventRect) ?? NSNull(),
-      "autoRim": snapshot.autoRim,
-      "stableRimFrames": snapshot.stableRimFrames,
-      "trajectory": snapshot.trajectory.map { ["x": $0.x, "y": $0.y] },
-    ]
-    if let shot {
-      event["shot"] = [
-        "id": shot.id,
-        "result": shot.result.rawValue,
-        "timestamp": shot.timestamp,
-        "reason": shot.reason,
+    let eventSequence = Double(sequence)
+    // `AVCaptureVideoPreviewLayer` uses resizeAspectFill. Convert the
+    // detector's camera-frame coordinates into that layer's displayed rect on
+    // the main thread, where UIKit layer geometry is authoritative.
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      var event: [String: Any] = [
+        "sequence": eventSequence,
+        "timestamp": snapshot.timestamp,
+        "state": snapshot.state.rawValue,
+        "reason": snapshot.reason,
+        "ball": snapshot.ball.map(self.eventDetection) ?? NSNull(),
+        "rim": snapshot.detectedRim.map(self.eventDetection) ?? NSNull(),
+        "activeRim": snapshot.activeRim.map(self.eventRect) ?? NSNull(),
+        "autoRim": snapshot.autoRim,
+        "stableRimFrames": snapshot.stableRimFrames,
+        "trajectory": snapshot.trajectory.map(self.eventPoint),
       ]
+      if let shot {
+        event["shot"] = [
+          "id": shot.id,
+          "result": shot.result.rawValue,
+          "timestamp": shot.timestamp,
+          "reason": shot.reason,
+        ]
+      }
+      self.onTrackerEvent?(event)
     }
-    DispatchQueue.main.async { [weak self] in self?.onTrackerEvent?(event) }
   }
 
   private func emitModelStatus(_ state: String, _ message: String) {
@@ -370,18 +377,52 @@ final class LocalCoreMLCameraView: UIView, AVCaptureVideoDataOutputSampleBufferD
   }
 
   private func eventDetection(_ detection: STDetection) -> [String: Any] {
-    [
-      "x": detection.rect.x,
-      "y": detection.rect.y,
-      "width": detection.rect.width,
-      "height": detection.rect.height,
+    let rect = previewRect(detection.rect)
+    return [
+      "x": rect.x,
+      "y": rect.y,
+      "width": rect.width,
+      "height": rect.height,
       "confidence": detection.confidence,
       "label": detection.label,
     ]
   }
 
   private func eventRect(_ rect: STRect) -> [String: Any] {
-    ["x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height]
+    let projected = previewRect(rect)
+    return [
+      "x": projected.x,
+      "y": projected.y,
+      "width": projected.width,
+      "height": projected.height,
+    ]
+  }
+
+  private func eventPoint(_ point: STPoint) -> [String: Any] {
+    let projected = previewRect(STRect(x: point.x, y: point.y, width: 0, height: 0))
+    return ["x": projected.x, "y": projected.y]
+  }
+
+  private func previewRect(_ rect: STRect) -> STRect {
+    guard bounds.width > 0, bounds.height > 0,
+          let previewLayer
+    else { return rect }
+    // AVFoundation supplies the source-frame region currently visible through
+    // this resizeAspectFill preview. Invert that region to convert detector
+    // coordinates into React view coordinates without assuming a 16:9 camera
+    // or phone-sized view.
+    let visibleSourceRect = previewLayer.metadataOutputRectConverted(
+      fromLayerRect: bounds
+    )
+    guard visibleSourceRect.width > 0, visibleSourceRect.height > 0 else {
+      return rect
+    }
+    return STRect(
+      x: (rect.x - visibleSourceRect.minX) / visibleSourceRect.width,
+      y: (rect.y - visibleSourceRect.minY) / visibleSourceRect.height,
+      width: rect.width / visibleSourceRect.width,
+      height: rect.height / visibleSourceRect.height
+    )
   }
 
   private func trackerError(_ code: Int, _ message: String) -> NSError {

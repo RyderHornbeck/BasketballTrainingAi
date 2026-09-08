@@ -1,6 +1,6 @@
 import { useTheme } from "@/hooks/useTheme";
 import React from "react";
-import { StyleProp, StyleSheet, View, ViewStyle } from "react-native";
+import { LayoutChangeEvent, StyleProp, StyleSheet, View, ViewStyle } from "react-native";
 
 interface CardProps {
   children: React.ReactNode;
@@ -8,9 +8,10 @@ interface CardProps {
   variant?: "default" | "alt";
   /** Set false to opt out of the drop shadow (e.g. cards nested inside another elevated surface). */
   elevated?: boolean;
+  onLayout?: (event: LayoutChangeEvent) => void;
 }
 
-export function Card({ children, style, variant = "default", elevated = true }: CardProps) {
+export function Card({ children, style, variant = "default", elevated = true, onLayout }: CardProps) {
   const { colors, scheme } = useTheme();
 
   return (
@@ -25,6 +26,7 @@ export function Card({ children, style, variant = "default", elevated = true }: 
         elevated && (scheme === "dark" ? styles.shadowDark : styles.shadowLight),
         style,
       ]}
+      onLayout={onLayout}
     >
       {children}
     </View>

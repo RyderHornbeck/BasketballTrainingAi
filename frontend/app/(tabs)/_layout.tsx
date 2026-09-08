@@ -3,7 +3,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
 import { getAnalyticsSummary, prepareAnalyticsSummary } from "@/lib/analytics";
-import { onWorkoutUpdated } from "@/lib/coachEvents";
+import { onCoachLaunchRequested, onWorkoutUpdated } from "@/lib/coachEvents";
 import { actionHaptic, selectionHaptic } from "@/lib/haptics";
 import { hasCurrentAIDataConsent } from "@/lib/aiDataConsent";
 import { isDayUnlocked } from "@/lib/plan";
@@ -35,6 +35,7 @@ export default function TabsLayout() {
   const { width: screenWidth } = useWindowDimensions();
   const { days } = usePlan();
   const [coachOpen, setCoachOpen] = useState(false);
+  const [coachLaunchDay, setCoachLaunchDay] = useState<{ id: string | null; title: string | null } | null>(null);
   const [startupInteractionsComplete, setStartupInteractionsComplete] = useState(false);
 
   useEffect(() => {
@@ -54,6 +55,15 @@ export default function TabsLayout() {
       console.warn("Unable to preload analytics:", error);
     });
   }, [user?.id]);
+
+  useEffect(() => onCoachLaunchRequested((id, title) => {
+    if (!hasCurrentAIDataConsent(profile)) {
+      router.push({ pathname: "/ai-data-processing", params: { source: "coach_gate" } });
+      return;
+    }
+    setCoachLaunchDay({ id, title });
+    setCoachOpen(true);
+  }), [profile, router]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -193,6 +203,7 @@ export default function TabsLayout() {
             return;
           }
           setCoachOpen(true);
+          setCoachLaunchDay(null);
         }}
         style={({ pressed }) => [
           styles.coachButton,
@@ -219,8 +230,8 @@ export default function TabsLayout() {
       {coachOpen ? (
         <LazyCoachOverlay
           onClose={() => setCoachOpen(false)}
-          dayId={coachDay?.id ?? null}
-          dayTitle={coachDay?.title ?? null}
+          dayId={coachLaunchDay?.id ?? coachDay?.id ?? null}
+          dayTitle={coachLaunchDay?.title ?? coachDay?.title ?? null}
         />
       ) : null}
       {startupInteractionsComplete ? (

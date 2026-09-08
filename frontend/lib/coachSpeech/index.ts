@@ -78,10 +78,6 @@ export interface ProgressIntentArgs {
   totalsField?: "makes" | "misses" | "attempts";
 }
 
-export interface SaveNoteIntentArgs {
-  note: string;
-}
-
 export interface RemoveDrillIntentArgs {
   name: string;
   match: "exact";
@@ -90,7 +86,6 @@ export interface RemoveDrillIntentArgs {
 export interface SetPrescriptionIntentArgs {
   setNumber?: number;
   durationSeconds?: number;
-  targetMakes?: number;
   targetAttempts?: number;
   additionalAttempts?: boolean;
   /** Set the target to the attempts already recorded plus this value. */
@@ -134,7 +129,6 @@ export type CoachSpeechIntent =
   | IntentBase<"progress", ProgressIntentArgs>
   | IntentBase<"list_drills", Record<string, never>>
   | IntentBase<"repeat", Record<string, never>>
-  | IntentBase<"save_note", SaveNoteIntentArgs>
   | IntentBase<"remove_drill", RemoveDrillIntentArgs>
   | IntentBase<"set_prescription", SetPrescriptionIntentArgs>;
 
@@ -1218,15 +1212,6 @@ export const parseListDrillsIntent: Parser = (text) =>
     ? intent("list_drills", {}, "List workout drills heard")
     : null;
 
-export const parseSaveNoteIntent: Parser = (text) => {
-  const match = text.match(
-    /^save (?:a )?note(?:\s+that)?(?:\s*:\s*|\s+)(.+)$|^note\s*:\s*(.+)$/
-  );
-  const note = (match?.[1] ?? match?.[2])?.trim();
-  if (!note || note.length < 2 || note.length > 500) return null;
-  return intent("save_note", { note }, "Save note heard", 0.99);
-};
-
 export const parseRemoveDrillIntent: Parser = (text) => {
   const match = text.match(
     /^(?:remove|delete)\s+(?:the\s+)?(?:drill|exercise)(?:\s+named)?\s+(.+)$/
@@ -1316,37 +1301,6 @@ export function parseSetPrescriptionIntent(
         durationSeconds,
       },
       `Change set duration to ${formatDurationLabel(durationSeconds)} heard`,
-      0.99
-    );
-  }
-
-  const combinedTarget = text.match(
-    new RegExp(
-      `^(?:set|change)\\s+(?:(?:set\\s+(${NUMBER})\\s+)|(?:this|the current)\\s+set\\s+)?(?:target|goal)\\s+to\\s+(${NUMBER})\\s+makes?\\s+(?:in|for|out of)\\s+(${NUMBER})\\s+(?:attempts?|shots?)$`
-    )
-  );
-  if (combinedTarget) {
-    const setNumber = combinedTarget[1] ? parseSpokenNumber(combinedTarget[1]) : null;
-    const targetMakes = parseSpokenNumber(combinedTarget[2]);
-    const targetAttempts = parseSpokenNumber(combinedTarget[3]);
-    if (
-      targetMakes == null ||
-      targetAttempts == null ||
-      targetAttempts < 1 ||
-      targetMakes > targetAttempts ||
-      targetAttempts > 500 ||
-      (combinedTarget[1] && (setNumber == null || setNumber < 1))
-    ) {
-      return null;
-    }
-    return intent(
-      "set_prescription",
-      {
-        setNumber: setNumber ?? undefined,
-        targetMakes,
-        targetAttempts,
-      },
-      `Change set target to ${targetMakes} in ${targetAttempts} heard`,
       0.99
     );
   }
@@ -1535,7 +1489,7 @@ export function parseSetPrescriptionIntent(
 
   const singleTarget = text.match(
     new RegExp(
-      `^(?:set|change)\\s+(?:(?:set\\s+(${NUMBER})\\s+)|(?:this|the current)\\s+set(?:s)?\\s+|my\\s+)?(target\\s+makes?|target\\s+attempts?|attempts?)\\s+to\\s+(${NUMBER})$`
+      `^(?:set|change)\\s+(?:(?:set\\s+(${NUMBER})\\s+)|(?:this|the current)\\s+set(?:s)?\\s+|my\\s+)?(target\\s+attempts?|attempts?)\\s+to\\s+(${NUMBER})$`
     )
   );
   if (!singleTarget) return null;
@@ -1544,7 +1498,7 @@ export function parseSetPrescriptionIntent(
   if (
     value == null ||
     value > 500 ||
-    (/attempt/.test(singleTarget[2]) && value < 1) ||
+    value < 1 ||
     (singleTarget[1] && (setNumber == null || setNumber < 1))
   ) {
     return null;
@@ -1553,12 +1507,9 @@ export function parseSetPrescriptionIntent(
     "set_prescription",
     {
       setNumber: setNumber ?? undefined,
-      targetMakes: /makes?/.test(singleTarget[2]) ? value : undefined,
-      targetAttempts: /attempt/.test(singleTarget[2]) ? value : undefined,
+      targetAttempts: value,
     },
-    /makes?/.test(singleTarget[2])
-      ? `Change target makes to ${value} heard`
-      : `Change target attempts to ${value} heard`,
+    `Change target attempts to ${value} heard`,
     0.99
   );
 }
@@ -1676,7 +1627,6 @@ export const parseGenericShotCorrectionIntent: Parser = (text) => {
 };
 
 const PARSERS: readonly Parser[] = [
-  parseSaveNoteIntent,
   parseSpeechControlIntent,
   parseUndoShotIntent,
   parseShotCorrectionIntent,

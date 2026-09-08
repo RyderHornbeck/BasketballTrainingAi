@@ -195,18 +195,14 @@ assert(
 assert(
   initialExercises
     .filter((exercise) => exercise.category === "ball_handling")
-    .every((exercise) => exercise.duration === "1 min"),
-  "workouts under 60 minutes use one-minute ball-handling sets"
-);
-const timedExercises = initialExercises.filter((exercise) =>
-  ["ball_handling", "defense", "conditioning"].includes(exercise.category)
+    .every((exercise) => exercise.duration === "30 sec"),
+  "workouts under 60 minutes use 30-second ball-handling sets"
 );
 assert(
-  timedExercises.every((exercise) => {
-    const minutes = Number.parseFloat(exercise.duration);
-    return exercise.log_type === "minutes" && minutes >= 1 && minutes <= 3;
-  }),
-  "ball-handling, defense, and conditioning drills use one-to-three minute timed sets"
+  initialExercises.every((exercise) =>
+    ["ball_handling", "shooting", "finishing"].includes(exercise.category)
+  ),
+  "generated workouts contain only ball-handling, shooting, and finishing drills"
 );
 
 const longWorkout = buildSmartPlan(clips, {
@@ -224,8 +220,8 @@ assert(
   longWorkout.days
     .flatMap((day) => day.exercises)
     .filter((exercise) => exercise.category === "ball_handling")
-    .every((exercise) => exercise.duration === "1 min"),
-  "60-minute workouts still start with one-minute ball-handling sets"
+    .every((exercise) => exercise.duration === "30 sec"),
+  "60-minute workouts still start with 30-second ball-handling sets"
 );
 assert(
   initialExercises
@@ -427,18 +423,6 @@ const firstExtend = extend.days[0].exercises.filter(
   (exercise) => exercise.name !== "Form Shooting" && lastBlock1.has(exercise.video_clip_id)
 );
 assert(firstExtend.length === 0, "day 6 only repeats the required Form Shooting drill");
-
-// Pain exclusion respected in flexible slots (finishing may still appear as core).
-for (const day of extend.days) {
-  for (const exercise of day.exercises) {
-    if (exercise.category === "conditioning") {
-      assert(
-        exercise.allocation_role === "core_required" || exercise.allocation_role === "warmup",
-        `conditioning only appears in protected slots after knee pain (day ${day.day_number})`
-      );
-    }
-  }
-}
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

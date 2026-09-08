@@ -346,6 +346,8 @@ const MIN_SHOOTING_ATTEMPTS_PER_SET = 20;
 const MIN_FINISHING_ATTEMPTS_PER_SET = 15;
 const MAX_ATTEMPTS_PER_SET = 60;
 const MIN_TARGET_ACCURACY = 0.5;
+const GENERATED_WORKOUT_CATEGORIES = new Set(["ball_handling", "shooting", "finishing"]);
+const BALL_HANDLING_SET_DURATION_SECONDS = 30;
 
 function defaultTargets(
   category: string,
@@ -441,10 +443,14 @@ function buildExercise(
   const log_type = categoryLogType(clip.category);
   const perSetMinutesForDrill =
     clip.category === "ball_handling"
-      ? 1
+      ? BALL_HANDLING_SET_DURATION_SECONDS / 60
       : clip.category === "defense" || clip.category === "conditioning"
       ? Math.max(1, Math.min(perSetMinutes, 3))
       : perSetMinutes;
+  const duration =
+    clip.category === "ball_handling"
+      ? `${BALL_HANDLING_SET_DURATION_SECONDS} sec`
+      : `${perSetMinutesForDrill} min`;
 
   return {
     order_index: 0,
@@ -454,7 +460,7 @@ function buildExercise(
     instructions: clip.description ?? clip.coaching_notes ?? "Focus on quality reps.",
     sets: String(sets),
     reps: null,
-    duration: `${perSetMinutesForDrill} min`,
+    duration,
     target_makes,
     target_attempts,
     log_type,
@@ -464,9 +470,15 @@ function buildExercise(
 }
 
 function parseExerciseMinutes(exercise: SmartExercise): number {
-  const match = exercise.duration.match(/(\d+(?:\.\d+)?)\s*min/i);
+  const minuteMatch = exercise.duration.match(/(\d+(?:\.\d+)?)\s*min/i);
+  const secondMatch = exercise.duration.match(/(\d+(?:\.\d+)?)\s*(?:sec|second)/i);
   const setCount = Math.max(1, Number.parseInt(exercise.sets, 10) || 1);
-  return (match ? Number.parseFloat(match[1]) : 3) * setCount;
+  const minutes = minuteMatch
+    ? Number.parseFloat(minuteMatch[1])
+    : secondMatch
+      ? Number.parseFloat(secondMatch[1]) / 60
+      : 3;
+  return minutes * setCount;
 }
 
 // ---------------------------------------------------------------------------
@@ -996,20 +1008,26 @@ function rotateCategories(categories: string[], offset: number): string[] {
 
 function daySlotSpecs(context: BuildContext, dayOffset: number): SlotSpec[] {
   const { composition, adaptiveProfile, history } = context;
+  const eligibleCategories = (categories: string[]) => {
+    const filtered = categories.filter((category) => GENERATED_WORKOUT_CATEGORIES.has(category));
+    return filtered.length > 0 ? filtered : ["shooting", "ball_handling", "finishing"];
+  };
   const weaknessCategories = rotateCategories(
-    prioritizedCategories(adaptiveProfile.weaknesses, history.skippedCategories),
+    eligibleCategories(prioritizedCategories(adaptiveProfile.weaknesses, history.skippedCategories)),
     dayOffset * Math.max(1, composition.weaknessSlots)
   );
-  const otherCategories = prioritizedCategories(
-    adaptiveProfile.otherSkills,
-    history.skippedCategories
+  const otherCategories = eligibleCategories(
+    prioritizedCategories(adaptiveProfile.otherSkills, history.skippedCategories)
+  );
+  const strengthCategories = eligibleCategories(
+    prioritizedCategories(adaptiveProfile.strengths, history.skippedCategories)
   );
 
   if (composition.shortSession) {
     return [
       { role: "warmup", categories: ["ball_handling"], count: 1 },
       { role: "weakness", categories: weaknessCategories, count: 2 },
-      { role: "strength", categories: adaptiveProfile.strengths, count: 1 },
+      { role: "strength", categories: strengthCategories, count: 1 },
       { role: "other", categories: otherCategories, count: 1 },
     ];
   }
@@ -1020,7 +1038,7 @@ function daySlotSpecs(context: BuildContext, dayOffset: number): SlotSpec[] {
     { role: "core_required", categories: ["ball_handling"], count: 2 },
     { role: "core_required", categories: ["finishing"], count: 2 },
     { role: "weakness", categories: weaknessCategories, count: composition.weaknessSlots },
-    { role: "strength", categories: adaptiveProfile.strengths, count: composition.strengthSlots },
+    { role: "strength", categories: strengthCategories, count: composition.strengthSlots },
     { role: "other", categories: otherCategories, count: composition.otherSlots },
   ];
 }
@@ -1232,6 +1250,9 @@ export interface SmartPlanInput {
 }
 
 export function buildSmartPlan(clips: PlanClip[], input: SmartPlanInput): SmartPlan {
+  // This is the generation boundary. No adaptive preference, history record,
+  // or catalog expansion may introduce a category outside this product scope.
+  const generatedClips = clips.filter((clip) => GENERATED_WORKOUT_CATEGORIES.has(clip.category));
   const history = buildDrillHistory(input.samples);
   const context: BuildContext = {
     startDayNumber: input.startDayNumber,
@@ -1256,7 +1277,7 @@ export function buildSmartPlan(clips: PlanClip[], input: SmartPlanInput): SmartP
   const days: SmartDay[] = [];
   let previousDayClipIds = history.lastSessionClipIds;
   for (let dayOffset = 0; dayOffset < 5; dayOffset++) {
-    const day = buildDay(clips, context, dayOffset, block, previousDayClipIds);
+    const day = buildDay(generatedClips, context, dayOffset, block, previousDayClipIds);
     days.push(day);
     previousDayClipIds = new Set(day.exercises.map((exercise) => exercise.video_clip_id));
   }
@@ -1269,7 +1290,7 @@ export function buildSmartPlan(clips: PlanClip[], input: SmartPlanInput): SmartP
     summary: `Five personalized workouts${goal}, tuned to your recent performance.`,
     duration_weeks: 1,
     days_per_week: input.daysPerWeek,
-    days: enforcePlanRequirements(days, clips, context, false),
+    days: enforcePlanRequirements(days, generatedClips, context, false),
   };
 }
 

@@ -9,7 +9,7 @@ import {
 } from "@/lib/plan";
 import { classifyShotZones } from "@/lib/shotMap";
 import { ExerciseVideoClip } from "@/types/database";
-import { ArrowLeftIcon, CheckIcon, MagnifyingGlassIcon, PlusIcon } from "phosphor-react-native";
+import { ArrowLeftIcon, CheckIcon, MagnifyingGlassIcon } from "phosphor-react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -83,6 +83,13 @@ function searchScore(clip: ExerciseVideoClip, query: string): number {
   }, 0);
 }
 
+function defaultPrescription(clip: ExerciseVideoClip): string {
+  if (clip.category === "ball_handling") return "30 sec × 2";
+  if (clip.category === "shooting") return "20 shots × 2";
+  if (clip.category === "finishing") return "15 shots × 2";
+  return "2 sets";
+}
+
 export default function WorkoutEditManualScreen() {
   const { colors } = useTheme();
   const router = useRouter();
@@ -90,8 +97,9 @@ export default function WorkoutEditManualScreen() {
   const [catalog, setCatalog] = useState<ExerciseVideoClip[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
-  const [addingId, setAddingId] = useState<string | null>(null);
   const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [adding, setAdding] = useState(false);
 
   useEffect(() => {
     if (!dayId) return;
@@ -119,13 +127,16 @@ export default function WorkoutEditManualScreen() {
     [catalog, query]
   );
 
-  const addExercise = async (clip: ExerciseVideoClip) => {
-    if (!dayId || addedIds.has(clip.id) || addingId) return;
+  const addSelectedExercises = async () => {
+    if (!dayId || selectedIds.size === 0 || adding) return;
     actionHaptic();
-    setAddingId(clip.id);
+    setAdding(true);
     try {
-      await addCatalogExerciseToWorkout(dayId, clip);
-      setAddedIds((current) => new Set(current).add(clip.id));
+      const clips = results.filter((clip) => selectedIds.has(clip.id));
+      for (const clip of clips) await addCatalogExerciseToWorkout(dayId, clip);
+      setAddedIds((current) => new Set([...current, ...selectedIds]));
+      setSelectedIds(new Set());
+      router.back();
     } catch (error) {
       reportNetworkFailure("add-exercise");
       Alert.alert(
@@ -133,7 +144,7 @@ export default function WorkoutEditManualScreen() {
         error instanceof Error ? error.message : "Please try again."
       );
     } finally {
-      setAddingId(null);
+      setAdding(false);
     }
   };
 
@@ -169,57 +180,61 @@ export default function WorkoutEditManualScreen() {
           keyboardShouldPersistTaps="handled"
           renderItem={({ item }) => {
             const added = addedIds.has(item.id);
-            const zones = classifyShotZones(
-              item.exercise_name,
-              item.category,
-              item.description ?? item.coaching_notes ?? ""
-            ).map((zone) => ZONE_LABELS[zone] ?? zone);
+            const selected = selectedIds.has(item.id);
             return (
               <View style={[styles.resultCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <Pressable
                   onPress={() =>
-                    router.push({
-                      pathname: "/drill-detail",
-                      params: { clipId: item.id },
-                    })
+                    router.push({ pathname: "/drill-detail", params: { clipId: item.id } })
                   }
                   style={styles.resultCopy}
                 >
                   <Text style={[styles.resultName, { color: colors.text }]}>{item.exercise_name}</Text>
+                  <Text style={[styles.resultPrescription, { color: colors.textMuted }]}>
+                    {defaultPrescription(item)}
+                  </Text>
                   <Text style={[styles.resultMeta, { color: colors.accent }]}>
                     {item.category.replace(/_/g, " ")}
-                    {zones.length ? ` · ${zones.join(", ")}` : ""}
                   </Text>
-                  {item.description ? (
-                    <Text numberOfLines={3} style={[styles.resultDescription, { color: colors.textSecondary }]}>
-                      {item.description}
-                    </Text>
-                  ) : null}
                 </Pressable>
                 <Pressable
-                  disabled={added || addingId != null}
-                  onPress={() => void addExercise(item)}
+                  disabled={added || adding}
+                  onPress={() => {
+                    actionHaptic();
+                    setSelectedIds((current) => {
+                      const next = new Set(current);
+                      if (next.has(item.id)) next.delete(item.id);
+                      else next.add(item.id);
+                      return next;
+                    });
+                  }}
                   style={({ pressed }) => [
-                    styles.addButton,
+                    styles.selectionCircle,
                     {
-                      backgroundColor: added ? colors.accentMuted : colors.accent,
-                      opacity: !added && addingId != null ? 0.45 : pressed ? 0.72 : 1,
+                      backgroundColor: selected || added ? colors.accent : "#FFFFFF",
+                      borderColor: colors.accent,
+                      opacity: adding || pressed ? 0.72 : 1,
                     },
                   ]}
                 >
-                  {addingId === item.id ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : added ? (
-                    <CheckIcon size={18} color={colors.accent} weight="bold" />
-                  ) : (
-                    <PlusIcon size={18} color="#FFFFFF" weight="bold" />
-                  )}
+                  {(selected || added) ? <CheckIcon size={18} color="#FFFFFF" weight="bold" /> : null}
                 </Pressable>
               </View>
             );
           }}
         />
       )}
+      {selectedIds.size > 0 ? (
+        <Pressable
+          onPress={() => void addSelectedExercises()}
+          disabled={adding}
+          style={[styles.addSelectedButton, { backgroundColor: colors.accent, opacity: adding ? 0.7 : 1 }]}
+        >
+          {adding ? <ActivityIndicator color="#FFFFFF" /> : (
+            <Text style={styles.addSelectedText}>Add Drills ({selectedIds.size})</Text>
+          )}
+        </Pressable>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -248,7 +263,7 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, fontSize: 14, paddingVertical: 12 },
   loader: { marginTop: 40 },
-  list: { padding: 18, paddingBottom: 50, gap: 10 },
+  list: { padding: 18, paddingBottom: 110, gap: 10 },
   resultCard: {
     borderWidth: 1,
     borderRadius: 18,
@@ -258,14 +273,30 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   resultCopy: { flex: 1 },
-  resultName: { fontSize: 15, fontWeight: "800" },
-  resultMeta: { marginTop: 3, fontSize: 11, fontWeight: "700", textTransform: "capitalize" },
-  resultDescription: { marginTop: 7, fontSize: 12, lineHeight: 17 },
-  addButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  resultName: { fontSize: 16, fontWeight: "800" },
+  resultPrescription: { marginTop: 3, fontSize: 12, fontWeight: "600" },
+  resultMeta: { marginTop: 3, fontSize: 12, fontWeight: "700", textTransform: "capitalize" },
+  selectionCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 2,
     alignItems: "center",
     justifyContent: "center",
   },
+  addSelectedButton: {
+    position: "absolute",
+    left: 24,
+    right: 24,
+    bottom: 24,
+    height: 52,
+    borderRadius: 26,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000000",
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  addSelectedText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" },
 });

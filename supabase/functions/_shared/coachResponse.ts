@@ -27,7 +27,6 @@ export interface CoachTurnRequest {
     setNumber: number;
     makes: number;
     attempts: number;
-    targetMakes: number | null;
     targetAttempts: number | null;
     remainingAttempts: number | null;
     lastLocalUserTranscript: string | null;
@@ -80,7 +79,6 @@ export function validateCoachTurnRequest(input: unknown): CoachTurnValidation {
     const makes = context.makes;
     const attempts = context.attempts;
     const setNumber = context.set_number;
-    const targetMakes = context.target_makes;
     const targetAttempts = context.target_attempts;
     const remainingAttempts = context.remaining_attempts;
     if (
@@ -92,7 +90,6 @@ export function validateCoachTurnRequest(input: unknown): CoachTurnValidation {
       !integer(makes) ||
       !integer(attempts) ||
       makes > attempts ||
-      !nullableInteger(targetMakes) ||
       !nullableInteger(targetAttempts) ||
       !nullableInteger(remainingAttempts) ||
       !nullableShortText(context.last_local_user_transcript) ||
@@ -106,7 +103,6 @@ export function validateCoachTurnRequest(input: unknown): CoachTurnValidation {
       setNumber,
       makes,
       attempts,
-      targetMakes: typeof targetMakes === "number" ? targetMakes : null,
       targetAttempts: typeof targetAttempts === "number"
         ? targetAttempts
         : null,
@@ -419,7 +415,6 @@ export function coachToolPreamble(
     stop_timer: "I'm stopping the timer.",
     set_timed_set_duration: "I'm changing that set time.",
     remove_workout_exercise: "I'm removing that drill.",
-    save_note: "I'm saving that note.",
   };
   return preambles[toolName] ?? null;
 }
@@ -438,7 +433,6 @@ export function usesOptimisticToolPreamble(toolName: string): boolean {
     "stop_timer",
     "add_workout_exercise",
     "remove_workout_exercise",
-    "save_note",
   ]).has(toolName);
 }
 

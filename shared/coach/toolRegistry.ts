@@ -267,7 +267,7 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   tool({
     name: "set_shooting_set_targets",
     description:
-      "Change one shooting or finishing set's targets without changing its results. If a completed set's new attempt target is higher than its recorded attempts, this one call reopens and activates that set. Must be called for an explicit request to shoot a different number of shots, such as 'I want to shoot 50 shots.'",
+      "Change one shooting or finishing set's target attempts without changing its results. If a completed set's new attempt target is higher than its recorded attempts, this one call reopens and activates that set. Must be called for an explicit request to shoot a different number of shots, such as 'I want to shoot 50 shots.'",
     capability: "edits",
     execution: "server",
     kind: "mutation",
@@ -276,9 +276,8 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
     exactSpeech: true,
     parameters: args({
       ...setReference,
-      target_makes: { type: "integer", minimum: 0, maximum: 500 },
       target_attempts: { type: "integer", minimum: 1, maximum: 500 },
-    }, ["set_number"]),
+    }, ["set_number", "target_attempts"]),
   }),
   tool({
     name: "add_exercise_set",
@@ -294,19 +293,6 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
       ...drillReference,
       side_label: { type: "string", enum: ["left side", "right side"] },
     }),
-  }),
-  tool({
-    name: "save_note",
-    description: "Append a short note to one drill.",
-    capability: "notes",
-    execution: "server",
-    kind: "mutation",
-    realtime: true,
-    exactSpeech: true,
-    parameters: args(
-      { ...drillReference, note: { type: "string", minLength: 1, maxLength: 500 } },
-      ["note"]
-    ),
   }),
   tool({
     name: "get_workout_state",
@@ -371,7 +357,7 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
   tool({
     name: "update_set_prescription",
     description:
-      "Change one set's prescribed duration or shooting targets. Never change observed results.",
+      "Change one set's prescribed duration or target attempts. Never change observed results.",
     capability: "edits",
     execution: "client",
     kind: "mutation",
@@ -381,7 +367,6 @@ export const COACH_TOOL_REGISTRY: readonly CoachToolSpec[] = [
     parameters: args({
       ...setReference,
       duration_seconds: { type: "integer", minimum: 5, maximum: 3600 },
-      target_makes: { type: "integer", minimum: 0, maximum: 500 },
       target_attempts: { type: "integer", minimum: 1, maximum: 500 },
     }, ["set_number"]),
   }),

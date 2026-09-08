@@ -47,10 +47,17 @@ export type {
 } from "@/lib/shotEventSeam";
 import {
   parseShotProgressReply,
+  parseShotScoreReply,
   playShotProgressAudio,
+  playShotScoreAudio,
   preloadLikelyNextShotProgressAudio,
   preloadShotProgressAudio,
 } from "@/lib/shotProgressAudio";
+import {
+  selectVideoShotReply,
+  videoShotKind,
+} from "@/lib/videoShotFeedback";
+import { playVideoShotFeedbackAudio } from "@/lib/videoShotFeedbackAudio";
 import { getCoachPersonaId } from "@/lib/coachProfiles";
 import {
   CartesiaInkClient,
@@ -365,7 +372,6 @@ interface PendingShootingTargetChange {
   exerciseId: string;
   drillName: string | null;
   setNumber: number;
-  targetMakes?: number;
   targetAttempts?: number;
 }
 
@@ -408,8 +414,8 @@ interface RealtimeSetResult {
   completed: boolean;
   side_label?: string | null;
   progress?: { makes: number; attempts: number; misses: number };
-  target?: { makes: number | null; attempts: number | null; minutes?: number | null };
-  remaining?: { makes: number | null; attempts: number | null };
+  target?: { attempts: number | null; minutes?: number | null };
+  remaining?: { attempts: number | null };
 }
 
 interface RealtimeDrillState {
@@ -421,7 +427,6 @@ interface RealtimeDrillState {
   drill_description?: string | null;
   status?: "complete" | "in_progress" | "not_started";
   target: {
-    makes: number | null;
     attempts: number | null;
     minutes?: number | null;
   };
@@ -446,8 +451,8 @@ interface RealtimeCurrentSetState {
   side_label?: string | null;
   completed: boolean;
   progress: { makes: number; attempts: number; misses: number };
-  target: { makes: number | null; attempts: number | null; minutes?: number | null };
-  remaining: { makes: number | null; attempts: number | null };
+  target: { attempts: number | null; minutes?: number | null };
+  remaining: { attempts: number | null };
 }
 
 interface RealtimeWorkoutState {
@@ -478,7 +483,6 @@ interface PendingShotSet {
   sideLabel: string | null;
   makes: number;
   attempts: number;
-  targetMakes: number | null;
   targetAttempts: number | null;
   completed: boolean;
   requestId?: string;
@@ -979,6 +983,7 @@ export class RealtimeCoachSession {
   private pendingAssemblyInworldUsage: ProviderUsageDelta | null = null;
   private shotUndoStack: ShotUndoEntry[] = [];
   private shotInputMode: ShotInputMode = "voice";
+  private videoMakeStreak = 0;
   private seenVideoShotEventIds = new Set<string>();
   private preferredName: string | null = null;
   private startupGreetingActive = false;
@@ -996,6 +1001,7 @@ export class RealtimeCoachSession {
 
   setShotInputMode(mode: ShotInputMode): void {
     this.shotInputMode = mode;
+    this.videoMakeStreak = 0;
   }
 
   getShotInputMode(): ShotInputMode {
@@ -3344,27 +3350,12 @@ export class RealtimeCoachSession {
     if (!set) return;
 
     const requestedAttempts = Number(args.target_attempts);
-    const requestedMakes = Number(args.target_makes);
     const hasAttempts =
       args.target_attempts != null && Number.isInteger(requestedAttempts);
-    const hasMakes = args.target_makes != null && Number.isInteger(requestedMakes);
     const previousAttempts = set.target?.attempts ?? drill.target.attempts;
-    const previousMakes = set.target?.makes ?? drill.target.makes;
     const nextAttempts = hasAttempts ? requestedAttempts : previousAttempts;
-    const nextMakes = hasMakes
-      ? requestedMakes
-      : hasAttempts &&
-          previousMakes != null &&
-          previousAttempts != null &&
-          previousAttempts > 0
-        ? Math.max(1, Math.round((requestedAttempts / previousAttempts) * previousMakes))
-        : previousMakes;
-    set.target = { ...set.target, makes: nextMakes, attempts: nextAttempts };
+    set.target = { ...set.target, attempts: nextAttempts };
     set.remaining = {
-      makes:
-        nextMakes == null
-          ? null
-          : Math.max(0, nextMakes - (set.progress?.makes ?? set.makes ?? 0)),
       attempts:
         nextAttempts == null
           ? null
@@ -3376,14 +3367,13 @@ export class RealtimeCoachSession {
       navigationSet.exercise_id === drill.exercise_id &&
       navigationSet.set_number === setNumber
     ) {
-      navigationSet.target = { makes: nextMakes, attempts: nextAttempts };
+      navigationSet.target = { attempts: nextAttempts };
       navigationSet.remaining = { ...set.remaining };
     }
     const pending = this.pendingShotSets.get(
       this.pendingShotKey(drill.exercise_id, setNumber)
     );
     if (pending) {
-      pending.targetMakes = nextMakes;
       pending.targetAttempts = nextAttempts;
     }
   }
@@ -3446,10 +3436,8 @@ export class RealtimeCoachSession {
         attempts: entry.attempts,
         misses: Math.max(0, entry.attempts - entry.makes),
       };
-      set.target = { makes: entry.targetMakes, attempts: entry.targetAttempts };
+      set.target = { attempts: entry.targetAttempts };
       set.remaining = {
-        makes:
-          entry.targetMakes == null ? null : Math.max(0, entry.targetMakes - entry.makes),
         attempts:
           entry.targetAttempts == null
             ? null
@@ -3468,10 +3456,8 @@ export class RealtimeCoachSession {
         attempts: entry.attempts,
         misses: Math.max(0, entry.attempts - entry.makes),
       };
-      current.target = { makes: entry.targetMakes, attempts: entry.targetAttempts };
+      current.target = { attempts: entry.targetAttempts };
       current.remaining = {
-        makes:
-          entry.targetMakes == null ? null : Math.max(0, entry.targetMakes - entry.makes),
         attempts:
           entry.targetAttempts == null
             ? null
@@ -3502,7 +3488,6 @@ export class RealtimeCoachSession {
     const setNumber = set.set_number;
     const makes = set.progress?.makes ?? set.makes ?? 0;
     const attempts = set.progress?.attempts ?? set.attempts ?? 0;
-    const targetMakes = set.target?.makes ?? drill.target.makes;
     const targetAttempts = set.target?.attempts ?? drill.target.attempts;
     state.navigation.current_set_state = {
       exercise_id: drill.exercise_id,
@@ -3511,9 +3496,8 @@ export class RealtimeCoachSession {
       side_label: set.side_label ?? null,
       completed: Boolean(set.completed),
       progress: { makes, attempts, misses: Math.max(0, attempts - makes) },
-      target: { makes: targetMakes, attempts: targetAttempts, minutes: set.target?.minutes },
+      target: { attempts: targetAttempts, minutes: set.target?.minutes },
       remaining: {
-        makes: targetMakes == null ? null : Math.max(0, targetMakes - makes),
         attempts: targetAttempts == null ? null : Math.max(0, targetAttempts - attempts),
       },
     };
@@ -3817,15 +3801,11 @@ export class RealtimeCoachSession {
     if (!entry || entry.completed) return null;
     const remainingShots =
       entry.targetAttempts == null ? null : Math.max(0, entry.targetAttempts - entry.attempts);
-    const remainingMakes =
-      entry.targetMakes == null ? null : Math.max(0, entry.targetMakes - entry.makes);
     return `AUTHORITATIVE CURRENT SET STATE: set ${entry.setNumber}${
       entry.sideLabel ? ` (${entry.sideLabel})` : ""
     }. Actual progress: ${entry.makes} makes in ${entry.attempts} attempts. Prescribed whole-set target: ${
-      entry.targetMakes ?? "no makes target"
-    } makes in ${entry.targetAttempts ?? "no attempts target"} attempts. Remaining: ${
-      remainingMakes ?? "unknown"
-    } makes and ${remainingShots ?? "unknown"} attempts. The progress denominator is shots already taken, not the target. Keep the athlete on this set unless they explicitly finish or move on.`;
+      entry.targetAttempts ?? "no attempts target"
+    } attempts. Remaining: ${remainingShots ?? "unknown"} attempts. The progress denominator is shots already taken, not the target. Keep the athlete on this set unless they explicitly finish or move on.`;
   }
 
   private normalizedShotArguments(
@@ -4041,7 +4021,6 @@ export class RealtimeCoachSession {
         mode: updateMode,
       }
     );
-    const targetMakes = saved?.target?.makes ?? drill.target.makes;
     const targetAttempts = saved?.target?.attempts ?? drill.target.attempts;
     // A voice command can arrive late, be duplicated, or report more than the
     // remaining reps. A set has a hard attempt boundary: record at most its
@@ -4064,7 +4043,6 @@ export class RealtimeCoachSession {
       sideLabel: saved?.side_label ?? null,
       makes: nextMakes,
       attempts: nextAttempts,
-      targetMakes,
       targetAttempts,
       completed,
       persisted: false,
@@ -4248,6 +4226,21 @@ export class RealtimeCoachSession {
       };
     }
 
+    let spokenOutput = buffered.output;
+    if (source === "video" && drill) {
+      this.videoMakeStreak = result === "make" ? this.videoMakeStreak + 1 : 0;
+      const recorded = this.pendingShotSets.get(
+        this.pendingShotKey(current?.exercise_id ?? drill.exercise_id, current?.set_number ?? 1),
+      );
+      spokenOutput = selectVideoShotReply({
+        result,
+        kind: videoShotKind(drill.category ?? null, drill.name ?? null),
+        makes: recorded?.makes ?? current?.progress.makes ?? (result === "make" ? 1 : 0),
+        attempts: recorded?.attempts ?? (current?.progress.attempts ?? 0) + 1,
+        makeStreak: this.videoMakeStreak,
+      });
+    }
+
     if (interruptAndSpeak) {
       const sourceLabel =
         source === "video"
@@ -4256,21 +4249,21 @@ export class RealtimeCoachSession {
       this.conversationSummary = appendConversationTurn(
         this.conversationSummary,
         sourceLabel,
-        buffered.output,
+        spokenOutput,
       );
       this.lastLocalShotTurn = {
         userTranscript: sourceLabel,
-        coachReply: buffered.output,
+        coachReply: spokenOutput,
       };
-      this.lastDeterministicReply = buffered.output;
+      this.lastDeterministicReply = spokenOutput;
       this.callbacks?.onConversationSummary?.(this.conversationSummary);
       await this.speakDeterministic(
-        buffered.output,
+        spokenOutput,
         normalizedEventId,
         speechEpoch,
       );
     }
-    return { status: "recorded", output: buffered.output };
+    return { status: "recorded", output: spokenOutput };
   }
 
   private nonShootingShotReply(drill: RealtimeDrillState | null): string {
@@ -4375,7 +4368,6 @@ export class RealtimeCoachSession {
       sideLabel: saved.side_label ?? null,
       makes: Math.max(0, currentMakes - previous.makes),
       attempts: Math.max(0, currentAttempts - previous.attempts),
-      targetMakes: saved.target?.makes ?? drill.target.makes,
       targetAttempts: saved.target?.attempts ?? drill.target.attempts,
       completed: false,
       requestId: createClientRequestId("undo-shot"),
@@ -4455,7 +4447,6 @@ export class RealtimeCoachSession {
     );
     const makes = pending?.makes ?? current.progress.makes;
     const attempts = pending?.attempts ?? current.progress.attempts;
-    const targetMakes = pending?.targetMakes ?? current.target.makes;
     const targetAttempts = pending?.targetAttempts ?? current.target.attempts;
     return {
       exerciseId: current.exercise_id,
@@ -4463,7 +4454,6 @@ export class RealtimeCoachSession {
       setNumber: current.set_number,
       makes,
       attempts,
-      targetMakes,
       targetAttempts,
       remainingAttempts:
         targetAttempts == null ? null : Math.max(0, targetAttempts - attempts),
@@ -4644,11 +4634,8 @@ export class RealtimeCoachSession {
       if (scope === "set") {
         if (!currentSet) return "There isn't a current set.";
         const shots = currentSet.remaining.attempts;
-        const makes = currentSet.remaining.makes;
         if (shots == null) return "This set doesn't have a shot target.";
-        return `${shots} shot${shots === 1 ? "" : "s"} left${
-          makes == null ? "." : ` and ${makes} make${makes === 1 ? "" : "s"} left.`
-        }`;
+        return `${shots} shot${shots === 1 ? "" : "s"} left.`;
       }
       if (scope === "exercise") {
         if (!current) return "There isn't a current drill.";
@@ -4676,7 +4663,6 @@ export class RealtimeCoachSession {
     }
     if (metric === "target") {
       if (!current || !currentSet) return "There isn't a current set.";
-      const targetMakes = currentSet.target.makes;
       const targetAttempts = currentSet.target.attempts;
       if (targetAttempts == null && current.target.minutes) {
         return `The target is ${current.target.minutes} minute${
@@ -4684,9 +4670,7 @@ export class RealtimeCoachSession {
         } per set.`;
       }
       if (targetAttempts == null) return "This drill doesn't have a shooting target.";
-      return `This set's full target is ${targetMakes ?? 0} make${
-        targetMakes === 1 ? "" : "s"
-      } in ${targetAttempts} attempts. You're currently ${currentSet.progress.makes} for ${
+      return `This set's target is ${targetAttempts} attempts. You're currently ${currentSet.progress.makes} for ${
         currentSet.progress.attempts
       }.`;
     }
@@ -5373,7 +5357,6 @@ export class RealtimeCoachSession {
         exercise_id: current.exercise_id,
         drill_name: current.name,
         set_number: setNumber,
-        target_makes: command.args.targetMakes,
         target_attempts: requestedAttempts,
         ...requestArgs,
       });
@@ -5556,14 +5539,6 @@ export class RealtimeCoachSession {
       return `Your workout drills are: ${names.join("; ")}.`.slice(0, 295);
     }
     if (command.kind === "repeat") return this.lastDeterministicReply;
-    if (command.kind === "save_note") {
-      return (
-        await this.invokeCoachTool("save_note", {
-          note: command.args.note,
-          ...requestArgs,
-        })
-      ).result;
-    }
     return null;
   }
 
@@ -5920,7 +5895,6 @@ export class RealtimeCoachSession {
               kind: "set_prescription",
               args: {
                 setNumber: this.pendingShootingTargetChange.setNumber,
-                targetMakes: this.pendingShootingTargetChange.targetMakes,
                 targetAttempts: this.pendingShootingTargetChange.targetAttempts,
                 confirmedTargetChange: true,
               },
@@ -7857,8 +7831,9 @@ export class RealtimeCoachSession {
     // transport. Never send an exact X-for-Y progress reply to a live TTS
     // provider while a matching local clip exists.
     const progress = parseShotProgressReply(text);
+    const score = this.shotInputMode === "video" ? parseShotScoreReply(text) : null;
     const persona = this.voicePersona;
-    if (progress && persona) {
+    if (this.shotInputMode === "video" && persona && !score) {
       await (this.stopLocalShotPlayback?.() ?? Promise.resolve());
       this.stopLocalShotPlayback = null;
       if (speechEpoch !== this.speechEpoch || !this.active) return;
@@ -7869,7 +7844,7 @@ export class RealtimeCoachSession {
         this.assemblyClient?.updateAgentContext(text);
       }
       this.updateStatus();
-      const stop = playShotProgressAudio(persona, progress, () => {
+      const stop = playVideoShotFeedbackAudio(persona, text, () => {
         if (speechEpoch !== this.speechEpoch) return;
         this.stopLocalShotPlayback = null;
         this.playbackActive = false;
@@ -7879,7 +7854,37 @@ export class RealtimeCoachSession {
       });
       if (stop) {
         this.stopLocalShotPlayback = stop;
-        preloadLikelyNextShotProgressAudio(persona, progress);
+        return;
+      }
+      this.playbackActive = false;
+    }
+    if ((progress || score) && persona) {
+      await (this.stopLocalShotPlayback?.() ?? Promise.resolve());
+      this.stopLocalShotPlayback = null;
+      if (speechEpoch !== this.speechEpoch || !this.active) return;
+      this.generationActive = false;
+      this.playbackActive = true;
+      if (this.assemblyInworldActive) {
+        this.lastAssemblyCoachSpeech = text;
+        this.assemblyClient?.updateAgentContext(text);
+      }
+      this.updateStatus();
+      const onFinished = () => {
+        if (speechEpoch !== this.speechEpoch) return;
+        this.stopLocalShotPlayback = null;
+        this.playbackActive = false;
+        this.assemblyEchoGuardUntil = 0;
+        this.callbacks?.onCoachPlaybackFinished?.();
+        this.updateStatus();
+      };
+      const stop = progress
+        ? playShotProgressAudio(persona, progress, onFinished)
+        : score
+          ? playShotScoreAudio(persona, score, onFinished)
+          : null;
+      if (stop) {
+        this.stopLocalShotPlayback = stop;
+        if (progress) preloadLikelyNextShotProgressAudio(persona, progress);
         return;
       }
       this.playbackActive = false;

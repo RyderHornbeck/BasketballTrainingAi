@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/Skeleton";
 import { Text } from "@/components/Text";
 import { useTheme } from "@/hooks/useTheme";
 import { usePlan } from "@/hooks/usePlan";
-import { onWorkoutUpdated } from "@/lib/coachEvents";
+import { onWorkoutUpdated, requestCoachLaunch } from "@/lib/coachEvents";
 import { reportNetworkFailure } from "@/lib/connectivity";
 import { calculateDayPerformance, getPerformanceColor } from "@/lib/dayPerformance";
 import {
@@ -18,23 +18,26 @@ import {
 } from "@/lib/exerciseSetLogs";
 import { actionHaptic, selectionHaptic } from "@/lib/haptics";
 import { sortWorkoutExercisesForDisplay } from "@/lib/workoutOrder";
+import { primeWorkoutDrillCache } from "@/lib/workoutDrillCache";
 import {
   ExerciseLogInput,
   appendExerciseSet,
   removeExerciseSet,
   finishWorkoutDay,
   getCurrentWorkoutStreak,
+  getExerciseCatalog,
   getWorkoutDayWithExercises,
   getWeeklyWorkoutStats,
   isDayUnlocked,
   removeExerciseFromWorkout,
+  swapCatalogExerciseInWorkout,
   requestPlanGeneration,
   requestNextBlockGeneration,
   saveExerciseLog,
   WeeklyWorkoutStats,
 } from "@/lib/plan";
-import { ExerciseLog } from "@/types/database";
-import { WorkoutDayWithExercises } from "@/types/plan";
+import { ExerciseLog, ExerciseVideoClip } from "@/types/database";
+import { WorkoutDayWithExercises, WorkoutExerciseWithClip } from "@/types/plan";
 import {
   CaretLeftIcon,
   ChartLineUpIcon,
@@ -42,15 +45,15 @@ import {
   BasketballIcon,
   FireIcon,
   PercentIcon,
-  MagicWandIcon,
   LockIcon,
-  PlusIcon,
   PlayCircleIcon,
-  FloppyDiskIcon,
-  PencilSimpleIcon,
   TargetIcon,
   TimerIcon,
+  DotsThreeIcon,
 } from "phosphor-react-native";
+import ContextMenu, {
+  type ContextMenuAction,
+} from "react-native-context-menu-view";
 import { useFocusEffect, useRouter } from "expo-router";
 import NetInfo from "@react-native-community/netinfo";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -65,6 +68,69 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 type DaysViewMode = "overview" | "workout";
+
+function WorkoutMetric({
+  icon,
+  label,
+  value,
+  color,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  color: string;
+}) {
+  return (
+    <View style={styles.weekStat}>
+      {icon}
+      <Text style={[styles.weekStatLabel, { color: "#6B7280" }]}>{label}</Text>
+      <Text style={[styles.weekStatValue, { color }]}>{value}</Text>
+    </View>
+  );
+}
+
+function DrillContextMenu({
+  exercise,
+  catalog,
+  onSwap,
+  onRemove,
+}: {
+  exercise: WorkoutExerciseWithClip;
+  catalog: ExerciseVideoClip[];
+  onSwap: (clipId: string) => void;
+  onRemove: () => void;
+}) {
+  const options = catalog
+    .filter((clip) => clip.category === exercise.category && clip.id !== exercise.video_clip_id)
+    .sort((a, b) => a.exercise_name.localeCompare(b.exercise_name));
+  const actions: ContextMenuAction[] = [
+    {
+      title: "Swap drill",
+      systemIcon: "arrow.triangle.2.circlepath",
+      actions: options.map((clip) => ({ title: clip.exercise_name })),
+    },
+    { title: "Remove drill", systemIcon: "trash", destructive: true },
+  ];
+
+  return (
+    <ContextMenu
+      title={exercise.name ?? "Drill"}
+      actions={actions}
+      dropdownMenuMode
+      onPress={(event) => {
+        const { indexPath } = event.nativeEvent;
+        if (indexPath[0] === 1) onRemove();
+        else if (indexPath[0] === 0 && indexPath[1] != null) {
+          const replacement = options[indexPath[1]];
+          if (replacement) onSwap(replacement.id);
+        }
+      }}
+      style={styles.drillMenuButton}
+    >
+      <DotsThreeIcon size={24} color="#6B7280" weight="bold" />
+    </ContextMenu>
+  );
+}
 
 export default function DaysScreen() {
   const { colors, scheme } = useTheme();
@@ -99,8 +165,22 @@ export default function DaysScreen() {
   const finishingRef = useRef(false);
   const [finishingWorkout, setFinishingWorkout] = useState(false);
   const [retryingBlock, setRetryingBlock] = useState(false);
-  const [editingWorkout, setEditingWorkout] = useState(false);
   const [completionAnimationTokens, setCompletionAnimationTokens] = useState<Record<string, number>>({});
+  const [catalog, setCatalog] = useState<ExerciseVideoClip[]>([]);
+  const [workoutStatsPage, setWorkoutStatsPage] = useState(0);
+  const [workoutStatsWidth, setWorkoutStatsWidth] = useState(0);
+
+  useEffect(() => {
+    void getExerciseCatalog().then(setCatalog).catch((error) =>
+      console.warn("Unable to load drill swap catalog:", error)
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!dayDetail) return;
+    primeWorkoutDrillCache(dayDetail.id, dayDetail.exercises);
+    router.prefetch("/workout-drill");
+  }, [dayDetail, router]);
 
   const defaultDayNumber = useMemo(() => {
     if (days.length === 0) return null;
@@ -329,7 +409,6 @@ export default function DaysScreen() {
         return () => {
           // Exercise additions and removals persist immediately; leaving only
           // closes edit mode and never discards a draft.
-          setEditingWorkout(false);
         };
       },
       [refreshPlan, loadDetail, loadWeeklyStats, loadCurrentStreak]
@@ -338,9 +417,12 @@ export default function DaysScreen() {
 
   useEffect(() => {
     return onWorkoutUpdated((source) => {
-      // Manual cards already hold the latest optimistic state. Reloading them
-      // here would overwrite in-progress typing and make toggles flicker.
+      // Detail pages write optimistically into their own cache. The parent
+      // workout cache must still reconcile the confirmed server row; otherwise
+      // returning here re-primes drills with an old set count/progress state.
       if (source === "manual") {
+        detailCacheRef.current.clear();
+        void loadDetail(false, true);
         void loadWeeklyStats();
         return;
       }
@@ -500,7 +582,6 @@ export default function DaysScreen() {
         setDayDetail(null);
       }
       setViewMode("overview");
-      setEditingWorkout(false);
       setSelectedDayNumber(dayNumber);
     },
     [applySelectedDetail, days, selectedDayNumber]
@@ -523,17 +604,37 @@ export default function DaysScreen() {
             text: "Delete",
             style: "destructive",
             onPress: () => {
-              void removeExerciseFromWorkout(dayDetail.id, exerciseId).catch((err) => {
-                console.error("Failed to delete exercise:", err);
-                reportNetworkFailure("delete-exercise");
-                Alert.alert("Could not delete exercise", err instanceof Error ? err.message : "Try again.");
-              });
+              void removeExerciseFromWorkout(dayDetail.id, exerciseId)
+                .then(() => loadDetail(false, true))
+                .catch((err) => {
+                  console.error("Failed to delete exercise:", err);
+                  reportNetworkFailure("delete-exercise");
+                  Alert.alert("Could not delete exercise", err instanceof Error ? err.message : "Try again.");
+                });
             },
           },
         ]
       );
     },
-    [dayDetail]
+    [dayDetail, loadDetail]
+  );
+
+  const swapExercise = useCallback(
+    async (exerciseId: string, catalogExerciseId: string) => {
+      if (!dayDetail) return;
+      actionHaptic();
+      try {
+        await swapCatalogExerciseInWorkout(dayDetail.id, exerciseId, catalogExerciseId);
+        await loadDetail(false, true);
+      } catch (error) {
+        reportNetworkFailure("swap-exercise");
+        Alert.alert(
+          "Could not swap drill",
+          error instanceof Error ? error.message : "Please try again."
+        );
+      }
+    },
+    [dayDetail, loadDetail]
   );
 
   const exerciseStats = useMemo(() => {
@@ -549,6 +650,24 @@ export default function DaysScreen() {
       progress: total > 0 ? completed / total : 0,
     };
   }, [dayDetail, progressVersion]);
+
+  const workoutSummary = useMemo(() => {
+    if (!dayDetail) return { drills: 0, shots: 0, minutes: 0 };
+    return dayDetail.exercises.reduce(
+      (summary, exercise) => {
+        const sets = Math.max(1, Number.parseInt(exercise.sets ?? "1", 10) || 1);
+        if (exercise.category === "shooting" || exercise.category === "finishing") {
+          summary.shots += (exercise.target_attempts ?? 0) * sets;
+        }
+        return summary;
+      },
+      {
+        drills: dayDetail.exercises.length,
+        shots: 0,
+        minutes: dayDetail.estimated_minutes ?? 0,
+      }
+    );
+  }, [dayDetail]);
 
   const dayPerformance = useMemo(() => {
     if (!dayDetail) return { score: 0, hasData: false };
@@ -903,131 +1022,82 @@ export default function DaysScreen() {
             <Pressable
               onPress={() => {
                 actionHaptic();
-                setEditingWorkout(false);
                 switchViewMode("overview");
               }}
               style={({ pressed }) => [styles.backRow, { opacity: pressed ? 0.65 : 1 }]}
               hitSlop={8}
             >
               <CaretLeftIcon size={22} color={colors.accent} weight="bold" />
-              <Text style={[styles.backText, { color: colors.accent }]}>Back to day overview</Text>
             </Pressable>
 
             <View style={styles.dayWorkoutTopRow}>
               <Text style={[styles.dayWorkoutLabel, { color: colors.textMuted }]}>
                 Day {dayDetail.day_number} Workout
               </Text>
-              <Pressable
-                onPress={() => {
-                  actionHaptic();
-                  setEditingWorkout((value) => !value);
-                }}
-                style={({ pressed }) => [
-                  styles.editWorkoutButton,
-                  {
-                    backgroundColor: editingWorkout ? colors.accent : colors.card,
-                    borderColor: colors.accent,
-                    opacity: pressed ? 0.82 : 1,
-                  },
+              <ContextMenu
+                title="Change Workout"
+                actions={[
+                  { title: "Edit with AI", systemIcon: "sparkles" },
+                  { title: "Add manually", systemIcon: "plus" },
                 ]}
+                dropdownMenuMode
+                onPress={(event) => {
+                  actionHaptic();
+                  router.push({
+                    pathname: event.nativeEvent.index === 0
+                      ? "/workout-edit-ai"
+                      : "/workout-edit-manual",
+                    params: { dayId: dayDetail.id },
+                  });
+                }}
+                style={styles.changeWorkoutMenu}
               >
-                {editingWorkout ? (
-                  <FloppyDiskIcon size={15} color="#FFFFFF" weight="bold" />
-                ) : (
-                  <PencilSimpleIcon size={15} color={colors.accent} weight="bold" />
-                )}
-                <Text
-                  style={[
-                    styles.editWorkoutButtonText,
-                    { color: editingWorkout ? "#FFFFFF" : colors.accent },
-                  ]}
-                >
-                  {editingWorkout ? "Save changes" : "Edit"}
-                </Text>
-              </Pressable>
-            </View>
-            <Card style={styles.workoutStatsCard}>
-              <View style={styles.weekStat}>
-                <TargetIcon size={26} color={colors.accent} weight="duotone" />
-                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Makes</Text>
-                <Text style={[styles.weekStatValue, { color: colors.text }]}>
-                  {dayShootingStats.makes}
-                </Text>
-              </View>
-              <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
-              <View style={styles.weekStat}>
-                <BasketballIcon size={26} color={colors.accent} weight="duotone" />
-                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Shots</Text>
-                <Text style={[styles.weekStatValue, { color: colors.text }]}>
-                  {dayShootingStats.shots}
-                </Text>
-              </View>
-              <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
-              <View style={styles.weekStat}>
-                <PercentIcon size={26} color={colors.accent} weight="duotone" />
-                <Text style={[styles.weekStatLabel, { color: colors.textSecondary }]}>Accuracy</Text>
-                <Text style={[styles.weekStatValue, { color: colors.text }]}>
-                  {dayShootingStats.accuracy != null ? `${dayShootingStats.accuracy}%` : "--"}
-                </Text>
-              </View>
-            </Card>
-
-            {editingWorkout ? (
-              <View style={styles.addWorkoutActions}>
-                <Pressable
-                  onPress={() => {
-                    actionHaptic();
-                    router.push({
-                      pathname: "/workout-edit-ai",
-                      params: { dayId: dayDetail.id },
-                    });
-                  }}
-                  style={({ pressed }) => [
-                    styles.addWorkoutButton,
-                    styles.addWorkoutAIButton,
-                    { backgroundColor: colors.accentMuted, opacity: pressed ? 0.72 : 1 },
-                  ]}
-                >
-                  <MagicWandIcon size={18} color={colors.accent} weight="bold" />
-                  <Text style={[styles.addWorkoutButtonText, { color: colors.accent }]}>Add with AI</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => {
-                    actionHaptic();
-                    router.push({
-                      pathname: "/workout-edit-manual",
-                      params: { dayId: dayDetail.id },
-                    });
-                  }}
-                  style={({ pressed }) => [
-                    styles.addWorkoutButton,
-                    {
-                      backgroundColor: colors.card,
-                      borderColor: colors.border,
-                      opacity: pressed ? 0.72 : 1,
-                    },
-                  ]}
-                >
-                  <PlusIcon size={18} color={colors.text} weight="bold" />
-                  <Text style={[styles.addWorkoutButtonText, { color: colors.text }]}>Add manually</Text>
-                </Pressable>
-              </View>
-            ) : null}
-
-            <View style={styles.workoutHeader}>
-              <Text style={[styles.workoutHeaderTitle, { color: colors.text }]}>
-                {dayDetail.exercises.length}{" "}
-                {dayDetail.exercises.length === 1 ? "exercise" : "exercises"}
-              </Text>
-              {dayDetail.estimated_minutes ? (
-                <View style={styles.workoutHeaderMetaRow}>
-                  <TimerIcon size={14} color={colors.textSecondary} weight="duotone" />
-                  <Text style={[styles.workoutHeaderMeta, { color: colors.textSecondary }]}>
-                    ~{dayDetail.estimated_minutes} min workout
-                  </Text>
+                <View style={[styles.editWorkoutButton, { backgroundColor: colors.card, borderColor: colors.accent }]}>
+                  <Text style={[styles.editWorkoutButtonText, { color: colors.accent }]}>Change Workout</Text>
                 </View>
-              ) : null}
+              </ContextMenu>
             </View>
+            <View onLayout={(event) => setWorkoutStatsWidth(event.nativeEvent.layout.width)}>
+            <Card style={styles.workoutStatsCard}>
+              {workoutStatsWidth > 0 ? <ScrollView
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={(event) => {
+                  const width = event.nativeEvent.layoutMeasurement.width;
+                  if (width > 0) setWorkoutStatsPage(Math.round(event.nativeEvent.contentOffset.x / width));
+                }}
+              >
+                <View style={[styles.workoutStatsPage, { width: workoutStatsWidth || undefined }]}>
+                  <WorkoutMetric icon={<TargetIcon size={26} color={colors.accent} weight="duotone" />} label="Drills" value={String(workoutSummary.drills)} color={colors.text} />
+                  <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
+                  <WorkoutMetric icon={<BasketballIcon size={26} color={colors.accent} weight="duotone" />} label="Shots" value={String(workoutSummary.shots)} color={colors.text} />
+                  <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
+                  <WorkoutMetric icon={<TimerIcon size={26} color={colors.accent} weight="duotone" />} label="Time" value={`${workoutSummary.minutes} min`} color={colors.text} />
+                </View>
+                <View style={[styles.workoutStatsPage, { width: workoutStatsWidth || undefined }]}>
+                  <WorkoutMetric icon={<TargetIcon size={26} color={colors.accent} weight="duotone" />} label="Makes" value={String(dayShootingStats.makes)} color={colors.text} />
+                  <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
+                  <WorkoutMetric icon={<BasketballIcon size={26} color={colors.accent} weight="duotone" />} label="Shots" value={String(dayShootingStats.shots)} color={colors.text} />
+                  <View style={[styles.weekStatDivider, { backgroundColor: colors.border }]} />
+                  <WorkoutMetric icon={<PercentIcon size={26} color={colors.accent} weight="duotone" />} label="Accuracy" value={dayShootingStats.accuracy != null ? `${dayShootingStats.accuracy}%` : "--"} color={colors.text} />
+                </View>
+              </ScrollView> : null}
+              {workoutStatsWidth > 0 ? <View style={styles.carouselDots}>
+                {[0, 1].map((page) => <View key={page} style={[styles.carouselDot, { backgroundColor: page === workoutStatsPage ? colors.accent : colors.border }]} />)}
+              </View> : null}
+            </Card>
+            </View>
+
+            <Button
+              title="Start Workout"
+              onPress={() => {
+                actionHaptic();
+                requestCoachLaunch(dayDetail.id, dayDetail.title ?? null);
+              }}
+              style={styles.startCoachButton}
+              buttonStyle={styles.workoutPrimaryPill}
+            />
 
             <Text style={[styles.drillsLabel, { color: colors.textMuted }]}>Drills</Text>
 
@@ -1036,9 +1106,26 @@ export default function DaysScreen() {
                   key={exercise.id}
                   exercise={exercise}
                   readOnly={false}
-                  editMode={editingWorkout}
+                  expanded={false}
+                  compact
                   completionAnimationToken={completionAnimationTokens[exercise.id]}
                   onDelete={() => confirmDeleteExercise(exercise.id, exercise.name)}
+                  onOpen={() =>
+                    router.push({
+                      pathname: "/workout-drill",
+                      params: { dayId: dayDetail.id, exerciseId: exercise.id },
+                    })
+                  }
+                  headerAction={
+                    exercise.log?.completed ? undefined : (
+                      <DrillContextMenu
+                        exercise={exercise}
+                        catalog={catalog}
+                        onSwap={(clipId) => void swapExercise(exercise.id, clipId)}
+                        onRemove={() => confirmDeleteExercise(exercise.id, exercise.name)}
+                      />
+                    )
+                  }
                   onAddSet={() => {
                     void appendExerciseSet(dayDetail.id, exercise.id)
                       // The exercise's set count is plan data, so the cached
@@ -1081,27 +1168,13 @@ export default function DaysScreen() {
                 </Text>
               </View>
             ) : (
-              <Pressable
+              <Button
+                title="Finish workout"
                 onPress={confirmFinishWorkout}
-                disabled={finishingWorkout}
-                style={({ pressed }) => [
-                  styles.finishWorkoutButton,
-                  {
-                    backgroundColor: colors.accent,
-                    opacity: finishingWorkout || pressed ? 0.86 : 1,
-                    shadowColor: colors.accent,
-                  },
-                ]}
-              >
-                {finishingWorkout ? (
-                  <Text style={styles.finishWorkoutButtonText}>Saving workout...</Text>
-                ) : (
-                  <>
-                    <CheckCircleIcon size={20} color="#FFFFFF" weight="fill" />
-                    <Text style={styles.finishWorkoutButtonText}>Finish workout</Text>
-                  </>
-                )}
-              </Pressable>
+                loading={finishingWorkout}
+                style={styles.finishWorkoutButton}
+                buttonStyle={styles.workoutPrimaryPill}
+              />
             )}
           </View>
         )}
@@ -1406,15 +1479,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   backRow: {
-    flexDirection: "row",
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     alignItems: "center",
-    gap: 4,
-    marginBottom: 16,
-    paddingHorizontal: 2,
-  },
-  backText: {
-    fontSize: 15,
-    fontWeight: "700",
+    justifyContent: "center",
+    backgroundColor: "#E5E7EB",
+    marginBottom: 14,
   },
   workoutHeader: {
     flexDirection: "row",
@@ -1436,10 +1507,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   workoutStatsCard: {
-    flexDirection: "row",
-    alignItems: "stretch",
     marginBottom: 18,
+    overflow: "hidden",
+    paddingHorizontal: 0,
+    paddingVertical: 14,
+    minHeight: 112,
   },
+  workoutStatsPage: { flexDirection: "row", alignItems: "stretch", paddingHorizontal: 16 },
+  carouselDots: { flexDirection: "row", justifyContent: "center", gap: 6, marginTop: 10 },
+  carouselDot: { width: 6, height: 6, borderRadius: 3 },
+  startCoachButton: {
+    marginBottom: 20,
+  },
+  workoutPrimaryPill: { borderRadius: 999 },
   editWorkoutButton: {
     minHeight: 32,
     borderWidth: 1,
@@ -1450,6 +1530,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 5,
+  },
+  changeWorkoutMenu: {
+    alignSelf: "flex-start",
   },
   editWorkoutButtonText: {
     fontSize: 12,
@@ -1500,6 +1583,12 @@ const styles = StyleSheet.create({
     marginTop: 4,
     paddingHorizontal: 2,
   },
+  drillMenuButton: {
+    width: 30,
+    height: 30,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   completedBanner: {
     marginTop: 12,
     borderRadius: 14,
@@ -1516,21 +1605,5 @@ const styles = StyleSheet.create({
   },
   finishWorkoutButton: {
     marginTop: 18,
-    minHeight: 54,
-    borderRadius: 16,
-    paddingHorizontal: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.24,
-    shadowRadius: 10,
-    elevation: 4,
-  },
-  finishWorkoutButtonText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "800",
   },
 });

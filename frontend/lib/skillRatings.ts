@@ -5,7 +5,6 @@ import {
   ExerciseSetPlan,
   SetLogEntry,
   targetAttemptsForSet,
-  targetMakesForSet,
 } from "./exerciseSetLogs";
 
 export const RADAR_SKILLS = [
@@ -72,7 +71,6 @@ interface ExerciseLogRow {
     category: string;
     sets: string | null;
     duration: string | null;
-    target_makes: number | null;
     target_attempts: number | null;
     log_type: string | null;
   } | null;
@@ -107,20 +105,13 @@ function baselineForSkill(
 
 function scoreSetEntry(entry: SetLogEntry, plan: ExerciseSetPlan, category: string): number {
   if (plan.logType === "makes_attempts") {
-    const targetMakes = targetMakesForSet(entry, plan) ?? 0;
-    const targetAttempts = targetAttemptsForSet(entry, plan) ?? targetMakes;
+    const targetAttempts = targetAttemptsForSet(entry, plan) ?? 0;
     const makes = entry.makes ?? 0;
     const attempts = entry.attempts ?? targetAttempts;
-    const attainment =
-      targetMakes > 0 ? clamp((makes / targetMakes) * 100) : entry.completed ? 85 : 35;
-    const targetAccuracy = targetAttempts > 0 ? targetMakes / targetAttempts : null;
     const actualAccuracy = attempts > 0 ? makes / attempts : null;
-    const accuracy =
-      targetAccuracy && actualAccuracy != null
-        ? clamp((actualAccuracy / targetAccuracy) * 100)
-        : attainment;
-    const completion = entry.completed ? 100 : clamp(attainment * 0.6);
-    return Math.round(0.55 * attainment + 0.35 * accuracy + 0.1 * completion);
+    const accuracy = actualAccuracy == null ? 35 : clamp(actualAccuracy * 100);
+    const completion = entry.completed ? 100 : clamp(accuracy * 0.6);
+    return Math.round(0.9 * accuracy + 0.1 * completion);
   }
 
   if (plan.logType === "minutes") {
@@ -205,7 +196,6 @@ function expandExerciseLogToEvents(log: ExerciseLogRow): PerformanceEvent[] {
     sets: log.workout_exercises?.sets ?? "1",
     duration: log.workout_exercises?.duration ?? null,
     reps: null,
-    target_makes: log.workout_exercises?.target_makes ?? null,
     target_attempts: log.workout_exercises?.target_attempts ?? null,
     log_type: (log.workout_exercises?.log_type ?? "checkbox") as ExerciseSetPlan["logType"],
     set_side_labels: null,

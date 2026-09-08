@@ -16,6 +16,11 @@ export interface ShotProgressReply {
   shotsLeft: number;
 }
 
+export interface ShotScoreReply {
+  makes: number;
+  attempts: number;
+}
+
 const assetUriPromises = new Map<number, Promise<string>>();
 
 function resolveAssetUri(moduleId: number): Promise<string> {
@@ -92,6 +97,54 @@ export function parseShotProgressReply(text: string): ShotProgressReply | null {
     return null;
   }
   return { makes, attempts, shotsLeft };
+}
+
+export function parseShotScoreReply(text: string): ShotScoreReply | null {
+  const match = text.trim().match(/^You're\s+(\d+)\s+for\s+(\d+)\.?$/i);
+  if (!match) return null;
+  const makes = Number(match[1]);
+  const attempts = Number(match[2]);
+  if (!Number.isInteger(makes) || !Number.isInteger(attempts) || makes < 0 || attempts < makes || attempts > 20) {
+    return null;
+  }
+  return { makes, attempts };
+}
+
+export function playShotScoreAudio(
+  persona: string,
+  reply: ShotScoreReply,
+  onFinished: () => void,
+): (() => Promise<void>) | null {
+  if (!(persona in SHOT_PROGRESS_AUDIO)) return null;
+  const prefix = SHOT_PROGRESS_AUDIO[persona as ShotProgressPersona].prefixes[
+    `${reply.makes}-${reply.attempts}`
+  ];
+  if (!prefix) return null;
+  let stopped = false;
+  let playbackId: string | null = null;
+  let subscription: { remove: () => void } | null = null;
+  const finish = () => {
+    if (stopped) return;
+    stopped = true;
+    subscription?.remove();
+    onFinished();
+  };
+  subscription = addLocalPlaybackFinishedListener((event) => {
+    if (event.playbackId === playbackId) finish();
+  });
+  void resolveAssetUri(prefix)
+    .then(async (uri) => {
+      if (stopped) return;
+      playbackId = await playLocalFilesAsync([uri]);
+      if (stopped) await clearPlaybackAsync();
+    })
+    .catch(() => finish());
+  return async () => {
+    if (stopped) return;
+    stopped = true;
+    subscription?.remove();
+    await clearPlaybackAsync().catch(() => undefined);
+  };
 }
 
 export function playShotProgressAudio(

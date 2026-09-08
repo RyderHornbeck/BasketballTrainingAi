@@ -6,8 +6,10 @@ export interface WorkoutUpdateDetails {
   stateVersion?: number;
 }
 type Listener = (source: WorkoutUpdateSource, details?: WorkoutUpdateDetails) => void;
+type CoachLaunchListener = (dayId: string | null, dayTitle: string | null) => void;
 
 const listeners = new Set<Listener>();
+const coachLaunchListeners = new Set<CoachLaunchListener>();
 let workoutUpdateRevision = 0;
 
 export function onWorkoutUpdated(listener: Listener): () => void {
@@ -33,4 +35,13 @@ export function emitWorkoutUpdated(
 
 export function getWorkoutUpdateRevision(): number {
   return workoutUpdateRevision;
+}
+
+export function onCoachLaunchRequested(listener: CoachLaunchListener): () => void {
+  coachLaunchListeners.add(listener);
+  return () => coachLaunchListeners.delete(listener);
+}
+
+export function requestCoachLaunch(dayId: string | null, dayTitle: string | null): void {
+  coachLaunchListeners.forEach((listener) => listener(dayId, dayTitle));
 }

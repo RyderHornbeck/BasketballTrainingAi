@@ -95,7 +95,7 @@ struct ShotTrackerStateMachine {
   private let postShotMaxLockoutMs = 2_500.0
   private let bounceOverrideSeconds = 0.4
   private let bounceGrowthWindowSeconds = 0.5
-  private let bounceGrowthRatio = 1.15
+  private let bounceGrowthRatio = 1.25
   private let rimStableFramesRequired = 5
   private let rimSmoothing = 0.3
   private let rimWidthScale = 1.3
@@ -120,7 +120,7 @@ struct ShotTrackerStateMachine {
   private var lastObservedBall: STObservedPoint?
   private var lastAboveRimBall: STObservedPoint?
   private var trajectory: [STPoint] = []
-  private var displayTrajectory: [STPoint] = []
+  private var displayTrajectory: [STObservedPoint] = []
   private var lastDisplayBall: STObservedPoint?
   private var resetReady = true
   private var resetClearSince = 0.0
@@ -276,7 +276,6 @@ struct ShotTrackerStateMachine {
       lastAboveRimBall = nil
       lastObservedBall = measurement
       trajectory = [STPoint(x: measurement.x, y: measurement.y)]
-      displayTrajectory = trajectory
       reason = "Ignored an implausible ball-position jump and restarted the trajectory."
       return (snapshot(timestamp, ball, detectedRim), nil)
     }
@@ -356,8 +355,13 @@ struct ShotTrackerStateMachine {
       : measurement.x
     let crossesOpening = crossingX >= innerLeft && crossingX <= innerRight
     let crossingNearRim = crossingX >= rim.x - rim.width && crossingX <= rim.x + rim.width * 2
+    // A nearby ball can look vertically above the hoop in normalized camera
+    // coordinates. Do not let its oversized detector box arm a shot attempt.
+    let ballArea = ball.rect.width * ball.rect.height
+    let rimArea = rim.width * rim.height
+    let eligibleAttemptBall = ballArea < rimArea * 2
 
-    if attemptStartedAt == 0 && upwardStreak >= 1 &&
+    if attemptStartedAt == 0 && eligibleAttemptBall && upwardStreak >= 1 &&
         measurement.y <= rim.y && Swift.abs(measurement.x - rimCenterX) < rim.width * 3 {
       armAttempt(timestamp, .aboveRim, "Confirmed upward trajectory reached above the rim; waiting for make confirmation.")
     }
@@ -367,7 +371,7 @@ struct ShotTrackerStateMachine {
       measurement.y <= rim.y + rim.height * 2 &&
       Swift.abs(measurement.x - rimCenterX) < rim.width * 3
     } ?? false
-    if attemptStartedAt == 0 && enteredFromAboveWhileDescending {
+    if attemptStartedAt == 0 && eligibleAttemptBall && enteredFromAboveWhileDescending {
       armAttempt(timestamp, .rimInteraction, "Ball entered from above the camera view on a downward path toward the rim.")
     }
 
@@ -377,82 +381,44 @@ struct ShotTrackerStateMachine {
 
     let currentPoint = STPoint(x: measurement.x, y: measurement.y)
 
-    if let observedPrevious, attemptStartedAt != 0 {
-      let priorPoint = STPoint(x: observedPrevious.x, y: observedPrevious.y)
-      if updateBounceMissSequence(
-        from: priorPoint,
-        to: currentPoint,
-        ball: ball,
-        rim: rim,
-        timestamp: timestamp
-      ) {
-        return resolve(
-          .miss,
-          "Ball reversed direction after descending above the rim and rapidly grew toward the camera.",
-          timestamp,
-          wallTimeMs,
-          trackedBall,
-          detectedRim
-        )
-      }
-    }
-
-    let scoringRim = detectedRim?.rect ?? rim
-    let scoringOpeningLeft = scoringRim.x + scoringRim.width * 0.1
-    let scoringOpeningRight = scoringRim.x + scoringRim.width * 0.9
-    let enteredRimOpening = trajectoryPrevious.map {
-      Self.downwardSegmentCrossesRimPlane($0, currentPoint, scoringRim.y, scoringRim)
-    } ?? false
-    let exitedRimOpening = trajectoryPrevious.map {
-      Self.downwardSegmentCrossesRimPlane(
-        $0,
-        currentPoint,
-        scoringRim.y + scoringRim.height,
-        scoringRim
+    // A basket is a descending trajectory segment through the centered inner
+    // 3/5 width and two-thirds height of the stabilized rim box. It may enter and leave any side,
+    // so slanted and corner-to-corner makes count just like vertical swishes.
+    let scoringRim = Self.innerRimBox(rim)
+    // Net/rim occlusion can hide the ball between an above-rim detection and
+    // its reappearance below. Bridge that gap with the last real above-rim
+    // center, rather than requiring adjacent inference frames. The direction,
+    // time, and lateral-distance guards prevent an unrelated later ball from
+    // being joined to the earlier shot.
+    if attemptStartedAt != 0,
+       let aboveRimPoint = lastAboveRimBall,
+       timestamp - aboveRimPoint.timestamp <= 1.5,
+       measurement.y > scoringRim.y + scoringRim.height,
+       Swift.abs(measurement.x - aboveRimPoint.x) <= max(rim.width * 3, 0.18),
+       Self.downwardSegmentIntersectsRect(
+         STPoint(x: aboveRimPoint.x, y: aboveRimPoint.y),
+         currentPoint,
+         scoringRim
+       ) {
+      return resolve(
+        .make,
+        "Ball reappeared below the rim on a descending path through the inner rim box.",
+        timestamp,
+        wallTimeMs,
+        trackedBall,
+        detectedRim
       )
-    } ?? false
-    if enteredRimOpening {
-      crossedRim = true
-      state = .rimInteraction
-      reason = "Ball entered the detected rim opening."
     }
-    if crossedRim && exitedRimOpening && pendingMake == nil {
-      pendingMake = STPendingMake(timestamp: timestamp)
-      reason = "Ball entered and exited the detected rim opening; checking briefly for a bounce reversal."
-    }
-    if crossedRim && pendingMake == nil {
-      let insideVerticalRim =
-        measurement.y >= scoringRim.y &&
-        measurement.y <= scoringRim.y + scoringRim.height
-      let insideHorizontalOpening =
-        measurement.x >= scoringOpeningLeft &&
-        measurement.x <= scoringOpeningRight
-      let passedBelowWithoutBottomExit =
-        measurement.y > scoringRim.y + scoringRim.height && !exitedRimOpening
-      if (insideVerticalRim && !insideHorizontalOpening) ||
-          passedBelowWithoutBottomExit {
-        crossedRim = false
-        reason = "Ball left the rim opening before completing a top-to-bottom crossing."
-      }
-    }
-    if pendingMake == nil,
+    if attemptStartedAt != 0,
        let trajectoryPrevious,
-       Self.downwardSegmentPassesThroughRim(
+       Self.downwardSegmentIntersectsRect(
          trajectoryPrevious,
          currentPoint,
          scoringRim
        ) {
-      crossedRim = true
-      pendingMake = STPendingMake(timestamp: timestamp)
-      reason = "Visible ball trajectory passed through the detected rim opening; checking briefly for a bounce reversal."
-    }
-
-    if let pendingMake,
-       timestamp - pendingMake.timestamp >= bounceOverrideSeconds,
-       sizeGrowthCandidate == nil {
       return resolve(
         .make,
-        "Ball entered and exited the detected rim opening on a downward trajectory.",
+        "Descending ball trajectory crossed the inner rim box.",
         timestamp,
         wallTimeMs,
         trackedBall,
@@ -474,12 +440,10 @@ struct ShotTrackerStateMachine {
       state = .rimInteraction
     }
     let clearlyMissedRim =
-      attemptStartedAt != 0 && !crossedRim && pendingMake == nil &&
-      measurement.y > rim.y + rim.height &&
-      (measurement.x < rim.x - rim.width * 0.2 ||
-       measurement.x > rim.x + rim.width * 1.2)
+      attemptStartedAt != 0 &&
+      measurement.y > rim.y + rim.height
     if clearlyMissedRim {
-      return resolve(.miss, "Shot bounced away from the rim opening and continued below the hoop.", timestamp, wallTimeMs, trackedBall, detectedRim)
+      return resolve(.miss, "Ball passed below the rim without crossing the inner rim box.", timestamp, wallTimeMs, trackedBall, detectedRim)
     }
     if attemptStartedAt != 0 && timestamp - attemptStartedAt > attemptTimeoutSeconds {
       return resolve(.miss, "Shot left the rim interaction window without a downward rim crossing.", timestamp, wallTimeMs, trackedBall, detectedRim)
@@ -512,13 +476,14 @@ struct ShotTrackerStateMachine {
   }
 
   private mutating func updateDisplayTrajectory(ball: STDetection?, timestamp: Double) {
+    // This is visual history only. Do not reset it on detector gaps, shot
+    // resolution, or tracker re-acquisition: every visible ball box should
+    // connect to the prior one until it naturally fades after 2.5 seconds.
+    displayTrajectory.removeAll { timestamp - $0.timestamp > 2.5 }
     guard let ball else { return }
     let point = STObservedPoint(x: ball.rect.center.x, y: ball.rect.center.y, timestamp: timestamp)
-    if lastDisplayBall.map({ timestamp - $0.timestamp > 1 }) ?? true {
-      displayTrajectory = []
-    }
-    displayTrajectory.append(STPoint(x: point.x, y: point.y))
-    displayTrajectory = Array(displayTrajectory.suffix(20))
+    displayTrajectory.append(point)
+    displayTrajectory = Array(displayTrajectory.suffix(120))
     lastDisplayBall = point
   }
 
@@ -749,7 +714,7 @@ struct ShotTrackerStateMachine {
       activeRim: activeRim,
       autoRim: autoRim != nil,
       stableRimFrames: stableRimFrames,
-      trajectory: displayTrajectory
+      trajectory: displayTrajectory.map { STPoint(x: $0.x, y: $0.y) }
     )
   }
 
@@ -761,6 +726,51 @@ struct ShotTrackerStateMachine {
       width: previous.width + (next.width - previous.width) * rimSmoothing,
       height: previous.height + (next.height - previous.height) * rimSmoothing
     )
+  }
+
+  static func innerRimBox(_ rim: STRect) -> STRect {
+    let width = rim.width * (3.0 / 5.0)
+    let height = rim.height * (2.0 / 3.0)
+    return STRect(
+      x: rim.center.x - width / 2,
+      y: rim.center.y - height / 2,
+      width: width,
+      height: height
+    )
+  }
+
+  /// True when a strictly descending trajectory segment touches any part of
+  /// the inner rim box. This intentionally permits top-to-side, side-to-side,
+  /// and corner-to-corner swishes.
+  static func downwardSegmentIntersectsRect(
+    _ start: STPoint,
+    _ end: STPoint,
+    _ rect: STRect
+  ) -> Bool {
+    guard end.y > start.y else { return false }
+    let dx = end.x - start.x
+    let dy = end.y - start.y
+    var entry = 0.0
+    var exit = 1.0
+
+    func clip(_ p: Double, _ q: Double) -> Bool {
+      if Swift.abs(p) < 0.000_001 { return q >= 0 }
+      let ratio = q / p
+      if p < 0 {
+        if ratio > exit { return false }
+        entry = max(entry, ratio)
+      } else {
+        if ratio < entry { return false }
+        exit = min(exit, ratio)
+      }
+      return true
+    }
+
+    return clip(-dx, start.x - rect.x) &&
+      clip(dx, rect.x + rect.width - start.x) &&
+      clip(-dy, start.y - rect.y) &&
+      clip(dy, rect.y + rect.height - start.y) &&
+      entry <= exit
   }
 
   static func downwardSegmentPassesThroughRim(

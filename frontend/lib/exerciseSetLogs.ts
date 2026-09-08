@@ -39,15 +39,19 @@ export function parseSetCount(sets: string | null | undefined): number {
 
 function parseMinutesFromText(value: string | null | undefined): number | null {
   if (!value) return null;
-  const match = value.match(/(\d+)\s*min/i);
-  return match ? parseInt(match[1], 10) : null;
+  const minuteMatch = value.match(/(\d+(?:\.\d+)?)\s*min/i);
+  if (minuteMatch) return Number.parseFloat(minuteMatch[1]);
+  const secondMatch = value.match(/(\d+(?:\.\d+)?)\s*(?:sec|second)/i);
+  return secondMatch ? Number.parseFloat(secondMatch[1]) / 60 : null;
 }
 
 export function buildSetPlan(exercise: WorkoutExerciseWithClip): ExerciseSetPlan {
   const setCount = parseSetCount(exercise.sets);
   const logType = (exercise.log_type ?? "checkbox") as LogType;
-  const perSetMakes = exercise.target_makes ?? null;
-  const perSetAttempts = exercise.target_attempts ?? perSetMakes;
+  // Target makes is retained only as generator metadata. Runtime workout
+  // behavior is driven exclusively by the prescribed attempt count.
+  const perSetMakes = null;
+  const perSetAttempts = exercise.target_attempts ?? null;
   const perSetMinutes =
     parseMinutesFromText(exercise.duration) ?? parseMinutesFromText(exercise.reps);
   const setSideLabels = exercise.set_side_labels ?? null;
@@ -59,7 +63,13 @@ export function buildSetPlan(exercise: WorkoutExerciseWithClip): ExerciseSetPlan
       setCount === 1 ? `1 set · ${shotLabel}` : `${setCount} sets · ${shotLabel} each`;
     if (setSideLabels?.length) prescriptionLabel += " · alternate sides";
   } else if (logType === "minutes" && perSetMinutes != null) {
-    const minLabel = perSetMinutes === 1 ? "1 minute" : `${perSetMinutes} minutes`;
+    const seconds = Math.round(perSetMinutes * 60);
+    const minLabel =
+      seconds < 60
+        ? `${seconds} seconds`
+        : perSetMinutes === 1
+          ? "1 minute"
+          : `${perSetMinutes} minutes`;
     prescriptionLabel =
       setCount === 1 ? `1 set · ${minLabel}` : `${setCount} sets · ${minLabel} each`;
   } else if (setCount > 1) {

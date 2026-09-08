@@ -14,7 +14,6 @@ export interface LocalShotSessionContext {
   setNumber: number;
   makes: number;
   attempts: number;
-  targetMakes: number | null;
   targetAttempts: number | null;
   remainingAttempts: number | null;
   lastLocalUserTranscript: string | null;
@@ -70,7 +69,6 @@ export async function streamCoachTurn(input: {
           set_number: input.localShotSessionContext.setNumber,
           makes: input.localShotSessionContext.makes,
           attempts: input.localShotSessionContext.attempts,
-          target_makes: input.localShotSessionContext.targetMakes,
           target_attempts: input.localShotSessionContext.targetAttempts,
           remaining_attempts: input.localShotSessionContext.remainingAttempts,
           last_local_user_transcript:

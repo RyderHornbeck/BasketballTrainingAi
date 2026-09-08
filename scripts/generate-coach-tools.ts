@@ -116,8 +116,8 @@ export function validateCoachToolArguments(
       }
     }
   }
-  const makes = value.makes ?? value.target_makes;
-  const attempts = value.attempts ?? value.target_attempts;
+  const makes = value.makes;
+  const attempts = value.attempts;
   if (
     typeof makes === "number"
     && typeof attempts === "number"

@@ -12,7 +12,6 @@ import {
   resolveMinutesOverride,
   SetLogEntry,
   targetAttemptsForSet,
-  targetMakesForSet,
 } from "@/lib/exerciseSetLogs";
 import { ExerciseLogInput } from "@/lib/plan";
 import { reportNetworkFailure } from "@/lib/connectivity";
@@ -24,15 +23,15 @@ import { WorkoutExerciseWithClip } from "@/types/plan";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { CaretLeftIcon, CaretRightIcon, CheckIcon, TimerIcon, XIcon } from "phosphor-react-native";
+import ContextMenu, { type ContextMenuAction } from "react-native-context-menu-view";
 import { useRouter } from "expo-router";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Animated,
   Linking,
   Pressable,
   StyleSheet,
-  TextInput as RNTextInput,
   View,
 } from "react-native";
 import { WebView } from "react-native-webview";
@@ -49,6 +48,10 @@ interface ExerciseCardProps {
   onDelete?: () => void;
   onAddSet?: () => void;
   onRemoveSet?: (setNumber: number) => void;
+  onOpen?: () => void;
+  headerAction?: ReactNode;
+  compact?: boolean;
+  pageMode?: boolean;
   onLogChange: (log: ExerciseLogInput) => void;
 }
 
@@ -136,9 +139,7 @@ function SetShootingRow({
   makes,
   attempts,
   targetAttempts,
-  targetMakes,
   targetAttemptsDraft,
-  targetMakesDraft,
   editMode,
   completed,
   makesDraft,
@@ -147,7 +148,6 @@ function SetShootingRow({
   onAttemptsChange,
   onResultsBlur,
   onTargetAttemptsChange,
-  onTargetMakesChange,
   onTargetBlur,
   onCommit,
   onRemove,
@@ -159,24 +159,59 @@ function SetShootingRow({
   makes: string;
   attempts: string;
   targetAttempts: number | null;
-  targetMakes: number | null;
   targetAttemptsDraft?: string | null;
-  targetMakesDraft?: string | null;
   editMode: boolean;
   completed: boolean;
   makesDraft?: string | null;
   attemptsDraft?: string | null;
   onMakesChange: (value: string) => void;
   onAttemptsChange: (value: string) => void;
-  onResultsBlur: () => void;
+  onResultsBlur: (selection?: { makes?: string; attempts?: string }) => void;
   onTargetAttemptsChange: (value: string) => void;
-  onTargetMakesChange: (value: string) => void;
-  onTargetBlur: () => void;
+  onTargetBlur: (selection?: string) => void;
   onCommit: () => void;
   onRemove?: () => void;
   readOnly?: boolean;
   colors: ReturnType<typeof useTheme>["colors"];
 }) {
+  const numberActions: ContextMenuAction[] = Array.from({ length: 101 }, (_, value) => ({
+    title: String(value),
+  }));
+  const picker = (
+    value: string,
+    label: string,
+    onChange: (value: string) => void,
+    onCommit: (value: string) => void,
+    disabled = false,
+    compact = false,
+    fontSize = 19,
+  ) => (
+    <ContextMenu
+      title={`Choose ${label}`}
+      actions={numberActions}
+      dropdownMenuMode
+      disabled={disabled}
+      style={styles.numberPickerMenu}
+      onPress={(event) => {
+        const selectedValue = event.nativeEvent.name;
+        onChange(selectedValue);
+        onCommit(selectedValue);
+      }}
+    >
+      <View
+        style={[
+          styles.shootingInput,
+          compact && styles.targetInput,
+          styles.numberPicker,
+          { backgroundColor: colors.card, borderColor: colors.border, opacity: disabled ? 0.55 : 1 },
+        ]}
+      >
+        <Text style={[styles.numberPickerText, { color: value ? colors.text : colors.textMuted, fontSize }]}>
+          {value || "0"}
+        </Text>
+      </View>
+    </ContextMenu>
+  );
   return (
     <View
       style={[
@@ -197,31 +232,23 @@ function SetShootingRow({
         </View>
         {editMode ? (
           <View style={styles.targetEditor}>
-            <RNTextInput
-              value={targetMakesDraft ?? String(targetMakes ?? 0)}
-              onChangeText={onTargetMakesChange}
-              onBlur={onTargetBlur}
-              keyboardType="number-pad"
-              inputMode="numeric"
-              style={[styles.targetInput, { backgroundColor: colors.card, color: colors.text, borderColor: colors.border }]}
-            />
-            <Text style={[styles.targetSlash, { color: colors.textMuted }]}>/</Text>
-            <RNTextInput
-              value={targetAttemptsDraft ?? String(targetAttempts ?? 0)}
-              onChangeText={onTargetAttemptsChange}
-              onBlur={onTargetBlur}
-              keyboardType="number-pad"
-              inputMode="numeric"
-              style={[styles.targetInput, { backgroundColor: colors.card, color: colors.text, borderColor: colors.border }]}
-            />
+            <Text style={[styles.shotsPerSetLabel, { color: colors.textSecondary }]}>Shots per set:</Text>
+            {picker(
+              targetAttemptsDraft ?? String(targetAttempts ?? 0),
+              "target attempts",
+              onTargetAttemptsChange,
+              onTargetBlur,
+              false,
+              true,
+              14,
+            )}
             {onRemove ? <Pressable onPress={onRemove} hitSlop={8} style={styles.removeSetButton}>
               <XIcon size={13} color="#FFFFFF" weight="bold" />
             </Pressable> : null}
           </View>
-        ) : targetMakes != null ? (
+        ) : targetAttempts != null ? (
           <Text style={[styles.setTargetHint, { color: colors.textMuted }]}>
-            Target {targetMakes}
-            {targetAttempts != null ? `/${targetAttempts}` : ""}
+            Target {targetAttempts} shots
           </Text>
         ) : null}
       </View>
@@ -241,42 +268,24 @@ function SetShootingRow({
         </Pressable>
         <View style={styles.shootingCol}>
           <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Makes</Text>
-          <RNTextInput
-            allowFontScaling={false}
-            maxFontSizeMultiplier={1}
-            value={makesDraft ?? makes}
-            onChangeText={readOnly ? undefined : onMakesChange}
-            onBlur={onResultsBlur}
-            editable={!readOnly}
-            keyboardType="number-pad"
-            inputMode="numeric"
-            placeholder="0"
-            placeholderTextColor={colors.textMuted}
-            style={[
-              styles.shootingInput,
-              { backgroundColor: colors.card, color: colors.text, borderColor: colors.border },
-            ]}
-          />
+          {picker(
+            makesDraft ?? makes,
+            "makes",
+            onMakesChange,
+            (value) => onResultsBlur({ makes: value }),
+            Boolean(readOnly),
+          )}
         </View>
         <Text style={[styles.shootingSlash, { color: colors.textMuted }]}>/</Text>
         <View style={styles.shootingCol}>
           <Text style={[styles.shootingLabel, { color: colors.textSecondary }]}>Attempts</Text>
-          <RNTextInput
-            allowFontScaling={false}
-            maxFontSizeMultiplier={1}
-            value={attemptsDraft ?? attempts}
-            onChangeText={readOnly ? undefined : onAttemptsChange}
-            onBlur={onResultsBlur}
-            editable={!readOnly}
-            keyboardType="number-pad"
-            inputMode="numeric"
-            placeholder="0"
-            placeholderTextColor={colors.textMuted}
-            style={[
-              styles.shootingInput,
-              { backgroundColor: colors.card, color: colors.text, borderColor: colors.border },
-            ]}
-          />
+          {picker(
+            attemptsDraft ?? attempts,
+            "attempts",
+            onAttemptsChange,
+            (value) => onResultsBlur({ attempts: value }),
+            Boolean(readOnly),
+          )}
         </View>
       </View>
     </View>
@@ -325,6 +334,10 @@ export function ExerciseCard({
   onDelete,
   onAddSet,
   onRemoveSet,
+  onOpen,
+  headerAction,
+  compact = false,
+  pageMode = false,
   onLogChange,
 }: ExerciseCardProps) {
   const { colors, scheme } = useTheme();
@@ -340,11 +353,12 @@ export function ExerciseCard({
     const plan = buildSetPlan(exercise);
     const category = (exercise.category ?? "").toLowerCase();
     if (!TIMED_CATEGORIES.has(category)) return plan;
+    const minimumMinutes = category === "ball_handling" ? 0.5 : 1;
     return {
       ...plan,
       logType: "minutes" as const,
       perSetMinutes: Math.max(
-        1,
+        minimumMinutes,
         Math.min(3, plan.perSetMinutes ?? (category === "ball_handling" ? 1 : 2)),
       ),
     };
@@ -360,7 +374,6 @@ export function ExerciseCard({
   const [attemptsDrafts, setAttemptsDrafts] = useState<Record<number, string>>({});
   const [makesDrafts, setMakesDrafts] = useState<Record<number, string>>({});
   const [targetAttemptsDrafts, setTargetAttemptsDrafts] = useState<Record<number, string>>({});
-  const [targetMakesDrafts, setTargetMakesDrafts] = useState<Record<number, string>>({});
   const setPlan = useMemo(
     () => applyMinutesOverride(applyAttemptsOverride(baseSetPlan, attemptsOverride), minutesOverride),
     [baseSetPlan, attemptsOverride, minutesOverride]
@@ -371,9 +384,9 @@ export function ExerciseCard({
     hydrateSetLogs(setPlan, decodeExerciseLogMeta(exercise.log?.notes ?? null), exercise.log ?? undefined)
   );
   const [difficulty, setDifficulty] = useState(exercise.log?.difficulty ?? 0);
-  const [userNotes, setUserNotes] = useState(
-    () => decodeExerciseLogMeta(exercise.log?.notes ?? null).user_notes ?? ""
-  );
+  // Preserve legacy notes when another log field is updated, but do not expose
+  // a notes editor in the workout UI.
+  const userNotes = decodeExerciseLogMeta(exercise.log?.notes ?? null).user_notes ?? "";
   const hasUserEditsRef = useRef(false);
 
   const normalizedSets = useMemo(() => normalizeSetLogs(setLogs, setPlan), [setLogs, setPlan]);
@@ -391,10 +404,8 @@ export function ExerciseCard({
     setAttemptsDrafts({});
     setMakesDrafts({});
     setTargetAttemptsDrafts({});
-    setTargetMakesDrafts({});
     setSetLogs(hydrated);
     setDifficulty(exercise.log?.difficulty ?? 0);
-    setUserNotes(meta.user_notes ?? "");
     hasUserEditsRef.current = false;
     if (previousExerciseIdRef.current !== exercise.id) {
       previousExerciseIdRef.current = exercise.id;
@@ -478,25 +489,27 @@ export function ExerciseCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setLogs, difficulty, userNotes, attemptsOverride, minutesOverride, setPlan]);
 
-  const commitShootingResults = (setNumber: number, complete: boolean) => {
+  const commitShootingResults = (
+    setNumber: number,
+    complete: boolean,
+    selection?: { makes?: string; attempts?: string },
+  ) => {
     const row = setLogs.find((set) => set.set_number === setNumber);
-    const makes = makesDrafts[setNumber] === undefined
+    const selectedMakes = selection?.makes ?? makesDrafts[setNumber];
+    const selectedAttempts = selection?.attempts ?? attemptsDrafts[setNumber];
+    const makes = selectedMakes === undefined
       ? row?.makes ?? null
-      : makesDrafts[setNumber] === ""
+      : selectedMakes === ""
       ? null
-      : Number.parseInt(makesDrafts[setNumber], 10);
-    const requestedAttempts = attemptsDrafts[setNumber] === undefined
+      : Number.parseInt(selectedMakes, 10);
+    const requestedAttempts = selectedAttempts === undefined
       ? row?.attempts ?? 0
-      : attemptsDrafts[setNumber] === ""
+      : selectedAttempts === ""
       ? 0
-      : Number.parseInt(attemptsDrafts[setNumber], 10);
+      : Number.parseInt(selectedAttempts, 10);
     const attempts = Number.isFinite(requestedAttempts)
       ? requestedAttempts
       : row?.attempts ?? 0;
-    const targetMakes = Number.parseInt(
-      targetMakesDrafts[setNumber] ?? String(targetMakesForSet(row!, setPlan) ?? 0),
-      10,
-    );
     const targetAttempts = Number.parseInt(
       targetAttemptsDrafts[setNumber] ?? String(targetAttemptsForSet(row!, setPlan) ?? 0),
       10,
@@ -516,27 +529,17 @@ export function ExerciseCard({
       return false;
     }
     if (!Number.isFinite(makes ?? 0) || attempts < 0) return false;
-    if (!Number.isFinite(targetMakes) || !Number.isFinite(targetAttempts) || targetMakes < 0 ||
-      targetAttempts < 1 || targetMakes > targetAttempts) {
-      Alert.alert("Invalid set target", "Targets must be valid and cannot be below this set's results.");
+    if (!Number.isFinite(targetAttempts) || targetAttempts < 1) {
+      Alert.alert("Invalid set target", "The target must be at least one shot.");
       return false;
     }
     const expandedTargetAttempts = Math.max(targetAttempts, attempts);
-    const expandedTargetMakes = attempts > targetAttempts
-      ? Math.min(
-          expandedTargetAttempts,
-          Math.round((targetMakes / targetAttempts) * expandedTargetAttempts),
-        )
-      : targetMakes;
     hasUserEditsRef.current = true;
     setSetLogs((previous) =>
       previous.map((set) => ({
         ...set,
         makes: set.set_number === setNumber ? makes : set.makes,
         attempts: set.set_number === setNumber ? attempts : set.attempts,
-        target_makes_override: set.set_number === setNumber
-          ? expandedTargetMakes
-          : set.target_makes_override,
         target_attempts_override: set.set_number === setNumber
           ? expandedTargetAttempts
           : set.target_attempts_override,
@@ -550,11 +553,6 @@ export function ExerciseCard({
       return next;
     });
     setAttemptsDrafts((drafts) => {
-      const next = { ...drafts };
-      delete next[setNumber];
-      return next;
-    });
-    setTargetMakesDrafts((drafts) => {
       const next = { ...drafts };
       delete next[setNumber];
       return next;
@@ -581,25 +579,15 @@ export function ExerciseCard({
     if (commitShootingResults(setNumber, true)) completionHaptic();
   };
 
-  const commitShootingTargets = (setNumber: number) => {
+  const commitShootingTargets = (setNumber: number, selectedTarget?: string) => {
     const row = setLogs.find((set) => set.set_number === setNumber);
     if (!row) return;
-    const targetMakes = Number.parseInt(
-      targetMakesDrafts[setNumber] ?? String(targetMakesForSet(row, setPlan) ?? 0),
-      10,
-    );
     const targetAttempts = Number.parseInt(
-      targetAttemptsDrafts[setNumber] ?? String(targetAttemptsForSet(row, setPlan) ?? 0),
+      selectedTarget ?? targetAttemptsDrafts[setNumber] ?? String(targetAttemptsForSet(row, setPlan) ?? 0),
       10,
     );
-    if (!Number.isFinite(targetMakes) || !Number.isFinite(targetAttempts) || targetMakes < 0 ||
-      targetAttempts < 1 || targetMakes > targetAttempts) {
-      Alert.alert("Invalid set target", "Target makes cannot exceed target attempts.");
-      setTargetMakesDrafts((drafts) => {
-        const next = { ...drafts };
-        delete next[setNumber];
-        return next;
-      });
+    if (!Number.isFinite(targetAttempts) || targetAttempts < 1) {
+      Alert.alert("Invalid set target", "The target must be at least one shot.");
       setTargetAttemptsDrafts((drafts) => {
         const next = { ...drafts };
         delete next[setNumber];
@@ -613,16 +601,10 @@ export function ExerciseCard({
       previous.map((set) => set.set_number === setNumber
         ? {
             ...set,
-            target_makes_override: targetMakes,
             target_attempts_override: targetAttempts,
           }
         : set)
     );
-    setTargetMakesDrafts((drafts) => {
-      const next = { ...drafts };
-      delete next[setNumber];
-      return next;
-    });
     setTargetAttemptsDrafts((drafts) => {
       const next = { ...drafts };
       delete next[setNumber];
@@ -719,6 +701,16 @@ export function ExerciseCard({
           Math.round(setPlan.perSetMinutes * 60)
         }s`
       : null;
+  const compactPrescription = useMemo(() => {
+    const count = Math.max(1, setPlan.setCount);
+    if (logType === "makes_attempts" && setPlan.perSetAttempts != null) {
+      return `${setPlan.perSetAttempts} shots × ${count}`;
+    }
+    if (logType === "minutes" && setPlan.perSetMinutes != null) {
+      return `${formatSetDuration(Math.round(setPlan.perSetMinutes * 60))} × ${count}`;
+    }
+    return `${count} ${count === 1 ? "set" : "sets"}`;
+  }, [logType, setPlan]);
 
   const gradientColors =
     scheme === "dark"
@@ -735,9 +727,7 @@ export function ExerciseCard({
           makes={row.makes ? row.makes.toString() : ""}
           attempts={row.attempts ? row.attempts.toString() : ""}
           targetAttempts={targetAttemptsForSet(row, setPlan)}
-          targetMakes={targetMakesForSet(row, setPlan)}
           targetAttemptsDraft={targetAttemptsDrafts[row.set_number]}
-          targetMakesDraft={targetMakesDrafts[row.set_number]}
           editMode={editMode}
           completed={row.completed}
           makesDraft={makesDrafts[row.set_number]}
@@ -752,24 +742,19 @@ export function ExerciseCard({
             const digits = text.replace(/[^0-9]/g, "");
             setAttemptsDrafts((drafts) => ({ ...drafts, [row.set_number]: digits }));
           }}
-          onResultsBlur={() => {
+          onResultsBlur={(selection) => {
             // Editing a completed set corrects its saved score without
             // reopening it. The orange check is the only completion toggle.
-            void commitShootingResults(row.set_number, row.completed);
+            void commitShootingResults(row.set_number, row.completed, selection);
           }}
-          onTargetMakesChange={(text) =>
-            setTargetMakesDrafts((drafts) => ({
-              ...drafts,
-              [row.set_number]: text.replace(/[^0-9]/g, ""),
-            }))}
           onTargetAttemptsChange={(text) =>
             setTargetAttemptsDrafts((drafts) => ({
               ...drafts,
               [row.set_number]: text.replace(/[^0-9]/g, ""),
             }))}
-          onTargetBlur={() => commitShootingTargets(row.set_number)}
+          onTargetBlur={(selection) => commitShootingTargets(row.set_number, selection)}
           onCommit={() => saveShootingSet(row.set_number)}
-          onRemove={editMode ? () => onRemoveSet?.(row.set_number) : undefined}
+          onRemove={editMode && onRemoveSet ? () => onRemoveSet(row.set_number) : undefined}
         />
       ));
     }
@@ -797,7 +782,7 @@ export function ExerciseCard({
             colors={colors}
             onToggle={() => toggleSetComplete(row.set_number)}
             editMode={editMode}
-            onRemove={editMode ? () => onRemoveSet?.(row.set_number) : undefined}
+            onRemove={editMode && onRemoveSet ? () => onRemoveSet(row.set_number) : undefined}
           />
         );
       });
@@ -809,11 +794,16 @@ export function ExerciseCard({
   const cardInner = (
     <>
       <View style={styles.headerRow}>
-        <Pressable onPress={toggleExpand} style={styles.headerPressable}>
+        <Pressable onPress={onOpen ?? toggleExpand} style={styles.headerPressable}>
           <View style={styles.headerText}>
-            <Text style={[styles.name, { color: colors.text }]}>{exercise.name}</Text>
+            <Text style={[compact ? styles.compactName : styles.name, { color: colors.text }]}>{exercise.name}</Text>
+            {compact ? (
+              <Text style={[styles.compactPrescription, { color: colors.textMuted }]}>
+                {compactPrescription}
+              </Text>
+            ) : null}
             {exercise.category ? (
-              <Text style={[styles.category, { color: colors.accent }]}>
+              <Text style={[compact ? styles.compactCategory : styles.category, { color: colors.accent }]}>
                 {CATEGORY_LABELS[exercise.category] ?? exercise.category}
               </Text>
             ) : null}
@@ -821,7 +811,7 @@ export function ExerciseCard({
         </Pressable>
 
         <View style={styles.headerActions}>
-          <Pressable
+          {headerAction ?? <Pressable
             onPress={editMode ? onDelete : toggleExpand}
             hitSlop={8}
             style={({ pressed }) => ({ opacity: pressed ? 0.65 : 1 })}
@@ -850,7 +840,7 @@ export function ExerciseCard({
                 <CheckIcon size={16} color="#FFFFFF" weight="bold" />
               ) : null}
             </Animated.View>
-          </Pressable>
+          </Pressable>}
         </View>
       </View>
 
@@ -859,6 +849,7 @@ export function ExerciseCard({
           style={[
             styles.expandedContent,
             !showVideo && styles.expandedContentNoVideo,
+            pageMode && styles.pageExpandedContent,
           ]}
         >
           {showVideo ? (
@@ -933,6 +924,7 @@ export function ExerciseCard({
                 styles.loggingSection,
                 { borderTopColor: colors.border },
                 !showVideo && styles.loggingSectionNoVideo,
+                pageMode && styles.pageLoggingSection,
               ]}
             >
               {hasDrillTimer ? (
@@ -1004,25 +996,6 @@ export function ExerciseCard({
                 </View>
               )}
 
-              <View style={styles.notesWrapper}>
-                <Text style={[styles.smallLabel, { color: colors.textSecondary }]}>Notes (optional)</Text>
-                <RNTextInput
-                  allowFontScaling={false}
-                  maxFontSizeMultiplier={1}
-                  value={userNotes}
-                  onChangeText={(text) => {
-                    hasUserEditsRef.current = true;
-                    setUserNotes(text);
-                  }}
-                  placeholder="How did it feel?"
-                  placeholderTextColor={colors.textMuted}
-                  multiline
-                  style={[
-                    styles.notesInput,
-                    { backgroundColor: colors.cardAlt, color: colors.text, borderColor: colors.border },
-                  ]}
-                />
-              </View>
             </View>
           )}
         </View>
@@ -1031,6 +1004,7 @@ export function ExerciseCard({
   );
 
   if (completed) {
+    if (pageMode) return <View style={styles.pageContent}>{cardInner}</View>;
     return (
       <View style={[styles.card, styles.cardWrapper, styles.cardShadow]}>
         <LinearGradient
@@ -1045,6 +1019,7 @@ export function ExerciseCard({
     );
   }
 
+  if (pageMode) return <View style={styles.pageContent}>{cardInner}</View>;
   return (
     <Card style={styles.card} elevated={expanded}>
       {cardInner}
@@ -1056,6 +1031,7 @@ const styles = StyleSheet.create({
   card: {
     marginBottom: 12,
   },
+  pageContent: { flex: 1 },
   cardWrapper: {
     borderRadius: 24,
     overflow: "hidden",
@@ -1101,12 +1077,28 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: "700",
   },
+  compactName: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  compactPrescription: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: "600",
+  },
   category: {
     fontSize: 12,
     fontWeight: "700",
     marginTop: 3,
     textTransform: "uppercase",
     letterSpacing: 0.4,
+  },
+  compactCategory: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
   },
   instructions: {
     fontSize: 14,
@@ -1146,12 +1138,21 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingTop: 8,
   },
+  pageExpandedContent: {
+    marginTop: 20,
+    paddingTop: 0,
+    borderTopWidth: 0,
+  },
   videoSection: {
     marginBottom: 12,
   },
   loggingSectionNoVideo: {
     marginTop: 0,
     paddingTop: 10,
+  },
+  pageLoggingSection: {
+    borderTopWidth: 0,
+    marginTop: 18,
   },
   prescriptionPill: {
     alignSelf: "flex-start",
@@ -1311,11 +1312,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: 8,
+    minHeight: 34,
+    position: "relative",
   },
   setTitleGroup: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    flex: 1,
   },
   sideLabel: {
     fontSize: 12,
@@ -1338,10 +1342,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 3,
+    flexShrink: 0,
+    position: "absolute",
+    top: 0,
+    right: 0,
+  },
+  shotsPerSetLabel: {
+    fontSize: 10,
+    fontWeight: "600",
   },
   targetInput: {
-    width: 36,
-    height: 30,
+    width: 48,
+    height: 34,
     borderWidth: 1,
     borderRadius: 6,
     fontSize: 12,
@@ -1351,7 +1363,7 @@ const styles = StyleSheet.create({
   },
   shootingInputs: {
     flexDirection: "row",
-    alignItems: "flex-end",
+    alignItems: "flex-start",
     gap: 12,
   },
   shootingCheckbox: {
@@ -1373,14 +1385,25 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   shootingInput: {
+    height: 46,
     borderWidth: 1.5,
     borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 0,
     fontSize: 19,
     fontFamily: "Poppins_700Bold",
     textAlign: "center",
     width: "100%",
+  },
+  numberPicker: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  numberPickerMenu: { width: "100%" },
+  numberPickerText: {
+    fontSize: 19,
+    fontFamily: "Poppins_700Bold",
+    textAlign: "center",
   },
   shootingSlash: {
     fontSize: 28,
@@ -1427,18 +1450,5 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     borderRadius: 14,
     borderWidth: 1,
-  },
-  notesWrapper: {
-    marginTop: 14,
-  },
-  notesInput: {
-    borderWidth: 1.5,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    fontFamily: "Poppins_400Regular",
-    minHeight: 44,
-    textAlignVertical: "top",
   },
 });
