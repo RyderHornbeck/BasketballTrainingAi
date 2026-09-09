@@ -13,11 +13,19 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import * as ScreenOrientation from "expo-screen-orientation";
-import * as Updates from "expo-updates";
 import { router } from "expo-router";
+import {
+  BatteryHighIcon,
+  CameraIcon,
+  HeadphonesIcon,
+  MicrophoneIcon,
+  SpeakerHighIcon,
+  TimerIcon,
+} from "phosphor-react-native";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Animated,
+  Image,
   Modal,
   Platform,
   Pressable,
@@ -43,68 +51,254 @@ function formatTimer(totalSeconds: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-function CoachIntroScreen({
+export function CoachIntroScreen({
   mode,
-  dark,
+  dark = false,
   athleteName,
   backgroundColor = "#05070A",
   onContinue,
   onDontShowAgain,
+  onBack,
+  onSelectMode,
 }: {
   mode: "voice" | "video";
-  dark: boolean;
+  dark?: boolean;
   athleteName: string;
   backgroundColor?: string;
-  onContinue: () => void;
-  onDontShowAgain: () => void;
+  onContinue?: () => void;
+  onDontShowAgain?: () => void;
+  onBack?: () => void;
+  onSelectMode?: (mode: "voice" | "video") => void;
 }) {
-  const copy = mode === "video"
-    ? [
-        "Place your phone on either wing behind the 3-point line with the ball and hoop visible. For best tracking, use a well-lit court and an orange/brown ball.",
-        "Wait for Court Coach to connect and start speaking through your headphones. Your coach will guide the workout.",
-        "Use your voice to control timers for ball-handling and other timed exercises. The camera tracks shooting and finishing; use your voice to correct Coach if needed.",
-      ]
-    : [
-        `Hey ${athleteName}! Wait for Court Coach to connect and start speaking through your headphones. Your coach will guide the workout.`,
-        "Say “make” or “miss” after shooting and finishing attempts. Voice-activated timers run ball-handling, conditioning, and defense.",
-        "Court Coach can make mistakes—use your voice to correct Coach if needed.",
-      ];
-  const foreground = dark ? "#FFFFFF" : "#0F1720";
+  const [setupImageIndex, setSetupImageIndex] = useState(0);
+  const setupImages = [
+    require("@/assets/images/leftWingCourt.jpg"),
+    require("@/assets/images/rightWingCourt.png"),
+    require("@/assets/images/topOfTheKeyCourt.png"),
+  ];
+  useEffect(() => {
+    if (mode !== "video") return;
+    const rotation = setInterval(() => {
+      setSetupImageIndex((index) => (index + 1) % setupImages.length);
+    }, 4_000);
+    return () => clearInterval(rotation);
+  }, [mode, setupImages.length]);
 
-  return (
-    <View style={[styles.introScreen, { backgroundColor }]}>
-      <View
-        style={[
-          styles.introGlass,
-          mode === "video" && styles.introGlassVideo,
-          { backgroundColor: dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.06)" },
-        ]}
-      >
-        <View style={[styles.introCopy, mode === "video" && styles.introCopyVideo]}>
-          {copy.map((line) => (
-            <Text
-              key={line}
+  if (mode === "video") {
+    const details = [
+      {
+        icon: CameraIcon,
+        color: "#F58220",
+        text: "Set your phone on either wing or just behind the top of the key, with the ball and hoop visible. Use an orange/brown ball and bright, even lighting with direct light out of the camera.",
+      },
+      {
+        icon: BatteryHighIcon,
+        color: "#39D98A",
+        text: "Turn off Low Power Mode for best tracking.",
+      },
+      {
+        icon: HeadphonesIcon,
+        color: "#8B5CF6",
+        text: "Wait for Coach to connect through your headphones and start speaking. Coach guides the workout.",
+      },
+      {
+        icon: TimerIcon,
+        color: "#2F80ED",
+        text: "Use voice for ball-handling and timed-drill timers. The camera tracks shooting and finishing; correct Coach by voice if needed.",
+      },
+      {
+        icon: MicrophoneIcon,
+        color: "#E7564D",
+        text: "Ask Coach anything with your voice.",
+      },
+    ];
+    return (
+      <View style={styles.videoIntroScreen}>
+        {onBack ? (
+          <Pressable
+            accessibilityLabel="Back"
+            onPress={onBack}
+            hitSlop={10}
+            style={styles.introBackButton}
+          >
+            <Ionicons name="chevron-back" size={22} color="#201A13" />
+          </Pressable>
+        ) : null}
+        <Text style={styles.videoIntroTitle}>Before You Start</Text>
+        <View style={styles.setupCarousel}>
+          <Image
+            source={setupImages[setupImageIndex]}
+            style={styles.setupImage}
+            resizeMode="contain"
+          />
+        </View>
+        <View style={styles.setupDots} accessibilityLabel="Example court setup">
+          {setupImages.map((_, index) => (
+            <View
+              key={index}
               style={[
-                styles.introText,
-                mode === "video" && styles.introTextVideo,
-                { color: foreground, fontSize: mode === "video" ? 17 : 18 },
+                styles.setupDot,
+                index === setupImageIndex && styles.setupDotActive,
               ]}
-            >
-              {line}
-            </Text>
+            />
           ))}
         </View>
-        <View style={[styles.introActions, mode === "video" && styles.introActionsVideo]}>
-          <Pressable onPress={onContinue} style={styles.introContinue}>
-            <Text style={styles.introContinueText}>Continue</Text>
-          </Pressable>
-          <Pressable onPress={onDontShowAgain} hitSlop={10} style={styles.introDontShow}>
-            <Text style={[styles.introDontShowText, { color: foreground }]}>
-              Don’t show this again
-            </Text>
-          </Pressable>
+        <Text style={styles.setupCaption}>Example setup</Text>
+        <View style={styles.videoIntroDetails}>
+          {details.map(({ icon: Icon, color, text }) => (
+            <View key={text} style={styles.videoIntroDetail}>
+              <View style={[styles.videoIntroIcon, { backgroundColor: color }]}>
+                <Icon size={18} color="#FFFFFF" weight="fill" />
+              </View>
+              <Text style={styles.videoIntroDetailText}>{text}</Text>
+            </View>
+          ))}
+        </View>
+        <View style={styles.videoIntroActions}>
+          {onSelectMode ? (
+            <CoachSetupModeTabs mode={mode} onSelectMode={onSelectMode} />
+          ) : (
+            <>
+              <Pressable onPress={onContinue} style={styles.introContinue}>
+                <Text style={styles.introContinueText}>Continue</Text>
+              </Pressable>
+              <Pressable onPress={onDontShowAgain} hitSlop={10} style={styles.introDontShow}>
+                <Text style={[styles.introDontShowText, styles.videoIntroDontShowText]}>
+                  Don’t show this again
+                </Text>
+              </Pressable>
+            </>
+          )}
         </View>
       </View>
+    );
+  }
+
+  const foreground = dark ? "#FFFFFF" : "#201A13";
+  const voiceDetails = [
+    {
+      icon: HeadphonesIcon,
+      color: "#8B5CF6",
+      text: `Hey ${athleteName}! Wait for Coach to connect and start speaking through your headphones.`,
+    },
+    {
+      icon: MicrophoneIcon,
+      color: "#E7564D",
+      text: "Say “make” or “miss” after every shooting and finishing attempt.",
+    },
+    {
+      icon: TimerIcon,
+      color: "#2F80ED",
+      text: "Use voice to run timers for ball-handling, conditioning, and defense.",
+    },
+    {
+      icon: SpeakerHighIcon,
+      color: "#39D98A",
+      text: "Ask questions or correct Coach any time with your voice.",
+    },
+  ];
+  return (
+    <View
+      style={[
+        styles.voiceIntroScreen,
+        { backgroundColor: dark ? "#05070A" : backgroundColor },
+      ]}
+    >
+      {onBack ? (
+        <Pressable
+          accessibilityLabel="Back"
+          onPress={onBack}
+          hitSlop={10}
+          style={[styles.introBackButton, styles.voiceIntroBackButton]}
+        >
+          <Ionicons name="chevron-back" size={22} color={foreground} />
+        </Pressable>
+      ) : null}
+      <Text style={[styles.voiceIntroTitle, { color: foreground }]}>
+        Before You Start
+      </Text>
+      <View style={styles.voiceOrbPreview}>
+        <CoachOrb
+          size={146}
+          state="listening"
+          volume={0}
+          shadowColor="#F58220"
+        />
+      </View>
+      <Text style={[styles.voiceSetupCaption, { color: dark ? "#F58220" : "#655A4D" }]}>
+        Voice Coach
+      </Text>
+      <View style={styles.voiceIntroDetails}>
+        {voiceDetails.map(({ icon: Icon, color, text }) => (
+          <View key={text} style={styles.videoIntroDetail}>
+            <View style={[styles.videoIntroIcon, { backgroundColor: color }]}>
+              <Icon size={20} color="#FFFFFF" weight="fill" />
+            </View>
+            <Text style={[styles.voiceIntroDetailText, { color: foreground }]}>
+              {text}
+            </Text>
+          </View>
+        ))}
+      </View>
+      <View style={styles.videoIntroActions}>
+        {onSelectMode ? (
+          <CoachSetupModeTabs mode={mode} onSelectMode={onSelectMode} dark={dark} />
+        ) : (
+          <>
+            <Pressable onPress={onContinue} style={styles.introContinue}>
+              <Text style={styles.introContinueText}>Continue</Text>
+            </Pressable>
+            <Pressable onPress={onDontShowAgain} hitSlop={10} style={styles.introDontShow}>
+              <Text
+                style={[
+                  styles.introDontShowText,
+                  { color: dark ? "#F58220" : "#33291F" },
+                ]}
+              >
+                Don’t show this again
+              </Text>
+            </Pressable>
+          </>
+        )}
+        </View>
+      </View>
+  );
+}
+
+function CoachSetupModeTabs({
+  mode,
+  dark = false,
+  onSelectMode,
+}: {
+  mode: "voice" | "video";
+  dark?: boolean;
+  onSelectMode: (mode: "voice" | "video") => void;
+}) {
+  return (
+    <View style={styles.setupModeTabs}>
+      {(["video", "voice"] as const).map((tab) => {
+        const selected = mode === tab;
+        return (
+          <Pressable
+            key={tab}
+            onPress={() => onSelectMode(tab)}
+            style={[
+              styles.setupModeTab,
+              selected && styles.setupModeTabSelected,
+              !selected && dark && styles.setupModeTabDark,
+            ]}
+          >
+            <Text
+              style={[
+                styles.setupModeTabText,
+                { color: selected ? "#FFFFFF" : dark ? "#FFFFFF" : "#201A13" },
+              ]}
+            >
+              {tab === "voice" ? "Voice Coach" : "Video Coach"}
+            </Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -133,7 +327,6 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     windowDimensions.width > windowDimensions.height;
   const videoCoachEnabled =
     Platform.OS === "ios" &&
-    (__DEV__ || Updates.channel === "staging") &&
     process.env.EXPO_PUBLIC_VIDEO_COACH_ENABLED !== "0";
   // Profile settings update preferred_name; full_name is the sign-in name and
   // can intentionally remain unchanged.
@@ -255,6 +448,14 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
 
   useEffect(() => {
     if (shotInputMode === "video") {
+      if (showVideoIntro) {
+        // Setup guidance is intentionally read in portrait before the player
+        // rotates into the landscape-only camera experience.
+        void ScreenOrientation.lockAsync(
+          ScreenOrientation.OrientationLock.PORTRAIT_UP,
+        ).catch(() => undefined);
+        return;
+      }
       // Video Coach is intentionally not locked: the player must physically
       // rotate first. The gate below keeps every camera/Coach UI element off
       // screen until UIKit reports that landscape transition.
@@ -265,7 +466,7 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     void ScreenOrientation.lockAsync(
       ScreenOrientation.OrientationLock.PORTRAIT_UP,
     ).catch(() => undefined);
-  }, [setShotInputMode, shotInputMode]);
+  }, [setShotInputMode, shotInputMode, showVideoIntro]);
 
   useEffect(() => {
     if (
@@ -426,13 +627,13 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
         ]}
         onRequestClose={handleClose}
       >
-        {showVideoIntro && videoInterfaceIsLandscape ? (
+        {showVideoIntro ? (
           <CoachIntroScreen
             mode="video"
-            dark
             athleteName={athleteName}
             onContinue={() => dismissCoachIntro("video", false)}
             onDontShowAgain={() => dismissCoachIntro("video", true)}
+            onBack={handleClose}
           />
         ) : (
           <VideoCoachView
@@ -453,6 +654,27 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
     );
   }
 
+  if (showVoiceIntro) {
+    return (
+      <Modal
+        key="voice-coach-intro-modal"
+        visible
+        animationType="slide"
+        onRequestClose={handleClose}
+      >
+        <CoachIntroScreen
+          mode="voice"
+          dark={colors.text === "#FFFFFF"}
+          athleteName={athleteName}
+          backgroundColor={colors.background}
+          onContinue={() => dismissCoachIntro("voice", false)}
+          onDontShowAgain={() => dismissCoachIntro("voice", true)}
+          onBack={handleClose}
+        />
+      </Modal>
+    );
+  }
+
   return (
     <Modal
       // Keep this distinct from the Video modal so changing modes remounts the
@@ -463,16 +685,6 @@ export function CoachOverlay({ onClose, dayId, dayTitle }: CoachOverlayProps) {
       onRequestClose={handleClose}
     >
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        {showVoiceIntro ? (
-          <CoachIntroScreen
-            mode="voice"
-            dark={colors.text === "#FFFFFF"}
-            athleteName={athleteName}
-            backgroundColor={colors.background}
-            onContinue={() => dismissCoachIntro("voice", false)}
-            onDontShowAgain={() => dismissCoachIntro("voice", true)}
-          />
-        ) : null}
         <NoConnectionBanner />
         <View style={[styles.header, { paddingTop: insets.top + 28 }]}>
           <View style={styles.headerTopRow}>
@@ -674,6 +886,164 @@ const styles = StyleSheet.create({
     left: 0,
     zIndex: 20,
     padding: 18,
+  },
+  videoIntroScreen: {
+    flex: 1,
+    backgroundColor: "#F7F0E6",
+    paddingHorizontal: 24,
+    paddingTop: 56,
+    paddingBottom: 20,
+  },
+  introBackButton: {
+    position: "absolute",
+    top: 52,
+    left: 20,
+    zIndex: 1,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.72)",
+  },
+  voiceIntroBackButton: {
+    backgroundColor: "rgba(255,255,255,0.12)",
+  },
+  voiceIntroScreen: {
+    flex: 1,
+    paddingHorizontal: 28,
+    paddingTop: 72,
+    paddingBottom: 26,
+  },
+  videoIntroTitle: {
+    color: "#16120D",
+    fontSize: 25,
+    fontWeight: "800",
+    letterSpacing: -0.6,
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  voiceIntroTitle: {
+    fontSize: 28,
+    fontWeight: "800",
+    letterSpacing: -0.6,
+    textAlign: "center",
+    marginBottom: 18,
+  },
+  setupCarousel: {
+    height: 180,
+    aspectRatio: 16 / 9,
+    alignSelf: "center",
+    borderRadius: 20,
+    overflow: "hidden",
+    backgroundColor: "#E8D7C1",
+    borderWidth: 1.5,
+    borderColor: "#F58220",
+  },
+  voiceOrbPreview: {
+    width: "100%",
+    height: 180,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  voiceSetupCaption: {
+    fontSize: 12,
+    fontWeight: "700",
+    textAlign: "center",
+    marginTop: 7,
+    marginBottom: 22,
+  },
+  setupImage: {
+    width: "100%",
+    height: "100%",
+  },
+  setupDots: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 6,
+    marginTop: 10,
+  },
+  setupDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "rgba(22,18,13,0.22)",
+  },
+  setupDotActive: {
+    width: 18,
+    backgroundColor: "#F58220",
+  },
+  setupCaption: {
+    color: "#655A4D",
+    fontSize: 12,
+    fontWeight: "700",
+    textAlign: "center",
+    marginTop: 7,
+    marginBottom: 16,
+  },
+  videoIntroDetails: {
+    gap: 12,
+  },
+  voiceIntroDetails: {
+    gap: 22,
+  },
+  videoIntroDetail: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+  },
+  videoIntroIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  videoIntroDetailText: {
+    flex: 1,
+    color: "#201A13",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "600",
+  },
+  voiceIntroDetailText: {
+    flex: 1,
+    fontSize: 16,
+    lineHeight: 23,
+    fontWeight: "600",
+  },
+  setupModeTabs: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  setupModeTab: {
+    flex: 1,
+    minHeight: 52,
+    borderRadius: 26,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(32,26,19,0.2)",
+    backgroundColor: "rgba(255,255,255,0.52)",
+  },
+  setupModeTabDark: {
+    borderColor: "rgba(255,255,255,0.28)",
+    backgroundColor: "rgba(255,255,255,0.1)",
+  },
+  setupModeTabSelected: {
+    borderColor: "#F58220",
+    backgroundColor: "#F58220",
+  },
+  setupModeTabText: {
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  videoIntroActions: {
+    marginTop: "auto",
+    gap: 9,
+  },
+  videoIntroDontShowText: {
+    color: "#33291F",
   },
   introGlass: {
     flex: 1,

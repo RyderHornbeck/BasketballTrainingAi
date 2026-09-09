@@ -224,6 +224,7 @@ export function VideoCoachView({
   const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
   const [visibleCoachText, setVisibleCoachText] = useState("");
   const visibleCoachTextRef = useRef("");
+  const [startupGreetingAudible, setStartupGreetingAudible] = useState(false);
   const [transcriptOpacity] = useState(() => new Animated.Value(1));
   const [viewport, setViewport] = useState(Dimensions.get("window"));
   const [coachOrbScale] = useState(() => new Animated.Value(1));
@@ -292,6 +293,16 @@ export function VideoCoachView({
     return () => clearInterval(interval);
   }, [coachTranscript, transcriptOpacity]);
 
+  // The session can generate greeting text before its first audio packet is
+  // actually playing. Keep the Video Coach in its single connecting state
+  // until the greeting is audible; a failed first TTS attempt therefore never
+  // flashes Thinking or a duplicate, silent greeting.
+  useEffect(() => {
+    if (!startupGreetingAudible && status === "speaking" && coachTranscript) {
+      setStartupGreetingAudible(true);
+    }
+  }, [coachTranscript, startupGreetingAudible, status]);
+
   useEffect(() => {
     if (!coachTranscriptFadeVersion || !visibleCoachText) return;
     Animated.timing(transcriptOpacity, {
@@ -320,11 +331,11 @@ export function VideoCoachView({
   const shotsLeft = hudState?.targetAttempts == null
     ? 0
     : Math.max(0, hudState.targetAttempts - attempts);
-  const transcript = status === "connecting"
+  const transcript = !startupGreetingAudible
     ? "Connecting…"
     : status === "thinking"
-    ? "Thinking…"
-    : visibleCoachText;
+      ? "Thinking…"
+      : visibleCoachText;
   const budgetExhausted = status === "budget_exhausted";
   const isCoachTranscript = Boolean(transcript);
   const mapWidth = Math.min(viewport.width * 0.39, (viewport.height * 0.44 * 600) / 470);

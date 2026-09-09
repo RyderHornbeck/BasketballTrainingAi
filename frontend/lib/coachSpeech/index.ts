@@ -594,6 +594,7 @@ export const parseTimerIntent: Parser = (text) => {
 
 const TIMER_CONFIRMATION_AFFIRMATIVES = [
   "yes",
+  "yes coach",
   "yes please",
   "yes do it",
   "yes start it",

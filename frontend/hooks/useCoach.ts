@@ -247,15 +247,16 @@ export function useCoach(
           previousRemaining > threshold && remaining <= threshold;
         // Ten seconds wins whenever it coincides with a percentage milestone.
         // This can occur for short timer durations (for example, 40 seconds).
+        const supportsQuarterCues = durationSeconds >= 60;
         const marker = remaining > 0 && crossed(10) && !encouragementState.fired.has("ten_seconds")
           ? "ten_seconds"
-          : remaining > 0 && crossed(durationSeconds * 0.25) &&
+          : supportsQuarterCues && remaining > 0 && crossed(durationSeconds * 0.25) &&
               !encouragementState.fired.has("twenty_five")
             ? "twenty_five"
             : remaining > 0 && crossed(durationSeconds * 0.5) &&
                 !encouragementState.fired.has("halfway")
               ? "halfway"
-              : remaining > 0 && crossed(durationSeconds * 0.75) &&
+              : supportsQuarterCues && remaining > 0 && crossed(durationSeconds * 0.75) &&
                   !encouragementState.fired.has("seventy_five")
                 ? "seventy_five"
                 : null;

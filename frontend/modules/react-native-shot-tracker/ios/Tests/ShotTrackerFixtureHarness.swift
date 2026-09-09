@@ -57,6 +57,7 @@ enum ShotTrackerFixtureHarness {
     makeAndCooldownFixture()
     reacquisitionFixture()
     rimOcclusionBridgeFixture()
+    visibleTrajectoryReacquisitionFixture()
     missFixture()
     timeoutFixture()
     autonomousTimerFixture()
@@ -135,6 +136,22 @@ enum ShotTrackerFixtureHarness {
     require(
       made?.result == .make,
       "an above-rim point followed by a lower re-acquisition through the inner box should make"
+    )
+  }
+
+  private static func visibleTrajectoryReacquisitionFixture() {
+    var machine = ShotTrackerStateMachine()
+    machine.setManualRim(rim)
+    _ = process(&machine, 0.5, 0.65, 3.8, 3_800)
+    _ = process(&machine, 0.5, 0.3, 4.0, 4_000)
+    // The detector misses a little over one second while the visible trail
+    // stays connected. The scoring trajectory resets, but this displayed
+    // downward segment still crosses the inner box and must make.
+    _ = process(&machine, 0.5, 0.402, 4.2, 4_200)
+    let made = process(&machine, 0.5, 0.46, 5.4, 5_400)
+    require(
+      made?.result == .make,
+      "a displayed downward inner-rim crossing must score after detector re-acquisition"
     )
   }
 

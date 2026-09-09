@@ -206,6 +206,7 @@ struct ShotTrackerStateMachine {
     guard let rim = activeRim else {
       return (snapshot(timestamp, ball, detectedRim), nil)
     }
+    let scoringRim = Self.innerRimBox(rim)
 
     guard let ball else {
       let shot = processLost(rim: rim, timestamp: timestamp, wallTimeMs: wallTimeMs)
@@ -218,6 +219,14 @@ struct ShotTrackerStateMachine {
       timestamp: timestamp
     )
     let observedPrevious = lastObservedBall
+    // The display trail deliberately survives normal detector gaps so every
+    // yellow box is connected. Retain its immediately preceding real
+    // detection as a scoring bridge too, but only while a shot is armed and
+    // the two observations are close enough to plausibly be the same ball.
+    let displayTrajectoryPrevious: STObservedPoint? =
+      displayTrajectory.count >= 2
+        ? displayTrajectory[displayTrajectory.count - 2]
+        : nil
     let rimCenterX = rim.center.x
 
     if !resetReady {
@@ -384,7 +393,6 @@ struct ShotTrackerStateMachine {
     // A basket is a descending trajectory segment through the centered inner
     // 3/5 width and two-thirds height of the stabilized rim box. It may enter and leave any side,
     // so slanted and corner-to-corner makes count just like vertical swishes.
-    let scoringRim = Self.innerRimBox(rim)
     // Net/rim occlusion can hide the ball between an above-rim detection and
     // its reappearance below. Bridge that gap with the last real above-rim
     // center, rather than requiring adjacent inference frames. The direction,
@@ -419,6 +427,28 @@ struct ShotTrackerStateMachine {
       return resolve(
         .make,
         "Descending ball trajectory crossed the inner rim box.",
+        timestamp,
+        wallTimeMs,
+        trackedBall,
+        detectedRim
+      )
+    }
+    // Keep scoring aligned with the yellow path when Core ML temporarily
+    // loses/reacquires the ball. `trajectory` correctly resets aggressive
+    // tracker outliers, but the player should not see a line through the
+    // purple opening and receive a miss solely because of that reset.
+    if attemptStartedAt != 0,
+       let displayPrevious = displayTrajectoryPrevious,
+       timestamp - displayPrevious.timestamp <= 1.5,
+       Swift.abs(measurement.x - displayPrevious.x) <= max(rim.width * 3, 0.18),
+       Self.downwardSegmentIntersectsRect(
+         STPoint(x: displayPrevious.x, y: displayPrevious.y),
+         currentPoint,
+         scoringRim
+       ) {
+      return resolve(
+        .make,
+        "Visible ball trajectory crossed the inner rim box on a downward path.",
         timestamp,
         wallTimeMs,
         trackedBall,

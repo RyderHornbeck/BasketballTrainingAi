@@ -897,6 +897,15 @@ export class RealtimeCoachSession {
   private stopLocalShotPlayback: (() => Promise<void>) | null = null;
   private playbackClearPromise: Promise<void> = Promise.resolve();
   private lastDeterministicReply: string | null = null;
+  // The completed-set announcement identifies the next target. A result
+  // arriving during it belongs to that next set, so defer it until the
+  // announcement has finished instead of cutting it off.
+  private shotTransitionSpeechProtected = false;
+  private queuedShotResults: {
+    result: ShotResult;
+    source: ShotEventSource;
+    eventId: string;
+  }[] = [];
   private cartesiaActive = false;
   private voiceProvider: CoachVoiceProvider = "cartesia";
   private assemblyInworldActive = false;
@@ -1084,6 +1093,12 @@ export class RealtimeCoachSession {
     source: ShotEventSource,
     eventId: string,
   ): Promise<ShotEventRecordOutcome> {
+    if (this.shotTransitionSpeechProtected) {
+      if (!this.queuedShotResults.some((entry) => entry.eventId === eventId)) {
+        this.queuedShotResults.push({ result, source, eventId });
+      }
+      return { status: "ignored" };
+    }
     return this.recordShotResultThroughSeam(result, source, eventId, true);
   }
 
@@ -1131,6 +1146,8 @@ export class RealtimeCoachSession {
     this.speechStoppedAtByItem.clear();
     this.lastLocalShotTurn = null;
     this.pendingCoachLastShotCorrection = null;
+    this.shotTransitionSpeechProtected = false;
+    this.queuedShotResults = [];
     this.deterministicTurnCount = 0;
     this.fallbackTurnCount = 0;
     this.pendingTimerDurationChange = null;
@@ -2946,7 +2963,7 @@ export class RealtimeCoachSession {
     // anything; only the very next athlete turn after an explicit final offer
     // is eligible.
     if (
-      !/(?:would you like|do you want)[^.?!]{0,120}\bstart\b[^.?!]*\btimer\b[^.?!]*\?\s*$/i.test(
+      !/if you would like me to start the [^.?!]{0,120}\btimer\s*,?\s*say ["“']yes coach\.?["”']\.?\s*$/i.test(
         text.trim(),
       )
     ) {
@@ -3172,7 +3189,7 @@ export class RealtimeCoachSession {
                 current.name,
                 currentSet.set_number,
                 set?.side_label,
-              )}. Would you like me to start the timer?`;
+              )}. ${this.timerStartInstruction(durationSeconds)}`;
             }
             const makes = currentSet.progress.makes;
             const attempts = currentSet.progress.attempts;
@@ -3288,7 +3305,25 @@ export class RealtimeCoachSession {
         ) {
           return;
         }
+        const activeTimerPosition = this.runningTimerPosition();
+        const nextCursor = parsed.navigation?.current_set_state;
         this.workoutState = parsed;
+        // Video Coach can receive a position update through several paths
+        // (LLM tools, local navigation, or an external workout refresh). The
+        // timer belongs to its original set, never the newly selected one.
+        // Stop it from the authoritative state transition so the HUD cannot
+        // carry elapsed time into the next drill/set.
+        if (
+          this.shotInputMode === "video" &&
+          activeTimerPosition &&
+          nextCursor &&
+          (
+            activeTimerPosition.exerciseId !== nextCursor.exercise_id ||
+            activeTimerPosition.setNumber !== nextCursor.set_number
+          )
+        ) {
+          this.callbacks?.onTimerAction({ type: "stop_timer" });
+        }
         this.reapplyPendingShotSetsToWorkoutState();
         this.preloadActiveShotProgressAudio();
         if (typeof snapshotVersion === "number") {
@@ -3880,7 +3915,7 @@ export class RealtimeCoachSession {
   private completedShotReply(
     entry: PendingShotSet,
   ): string {
-    const result = `You shot ${entry.makes} for ${entry.attempts}.`;
+    const result = `You shot ${entry.makes}/${entry.attempts}.`;
     const nextSetInSameDrill = this.nextIncompleteSetInSameDrill(entry);
     if (nextSetInSameDrill) {
       const drill = this.workoutState?.sequence?.drills?.find(
@@ -3891,15 +3926,10 @@ export class RealtimeCoachSession {
       );
       const makes = nextSet?.progress?.makes ?? nextSet?.makes ?? 0;
       const attempts = nextSet?.progress?.attempts ?? nextSet?.attempts ?? 0;
-      const position = `${this.setLocation(
-        nextSetInSameDrill.drillName,
-        nextSetInSameDrill.setNumber,
-        nextSetInSameDrill.sideLabel,
-      )}.`;
-      const shootingPrompt = attempts > 0
-        ? `${position} You're ${makes} for ${attempts} so far. Keep shooting.`
-        : `${position} You're 0 for 0 so far. Start shooting.`;
-      return `${result} ${shootingPrompt}`;
+      const side = this.sideLocationSuffix(nextSetInSameDrill.sideLabel);
+      return attempts > 0
+        ? `${result} You're now on set ${nextSetInSameDrill.setNumber}${side}. You're ${makes}/${attempts} so far. Keep shooting.`
+        : `${result} You're now on set ${nextSetInSameDrill.setNumber}${side}. Start shooting.`;
     }
     // Prefer the live cursor set by pinNextIncompleteShootingPosition(). The
     // cached next_work_item can briefly still name the just-finished drill
@@ -3939,20 +3969,15 @@ export class RealtimeCoachSession {
         next.name,
         nextSetNumber,
         nextSideLabel,
-      )}. Would you like me to start the ${this.timerDurationLabel(durationSeconds)} set timer?`;
+      )}. ${this.timerStartInstruction(durationSeconds)}`;
     }
     if (this.acceptsShotResults(next)) {
       const makes = nextSet?.progress?.makes ?? nextSet?.makes ?? 0;
       const attempts = nextSet?.progress?.attempts ?? nextSet?.attempts ?? 0;
-      const position = `${this.setLocation(
-        next.name,
-        nextSetNumber,
-        nextSideLabel,
-      )}.`;
-      const shootingPrompt = attempts > 0
-        ? `${position} You're ${makes} for ${attempts} so far. Keep shooting.`
-        : `${position} You're 0 for 0 so far. Start shooting.`;
-      return `${result} ${shootingPrompt}`;
+      const side = this.sideLocationSuffix(nextSideLabel);
+      return attempts > 0
+        ? `${result} You're now on ${next.name}${side}, set ${nextSetNumber}. You're ${makes}/${attempts} so far. Keep shooting.`
+        : `${result} You're now on ${next.name}${side}, set ${nextSetNumber}. Start shooting.`;
     }
     if (next.exercise_id === entry.exerciseId) {
       return `${result} ${this.setLocation(
@@ -4227,7 +4252,10 @@ export class RealtimeCoachSession {
     }
 
     let spokenOutput = buffered.output;
-    if (source === "video" && drill) {
+    // Ordinary Video Coach shots get fast, randomized local feedback. The
+    // final shot must keep its deterministic next-set/drill instruction so
+    // the athlete is never left on a completed set with only "nice shot."
+    if (source === "video" && drill && buffered.kind === "buffered_shot") {
       this.videoMakeStreak = result === "make" ? this.videoMakeStreak + 1 : 0;
       const recorded = this.pendingShotSets.get(
         this.pendingShotKey(current?.exercise_id ?? drill.exercise_id, current?.set_number ?? 1),
@@ -4257,6 +4285,9 @@ export class RealtimeCoachSession {
       };
       this.lastDeterministicReply = spokenOutput;
       this.callbacks?.onConversationSummary?.(this.conversationSummary);
+      if (buffered.kind === "completed_shot") {
+        this.shotTransitionSpeechProtected = true;
+      }
       await this.speakDeterministic(
         spokenOutput,
         normalizedEventId,
@@ -4273,7 +4304,7 @@ export class RealtimeCoachSession {
         : drill?.target.minutes;
     const timerPrompt =
       minutes != null && minutes > 0
-        ? ` Would you like me to start the ${minutes}-minute set timer?`
+        ? ` ${this.timerStartInstruction(Math.round(minutes * 60))}`
         : "";
     return `You're not on a shooting or finishing drill. You're on ${
       drill?.name ?? "the current drill"
@@ -4539,7 +4570,9 @@ export class RealtimeCoachSession {
       minutes < 1
         ? `${Math.round(minutes * 60)} seconds`
         : `${Number(minutes.toFixed(2))} minute${minutes === 1 ? "" : "s"}`;
-    return `${label} is ${duration}. Do you want me to start the timer?`;
+    return `${label} is ${duration}. ${this.timerStartInstruction(
+      Math.round(minutes * 60),
+    )}`;
   }
 
   private nextWorkReply(unit: "set" | "drill", target: NavigationTarget): string {
@@ -4862,6 +4895,23 @@ export class RealtimeCoachSession {
     return `${minutes} minute${minutes === 1 ? "" : "s"} ${remainder} seconds`;
   }
 
+  private timerStartInstruction(durationSeconds: number): string {
+    const seconds = Math.max(1, Math.round(durationSeconds));
+    const timerLabel =
+      seconds < 60
+        ? `${seconds} second`
+        : seconds % 60 === 0
+          ? `${seconds / 60} minute`
+          : `${Math.floor(seconds / 60)} minute ${seconds % 60} second`;
+    return `If you would like me to start the ${timerLabel} timer, say “yes Coach.”`;
+  }
+
+  private sideLocationSuffix(sideLabel?: string | null): string {
+    const raw = sideLabel?.trim();
+    if (!raw) return "";
+    return `, ${/\bside\b/i.test(raw) ? raw : `${raw} side`}`;
+  }
+
   private timerDurationAdjective(durationSeconds: number): string {
     const seconds = Math.max(1, Math.round(durationSeconds));
     if (seconds < 60) return `${seconds}-second`;
@@ -4898,9 +4948,8 @@ export class RealtimeCoachSession {
       (candidate) => candidate.set_number === currentSet.set_number,
     );
     if (!this.isTimedSet(drill, set)) return explanation;
-    return `${explanation} Would you like me to start the timer for your ${this.setOrdinal(
-      currentSet.set_number,
-    )} set?`;
+    const minutes = set?.target?.minutes ?? drill.target.minutes ?? 0;
+    return `${explanation} ${this.timerStartInstruction(Math.round(minutes * 60))}`;
   }
 
   private authoritativeTurnInstructions(): string {
@@ -5325,7 +5374,7 @@ export class RealtimeCoachSession {
         };
         return `The set is now ${this.timerDurationLabel(
           command.args.durationSeconds
-        )}. Would you like me to start the set timer?`;
+        )}. ${this.timerStartInstruction(command.args.durationSeconds)}`;
       }
       await this.flushPendingShotSets();
       const currentSet = current.set_results.find(
@@ -6371,6 +6420,24 @@ export class RealtimeCoachSession {
 
   private handleDeterministicPlaybackCompleted(): void {
     this.timerTransitionSpeechActive = false;
+    if (this.shotTransitionSpeechProtected) {
+      this.shotTransitionSpeechProtected = false;
+      const queuedShotResults = this.queuedShotResults.splice(0);
+      // Process in order because each result mutates the current set score.
+      void queuedShotResults.reduce(
+        (chain, queued) => chain.then(() =>
+          this.recordShotResultThroughSeam(
+            queued.result,
+            queued.source,
+            queued.eventId,
+            true,
+          ).then(() => undefined),
+        ),
+        Promise.resolve(),
+      ).catch((error) => {
+        console.warn("Could not apply shot queued during set transition:", error);
+      });
+    }
     if (
       this.pendingTimerDurationChange?.startAfterConfirmation &&
       this.pendingTimerDurationChange.readyForConfirmation === false
@@ -6525,7 +6592,7 @@ export class RealtimeCoachSession {
         current.name,
         currentSet.set_number,
         set?.side_label,
-      )}. It's a ${duration} timed set. Would you like me to start the ${duration} timer?`;
+      )}. It's a ${duration} timed set. ${this.timerStartInstruction(durationSeconds)}`;
     }
     const position = this.setLocation(
       current.name,

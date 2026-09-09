@@ -1181,7 +1181,7 @@ Deno.test("workout kickoff asks Haiku to report the current drill without tools"
 Deno.test("timed drills require the live-status tool for direct timer questions", () => {
   assert(
     COACH_SYSTEM_PROMPT.includes(
-      'ask: "Would you like me to start the [X]-minute set timer?"',
+      'If you would like me to start the X-minute timer, say \'yes Coach\'.',
     ) &&
       COACH_SYSTEM_PROMPT.includes(
         "Never ask or offer timers for shooting/finishing",
