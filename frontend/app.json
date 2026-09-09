@@ -2,7 +2,7 @@
   "expo": {
     "name": "Court Coach",
     "slug": "courtcoach",
-    "version": "1.0.4",
+    "version": "1.2.0",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "hoopplan",
@@ -21,7 +21,7 @@
       "bundleIdentifier": "com.hoopplan.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCameraUsageDescription": "Court Coach uses the camera for private, on-device basketball shot tracking during video coaching.",
+        "NSCameraUsageDescription": "Court Coach uses the camera for private, on-device basketball shot tracking during your workout.",
         "NSMicrophoneUsageDescription": "Court Coach uses the microphone for live coach conversations during workouts.",
         "NSPhotoLibraryAddUsageDescription": "Court Coach saves workout stats images to your Photos library when you tap Download."
       },

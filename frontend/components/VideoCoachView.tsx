@@ -157,18 +157,6 @@ function TrackingOverlay({
               },
             ]}
           />
-          <View
-            style={[
-              styles.trackingBox,
-              {
-                borderColor: "#B86BFF",
-                left: (rim.x + rim.width / 5) * width,
-                top: (rim.y + rim.height / 6) * height,
-                width: (rim.width * 3 / 5) * width,
-                height: (rim.height * 2 / 3) * height,
-              },
-            ]}
-          />
         </>
       ) : null}
       {ball ? (

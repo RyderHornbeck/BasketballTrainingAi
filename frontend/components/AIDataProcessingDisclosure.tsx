@@ -23,7 +23,7 @@ export function AIDataProcessingDisclosure({
       <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Please review and accept our policies</Text>
       <ConsentRow accepted={privacyAccepted} onPress={onPrivacyToggle} link="View Privacy Policy" url={PRIVACY_POLICY_URL} label="I have read and accept the Privacy Policy." />
       <ConsentRow accepted={termsAccepted} onPress={onTermsToggle} link="View Terms of Service" url={TERMS_OF_SERVICE_URL} label="I have read and accept the Terms of Service." />
-      <Text style={[styles.assurance, { color: colors.textSecondary }]}>By continuing, you agree to allow Court Coach AI to process your workout audio for AI coaching and store your performance data securely.</Text>
+      <Text style={[styles.assurance, { color: colors.textSecondary }]}>By continuing, you agree to allow Court Coach AI to process your workout audio for AI coaching, analyze live camera frames on your device for shot tracking, and securely store your performance data. Camera footage is not recorded, uploaded, or stored.</Text>
     </View>
   );
 }

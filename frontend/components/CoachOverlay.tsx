@@ -17,6 +17,7 @@ import { router } from "expo-router";
 import {
   BatteryHighIcon,
   CameraIcon,
+  CameraSlashIcon,
   HeadphonesIcon,
   MicrophoneIcon,
   SpeakerHighIcon,
@@ -177,9 +178,14 @@ export function CoachIntroScreen({
   const foreground = dark ? "#FFFFFF" : "#201A13";
   const voiceDetails = [
     {
+      icon: CameraSlashIcon,
+      color: "#F58220",
+      text: "This Voice-only Coach does not use your camera to track your workout.",
+    },
+    {
       icon: HeadphonesIcon,
       color: "#8B5CF6",
-      text: `Hey ${athleteName}! Wait for Coach to connect and start speaking through your headphones.`,
+      text: `Wait for Coach to connect and start speaking through your headphones.`,
     },
     {
       icon: MicrophoneIcon,
@@ -917,14 +923,14 @@ const styles = StyleSheet.create({
   },
   videoIntroTitle: {
     color: "#16120D",
-    fontSize: 25,
+    fontSize: 17,
     fontWeight: "800",
     letterSpacing: -0.6,
     textAlign: "center",
     marginBottom: 16,
   },
   voiceIntroTitle: {
-    fontSize: 28,
+    fontSize: 17,
     fontWeight: "800",
     letterSpacing: -0.6,
     textAlign: "center",
