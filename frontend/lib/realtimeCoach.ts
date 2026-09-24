@@ -6791,6 +6791,7 @@ export class RealtimeCoachSession {
       stateVersion: speculation.stateVersion,
       conversationSummary: this.conversationSummary,
       localShotSessionContext: this.localShotSessionContext(),
+      shotTrackingMode: this.shotInputMode,
       speculative: true,
       signal: controller.signal,
       onEvent: (streamEvent) => {
@@ -7167,6 +7168,7 @@ export class RealtimeCoachSession {
         stateVersion: this.stateVersion,
         conversationSummary: this.conversationSummary,
         localShotSessionContext: this.localShotSessionContext(),
+        shotTrackingMode: this.shotInputMode,
         signal: controller.signal,
         onEvent: (event) => {
           if (event.type === "text_delta") responseText += event.delta;
@@ -7641,6 +7643,7 @@ export class RealtimeCoachSession {
         stateVersion: this.stateVersion,
         conversationSummary: this.conversationSummary,
         localShotSessionContext: this.localShotSessionContext(),
+        shotTrackingMode: this.shotInputMode,
         signal: controller.signal,
         onEvent: (event) => {
           if (event.type === "text_delta") responseText += event.delta;

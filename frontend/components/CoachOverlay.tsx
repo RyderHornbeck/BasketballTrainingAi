@@ -942,9 +942,6 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     borderRadius: 20,
     overflow: "hidden",
-    backgroundColor: "#E8D7C1",
-    borderWidth: 1.5,
-    borderColor: "#F58220",
   },
   voiceOrbPreview: {
     width: "100%",

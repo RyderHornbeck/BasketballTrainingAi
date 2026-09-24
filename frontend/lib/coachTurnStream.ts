@@ -35,6 +35,7 @@ export async function streamCoachTurn(input: {
   stateVersion: number;
   conversationSummary?: string;
   localShotSessionContext?: LocalShotSessionContext | null;
+  shotTrackingMode: "voice" | "video";
   speculative?: boolean;
   signal: AbortSignal;
   onEvent: (event: CoachTurnStreamEvent) => void | Promise<void>;
@@ -76,6 +77,7 @@ export async function streamCoachTurn(input: {
           last_local_coach_reply: input.localShotSessionContext.lastLocalCoachReply,
         }
         : null,
+      shot_tracking_mode: input.shotTrackingMode,
       mode: input.speculative === true ? "speculative_read_only" : "standard",
     }),
   });

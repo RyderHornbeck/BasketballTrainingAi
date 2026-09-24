@@ -2,7 +2,7 @@
   "expo": {
     "name": "Court Coach",
     "slug": "courtcoach",
-    "version": "1.2.0",
+    "version": "1.2.2",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "hoopplan",

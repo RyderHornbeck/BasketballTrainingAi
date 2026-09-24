@@ -35,6 +35,7 @@ import {
   AlarmIcon,
   ArrowsOutIcon,
   ArrowsOutLineHorizontalIcon,
+  CameraIcon,
   CalendarCheckIcon,
   CheckCircleIcon,
   CircleIcon,
@@ -50,6 +51,7 @@ import {
   PersonSimpleWalkIcon,
   QuestionIcon,
   ShieldIcon,
+  SpeakerHighIcon,
   StarIcon,
   TargetIcon,
   TimerIcon,
@@ -60,7 +62,14 @@ import {
   XCircleIcon,
 } from "phosphor-react-native";
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Image, Pressable, StyleSheet, View } from "react-native";
+import {
+  ActivityIndicator,
+  Image,
+  Pressable,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+} from "react-native";
 
 const SKILL_LEVELS = ["beginner", "intermediate", "advanced", "elite"];
 const GOALS = [
@@ -163,6 +172,7 @@ const initialForm: OnboardingFormData = {
 export default function OnboardingScreen() {
   const { colors } = useTheme();
   const { user, profile, refreshProfile, loading: authLoading } = useAuth();
+  const { width: screenWidth } = useWindowDimensions();
   const { playNext: playCoachIntroduction, stop: stopCoachIntroduction } = useCoachIntroAudio();
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<OnboardingFormData>(initialForm);
@@ -618,8 +628,14 @@ export default function OnboardingScreen() {
       {step === COACH_INTRO_STEP && !user && (
         <View style={styles.infoSlide}>
           <Image
-            source={require("../../assets/images/AppLogo.png")}
-            style={styles.appLogo}
+            source={require("../../assets/images/OnboardingCourtCoachInAction.png")}
+            style={[
+              styles.videoCoachPreview,
+              {
+                width: screenWidth - 40,
+                height: (screenWidth - 40) * (9 / 16),
+              },
+            ]}
             resizeMode="contain"
           />
           <Text style={[styles.infoLead, { color: colors.text }]}>
@@ -627,24 +643,24 @@ export default function OnboardingScreen() {
           </Text>
           <View style={styles.coachFeatures}>
             <CoachFeature
-              icon={<TargetIcon />}
-              title="Log as you train"
-              description="Tell Court Coach your makes and attempts, and it saves the result for you."
+              icon={<CameraIcon />}
+              title="Set up your phone"
+              description="Place it on the wing or behind the top of the key with the ball and hoop in view."
             />
             <CoachFeature
-              icon={<ArrowsOutIcon />}
-              title="Adjust your workout"
-              description="Change, add, remove, or skip drills whenever your workout needs to adapt."
+              icon={<BasketballIcon />}
+              title="Automatic shot tracking"
+              description="Video Coach tracks makes and misses during shooting and finishing drills."
             />
             <CoachFeature
-              icon={<QuestionIcon />}
-              title="Get instant guidance"
-              description="Ask for a drill explanation, what comes next, or how much work is left."
+              icon={<SpeakerHighIcon />}
+              title="Instant feedback"
+              description="Get real-time feedback and progress updates after each shot."
             />
             <CoachFeature
               icon={<TimerIcon />}
-              title="Keep everything moving"
-              description="Start timers and mark sets or entire drills complete without losing your flow."
+              title="Stay in your flow"
+              description="Use your voice to start timers, ask questions, or correct Coach when needed."
             />
           </View>
         </View>
@@ -815,7 +831,7 @@ function WhyCourtCoachComparison() {
     ["No plan", "Smart workouts"],
     ["No tracking", "Progress insights"],
     ["No feedback", "Live coaching"],
-    ["Manual logging", "Voice tracking"],
+    ["Manual logging", "Video tracking"],
     ["No proof", "Share workouts"],
     ["Stagnant rank", "Boost overall"],
     ["Train alone", "Always guided"],
@@ -889,8 +905,9 @@ const STEP_TITLES = [
     subtitle: "Reviewing your answers and preparing your personalized training setup.",
   },
   {
-    title: "Just Talk",
-    subtitle: "Connect your headphones through Bluetooth and just talk.",
+    title: "Just Shoot",
+    subtitle:
+      "Set up your phone, shoot, and let Court Coach track your shots while giving you feedback.",
   },
   {
     title: "Choose your coach",
@@ -1264,9 +1281,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 18,
   },
-  appLogo: {
-    width: 150,
-    height: 150,
+  videoCoachPreview: {
+    borderRadius: 20,
   },
   infoLead: {
     maxWidth: 340,
