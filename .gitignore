@@ -18,6 +18,7 @@ supabase/.branches/
 
 # OS / editor
 .DS_Store
+.VSCodeCounter/
 *.pem
 
 # Debug logs
