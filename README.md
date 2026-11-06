@@ -6,6 +6,14 @@
 
 **An AI basketball trainer that watches your shots, talks you through every drill, and builds your training plan.**
 
+<h1>
+  <a href="https://apps.apple.com/us/app/court-coach-ai-hoops-trainer/id6789691200">📲 Download Court Coach on the App Store</a>
+</h1>
+
+<a href="https://apps.apple.com/us/app/court-coach-ai-hoops-trainer/id6789691200">
+  <img src="https://tools.applemarketingtools.com/api/badges/download-on-the-app-store/black/en-us" alt="Download on the App Store" height="80" />
+</a>
+
 ![Expo](https://img.shields.io/badge/Expo_SDK_57-000020?logo=expo&logoColor=white)
 ![React Native](https://img.shields.io/badge/React_Native_0.86-20232A?logo=react&logoColor=61DAFB)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
