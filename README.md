@@ -13,11 +13,7 @@
 ![Swift](https://img.shields.io/badge/Swift_·_Core_ML-F05138?logo=swift&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-iOS-lightgrey?logo=apple)
 
-<a href="docs/media/court-coach-demo.mp4">
-  <img src="docs/media/court-coach-demo.gif" alt="Court Coach demo" width="320" />
-</a>
-
-<sub>▶ Click to watch the full video with sound</sub>
+<img src="frontend/assets/images/ReadMe.jpg" alt="Court Coach tracking a mid-range jumper from a phone mounted courtside" width="760" />
 
 </div>
 
