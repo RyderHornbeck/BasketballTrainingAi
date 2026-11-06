@@ -11,7 +11,7 @@
 </h1>
 
 <a href="https://apps.apple.com/us/app/court-coach-ai-hoops-trainer/id6789691200">
-  <img src="https://tools.applemarketingtools.com/api/badges/download-on-the-app-store/black/en-us" alt="Download on the App Store" height="80" />
+  <img src="https://img.shields.io/badge/Download_on_the-App_Store-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download on the App Store" height="64" />
 </a>
 
 ![Expo](https://img.shields.io/badge/Expo_SDK_57-000020?logo=expo&logoColor=white)
